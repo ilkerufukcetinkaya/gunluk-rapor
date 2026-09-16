@@ -327,6 +327,30 @@ def test_ice_aktar_eski_gunun_metinlerini_almaz():
         assert r.json()["bugun"] == 0
 
 
+def test_ice_aktar_bulunan_ve_bugun_satirlari_engellemez():
+    uid = kullanici_olustur()
+    tarih = servisler.istanbul_bugun()
+    with OturumYapici() as db:
+        for i in range(3):
+            db.add(Madde(user_id=uid, tur="bulunan", metin=f"bulunan {i}", tarih=tarih, kaynak="medusa", kaynak_id=f"k{i}", sira=i))
+        db.add(Madde(user_id=uid, tur="bugun", metin="elle yazılan", tarih=tarih, kaynak="yapilanlar", kaynak_id="yapilanlar"))
+        db.commit()
+    veri = {**ORNEK_V2, "daily": {**ORNEK_V2["daily"], "date": tarih.isoformat()}}
+    with istemci() as c:
+        giris(c)
+        r = c.post("/api/ice-aktar", json=veri)
+        assert r.status_code == 200 and r.json() == {"ok": True, "surekli": 2, "devam": 1, "bugun": 1}
+        d = c.get("/api/durum").json()["maddeler"]
+        assert [m["metin"] for m in d if m["tur"] == "surekli"] == [
+            "Yazışmalar takip edildi | Meslek birlikleriyle yazışıldı", "Coverz ekibine teknik destek verildi",
+        ]
+        assert [m["metin"] for m in d if m["tur"] == "bulunan"] == ["bulunan 0", "bulunan 1", "bulunan 2"]
+        assert sorted((m["kaynak"], m["metin"]) for m in d if m["tur"] == "bugun") == [
+            ("yapilanlar", "elle yazılan"), ("yarin", "Coverz listesi"),
+        ]
+        assert c.post("/api/ice-aktar", json=veri).status_code == 409
+
+
 # ---------------------------------------------------------------- bulunanlar
 
 def test_bulunan_mukerrer_yazilmaz_duzenleme_korunur(monkeypatch):

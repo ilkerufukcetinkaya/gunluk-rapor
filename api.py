@@ -327,8 +327,11 @@ def ice_aktar(
     govde: dict = Body(...), kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)
 ) -> dict:
     """gunluk-rapor-v2 biçimi: recurring[{text,on}], ongoing[{text,stage,on}], daily{date,done,plan}, settings{phone,title}."""
-    if db.scalar(select(func.count()).select_from(Madde).where(Madde.user_id == kullanici.id)):
-        raise HTTPException(status_code=409, detail="Bu hesapta zaten madde var; içe aktarma yapılmadı")
+    # Yalnız kalıcı maddeler engeller; sayfa açılışında oluşan bulunan/bugün satırları taşımayı durdurmaz.
+    if db.scalar(select(func.count()).select_from(Madde).where(
+        Madde.user_id == kullanici.id, Madde.tur.in_(("surekli", "devam")),
+    )):
+        raise HTTPException(status_code=409, detail="Bu hesapta zaten sürekli/devam eden iş var; içe aktarma yapılmadı")
 
     sayim = {"surekli": 0, "devam": 0, "bugun": 0}
     for tur, liste in (("surekli", govde.get("recurring")), ("devam", govde.get("ongoing"))):
@@ -345,9 +348,12 @@ def ice_aktar(
     tarih = bugun()
     gunluk = govde.get("daily")
     if isinstance(gunluk, dict) and gunluk.get("date") == tarih.isoformat():
+        mevcut = set(db.scalars(select(Madde.kaynak_id).where(
+            Madde.user_id == kullanici.id, Madde.tur == "bugun", Madde.tarih == tarih,
+        )))
         for kaynak, anahtar in (("yapilanlar", "done"), ("yarin", "plan")):
             metin = gunluk.get(anahtar)
-            if isinstance(metin, str) and metin.strip():
+            if isinstance(metin, str) and metin.strip() and kaynak not in mevcut:  # mevcut satıra dokunulmaz
                 sayim["bugun"] += 1
                 db.add(Madde(user_id=kullanici.id, tur="bugun", tarih=tarih, kaynak=kaynak, kaynak_id=kaynak, metin=metin))
 
