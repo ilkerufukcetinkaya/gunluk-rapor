@@ -24,6 +24,9 @@ li input[type=checkbox]{width:22px; height:22px; margin:2px 0 0; accent-color:va
 .tools button.del:hover{color:var(--danger)}
 .empty{padding:14px 12px; color:var(--ink-2)}
 .src{display:inline-block; margin-left:6px; padding:0 6px; border:1px solid var(--line); border-radius:999px; font-size:12px; line-height:18px; color:var(--ink-2); vertical-align:1px; white-space:nowrap}
+button.src{background:none; font-family:inherit; cursor:pointer}
+.aiPanel{display:block; margin-top:4px; font-size:14px; color:var(--ink-2); cursor:default}
+.aiPanel button{background:none; border:0; padding:0; margin-right:12px; font:inherit; color:var(--accent); cursor:pointer}
 .add{display:flex; gap:8px; margin-top:8px}
 .bubble{
   background:var(--bubble); color:var(--bubble-ink); border-radius:14px 14px 14px 4px;
@@ -45,8 +48,9 @@ li input[type=checkbox]{width:22px; height:22px; margin:2px 0 0; accent-color:va
 
   <section>
     <h2>Bugün yapılanlar</h2>
-    <p class="hint">Her satır bir madde. Gün değişince temizlenir.</p>
-    <textarea id="done" placeholder="MSG'ye Ağustos itirazı gönderildi&#10;Coverz listesinde 40 eser işlendi"></textarea>
+    <p class="hint">Her madde ayrı satır. Gün değişince temizlenir.</p>
+    <ul id="doneList"></ul>
+    <div class="add"><input type="text" id="doneNew" placeholder="MSG'ye Ağustos itirazı gönderildi"><button class="primary" id="doneAdd">Ekle</button></div>
   </section>
 
   <section>
@@ -76,26 +80,25 @@ li input[type=checkbox]{width:22px; height:22px; margin:2px 0 0; accent-color:va
   </section>
 
   <section>
-    <h2>Rapor</h2>
+    <h2>Rapor <small><button id="duzeltBtn">Claude ile düzelt</button></small></h2>
+    <p class="hint" id="duzeltDurum" role="status" hidden></p>
     <div class="bubble" id="preview"></div>
     <div class="actions">
       <button class="primary" id="copyBtn">Kopyala</button>
       <button class="secondary" id="waBtn">WhatsApp'ta aç</button>
     </div>
-    <p class="hint" style="margin-top:10px">Rapor başlığı ve WhatsApp numarası <a href="/ayarlar">Ayarlar</a>'da.</p>
+    <p class="hint" style="margin-top:10px">Rapor başlığı ve WhatsApp numarası <a href="/ayarlar">Ayarlar</a>'da. Kopyalanan raporlar <a href="/gecmis">Geçmiş</a>'te.</p>
   </section>
 </main>
 <div class="toast" id="toast"></div>
 
 <script>
 const ESKI_ANAHTARLAR = ['gunluk-rapor-v2', 'gunluk-rapor-v1'];
-const SON_KOPYA = 'gunluk-rapor-son-kopya';
-const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const trDate = d => d.toLocaleDateString('tr-TR', { day:'numeric', month:'long', year:'numeric', weekday:'long' });
 const shortDate = d => d.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric' });
 
 // Sunucudaki durumun sayfadaki kopyası. Her değişiklik önce burada yapılır, sonra ilgili uca yazılır.
-const S = { tarih:null, surekli:[], devam:[], bugun:{ yapilanlar:null, yarin:null }, metin:{ yapilanlar:'', yarin:'' }, bulunan:[], ayarlar:{} };
+const S = { tarih:null, elle:[], surekli:[], devam:[], bugun:{ yarin:null }, metin:{ yarin:'' }, bulunan:[], ayarlar:{}, aiAnahtari:false, sonKopya:null };
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
@@ -113,15 +116,12 @@ async function api(yol, yontem = 'GET', govde, ek = {}){
   return veri;
 }
 function kaydetHata(e){ toast('Kaydedilemedi: ' + e.message); durumuYukle(); }
-function guncelle(m, degisim){ Object.assign(m, degisim); return api(`/api/maddeler/${m.id}`, 'PATCH', degisim).catch(kaydetHata); }
-function sil(m){ return api(`/api/maddeler/${m.id}`, 'DELETE').catch(kaydetHata); }
-
-// --- son kopyalama bilgisi (yalnız bu tarayıcıda) ---
-function sonKopya(){ try { return JSON.parse(localStorage.getItem(SON_KOPYA) || 'null'); } catch { return null; } }
-function sonKopyaYaz(){
-  const v = { date: todayKey(), time: new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}) };
-  try { localStorage.setItem(SON_KOPYA, JSON.stringify(v)); } catch {}
+// Sunucu yanıtı (rapor_metni, metin_ai…) nesneye yazılır ve önizleme tazelenir.
+function guncelle(m, degisim){
+  Object.assign(m, degisim);
+  return api(`/api/maddeler/${m.id}`, 'PATCH', degisim).then(y => { Object.assign(m, y); render(); }).catch(kaydetHata);
 }
+function sil(m){ return api(`/api/maddeler/${m.id}`, 'DELETE').catch(kaydetHata); }
 
 function variantOf(text){
   const parts = text.split('|').map(s=>s.trim()).filter(Boolean);
@@ -131,13 +131,16 @@ function variantOf(text){
 }
 const lines = s => s.split('\n').map(x=>x.trim().replace(/^[-•*]\s*/,'')).filter(Boolean);
 const projeEtiketi = () => S.ayarlar.proje_adi || 'GitHub';
+const hamMetin = m => m.metin + (m.tur === 'devam' && m.asama ? ` — ${m.asama}` : '');
+const raporMetni = m => m.rapor_metni || hamMetin(m);
+const aiKullaniliyor = m => !!(m.metin_ai && !m.kullanici_duzenledi && m.ai_kullan !== false);
 
 function buildReport(){
   const out = [`*${S.ayarlar.rapor_basligi || 'Günlük Rapor'} – ${shortDate(new Date())}*`, ''];
-  const done = [...lines(S.metin.yapilanlar), ...foundForReport(), ...S.surekli.filter(r=>r.tikli).map(r=>variantOf(r.metin))];
+  const done = [...S.elle.filter(m=>m.tikli).map(raporMetni), ...foundForReport(), ...S.surekli.filter(r=>r.tikli).map(raporMetni)];
   if (done.length){ out.push('*Yapılanlar*'); done.forEach(x=>out.push('• '+x)); out.push(''); }
   const ong = S.devam.filter(o=>o.tikli);
-  if (ong.length){ out.push('*Devam eden*'); ong.forEach(o=>out.push('• '+o.metin+(o.asama?` — ${o.asama}`:''))); out.push(''); }
+  if (ong.length){ out.push('*Devam eden*'); ong.forEach(o=>out.push('• '+raporMetni(o))); out.push(''); }
   const plan = lines(S.metin.yarin);
   if (plan.length){ out.push('*Yarın*'); plan.forEach(x=>out.push('• '+x)); out.push(''); }
   return out.join('\n').trim();
@@ -151,13 +154,47 @@ function renderPreview(){
 
 function renderStatus(){
   $('dateLine').textContent = trDate(new Date());
-  const lc = sonKopya();
-  $('statusLine').innerHTML = (lc && lc.date === todayKey())
-    ? `Bugün <b>${lc.time}</b>'de kopyalandı.`
+  $('statusLine').innerHTML = S.sonKopya
+    ? `Bugün <b>${new Date(S.sonKopya).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})}</b>'de kopyalandı.`
     : 'Bugünkü rapor henüz kopyalanmadı.';
 }
 
 const tool = (tools, label, title, fn, cls) => { const b=document.createElement('button'); b.textContent=label; b.title=title; b.onclick=fn; if(cls) b.className=cls; tools.appendChild(b); };
+
+// --- Claude düzeltmesi: "düzeltildi" etiketi ve orijinal/AI seçimi ---
+const acikPaneller = new Set();
+function aiSec(m, govde){
+  return api(`/api/maddeler/${m.id}/ai`, 'PATCH', govde).then(y => {
+    Object.assign(m, y); render();
+    if (y.hatalar && y.hatalar.length) toast(y.hatalar[0]);
+  }).catch(e => toast('Olmadı: ' + e.message));
+}
+function aiPaneli(m, txt){
+  const surekli = m.tur === 'surekli';
+  if (surekli ? !m.gunun_ifadesi : (!m.metin_ai || m.kullanici_duzenledi)) return;
+  const acik = m.ai_kullan !== false;
+  if (surekli){
+    const a = document.createElement('span'); a.className = 'alt';
+    a.textContent = (acik ? 'bugün: ' : 'bugün (kullanılmıyor): ') + m.gunun_ifadesi;
+    txt.appendChild(a);
+  }
+  const etiket = document.createElement('button'); etiket.type = 'button'; etiket.className = 'src';
+  etiket.textContent = acik ? 'düzeltildi' : 'orijinal';
+  etiket.title = 'Orijinali göster';
+  etiket.onclick = e => { e.stopPropagation(); acikPaneller.has(m.id) ? acikPaneller.delete(m.id) : acikPaneller.add(m.id); render(); };
+  txt.appendChild(etiket);
+  if (!acikPaneller.has(m.id)) return;
+  const p = document.createElement('span'); p.className = 'aiPanel';
+  p.onclick = e => e.stopPropagation();
+  p.appendChild(document.createTextNode(acik
+    ? `Orijinal: ${surekli ? variantOf(m.metin) : hamMetin(m)}`
+    : `Claude: ${surekli ? m.gunun_ifadesi : m.metin_ai}`));
+  const satir = document.createElement('span'); satir.style.display = 'block';
+  const b = (label, fn) => { const x=document.createElement('button'); x.type='button'; x.textContent=label; x.onclick=fn; satir.appendChild(x); };
+  b(acik ? 'Orijinali kullan' : 'AI metnini kullan', () => aiSec(m, { kullan: !acik }));
+  if (S.aiAnahtari) b('Yeniden düzelt', () => aiSec(m, { yenile: true }));
+  p.appendChild(satir); txt.appendChild(p);
+}
 
 function row(item, kind){
   const li = document.createElement('li'); if (!item.tikli) li.classList.add('off');
@@ -167,20 +204,25 @@ function row(item, kind){
   if (kind==='surekli'){
     txt.textContent = variantOf(item.metin);
     if (item.metin.includes('|')) { const a=document.createElement('span'); a.className='alt'; a.textContent='bugünkü ifade · dönüşümlü'; txt.appendChild(a); }
+  } else if (aiKullaniliyor(item)) {
+    txt.textContent = item.metin_ai;
   } else {
     txt.textContent = item.metin;
     if (item.asama){ txt.appendChild(document.createTextNode(' ')); const s=document.createElement('span'); s.className='stage'; s.textContent='— '+item.asama; txt.appendChild(s); }
   }
+  aiPaneli(item, txt);
   txt.onclick = () => cb.click();
   const tools = document.createElement('div'); tools.className='tools';
   if (kind==='devam'){
-    tool(tools, '✓','Bitti — bugünün yapılanlarına geç', () => {
-      gunlukDegisti('yapilanlar', (S.metin.yapilanlar ? S.metin.yapilanlar+'\n' : '') + item.metin + ' tamamlandı', true);
-      S.devam = S.devam.filter(o=>o!==item); sil(item); render();
+    tool(tools, '✓','Bitti — bugünün yapılanlarına geç', async () => {
+      S.devam = S.devam.filter(o=>o!==item); render();
+      await ekleElle(item.metin + ' tamamlandı'); sil(item);
     });
     tool(tools, '✎','Aşamayı güncelle', () => { const s = prompt('Aşama:', item.asama||''); if (s!==null){ guncelle(item, { asama: s.trim() }); render(); } });
+  } else if (kind==='surekli') {
+    tool(tools, '✎','Metni düzenle', () => { const s = prompt('Metin ( | ile dönüşümlü ifadeler):', item.metin); if (s && s.trim() && s.trim() !== item.metin){ guncelle(item, { metin: s.trim() }); render(); } });
   } else {
-    tool(tools, '✎','Metni düzenle', () => { const s = prompt('Metin ( | ile dönüşümlü ifadeler):', item.metin); if (s && s.trim()){ guncelle(item, { metin: s.trim() }); render(); } });
+    tool(tools, '✎','Metni düzenle', () => { const eski = raporMetni(item); const s = prompt('Metin:', eski); if (s && s.trim() && s.trim() !== eski){ guncelle(item, { metin: s.trim() }); render(); } });
   }
   tool(tools, '×','Sil', () => {
     if (!confirm('Silinsin mi?')) return;
@@ -190,13 +232,15 @@ function row(item, kind){
 }
 
 function render(){
+  const dl = $('doneList'); dl.innerHTML='';
+  if (!S.elle.length) dl.innerHTML = '<li class="empty">Henüz madde yok.</li>';
+  S.elle.forEach(m => dl.appendChild(row(m,'elle')));
   const rl = $('recurringList'); rl.innerHTML='';
   if (!S.surekli.length) rl.innerHTML = '<li class="empty">Henüz sürekli iş yok.</li>';
   S.surekli.forEach(r => rl.appendChild(row(r,'surekli')));
   const ol = $('ongoingList'); ol.innerHTML='';
   if (!S.devam.length) ol.innerHTML = '<li class="empty">Devam eden iş yok. Örn: MSG Ağustos itirazı — yanıt bekleniyor</li>';
   S.devam.forEach(o => ol.appendChild(row(o,'devam')));
-  if (document.activeElement !== $('done')) $('done').value = S.metin.yapilanlar;
   if (document.activeElement !== $('plan')) $('plan').value = S.metin.yarin;
   renderStatus(); renderFound(); renderPreview();
 }
@@ -207,6 +251,13 @@ async function ekle(tur, metin, asama){
     S[tur].push(m); render();
   } catch (e) { toast('Eklenemedi: ' + e.message); }
 }
+async function ekleElle(metin){
+  try {
+    const m = await api('/api/maddeler', 'POST', { tur:'bugun', kaynak:'elle', metin });
+    S.elle.push(m); render();
+  } catch (e) { toast('Eklenemedi: ' + e.message); }
+}
+function addDone(){ const i=$('doneNew'); const t=i.value.trim(); if(!t) return; i.value=''; ekleElle(t); }
 function addRecurring(){ const i=$('recurringNew'); const t=i.value.trim(); if(!t) return; i.value=''; ekle('surekli', t); }
 function addOngoing(){
   const i=$('ongoingNew'); const t=i.value.trim(); if(!t) return;
@@ -218,8 +269,8 @@ function hepsi(tikli){
   render();
 }
 
-// --- bugünün serbest metinleri: 600 ms sonra yazılır, yazmalar sırayla gider ---
-const gunluk = { yapilanlar:{ t:null, zincir:Promise.resolve() }, yarin:{ t:null, zincir:Promise.resolve() } };
+// --- "Yarın" serbest metni: 600 ms sonra yazılır, yazmalar sırayla gider ---
+const gunluk = { yarin:{ t:null, zincir:Promise.resolve() } };
 function gunlukDegisti(kaynak, deger, hemen){
   S.metin[kaynak] = deger; renderPreview();
   const g = gunluk[kaynak]; clearTimeout(g.t); g.t = null;
@@ -238,24 +289,90 @@ document.addEventListener('visibilitychange', () => {
   Object.entries(gunluk).forEach(([k, g]) => { if (g.t) { clearTimeout(g.t); g.t = null; gunlukYaz(k, true); } });
 });
 
-async function copyReport(){
-  const txt = buildReport();
-  try {
-    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(txt);
-    else { const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-    sonKopyaYaz(); renderStatus();
-    toast('Kopyalandı');
-  } catch { toast('Kopyalanamadı — metni elle seç'); }
+// --- Claude ile düzelt ---
+function duzeltilmemisVar(){
+  const bekleyen = m => m.tikli && !m.kullanici_duzenledi && !m.metin_ai;
+  return S.elle.some(bekleyen) || S.devam.some(bekleyen)
+    || S.bulunan.some(m => !m.gizli && bekleyen(m))
+    || S.surekli.some(m => m.tikli && !m.gunun_ifadesi);
 }
-function openWa(){
-  const txt = encodeURIComponent(buildReport());
-  const p = (S.ayarlar.patron_telefon||'').replace(/\D/g,'');
-  sonKopyaYaz(); renderStatus();
-  window.open(p ? `https://wa.me/${p}?text=${txt}` : `https://wa.me/?text=${txt}`, '_blank');
+function duzeltDurum(metin){ $('duzeltDurum').textContent = metin; $('duzeltDurum').hidden = !metin; }
+let duzeltSurmekte = null;
+function duzeltCalistir(){
+  if (duzeltSurmekte) return duzeltSurmekte;
+  $('duzeltBtn').disabled = true; duzeltDurum('Düzeltiliyor…');
+  duzeltSurmekte = (async () => {
+    try {
+      const d = await api('/api/duzelt', 'POST');
+      if (d.atlandi) duzeltDurum('Claude anahtarı tanımlı değil; ham metin kullanılıyor.');
+      else if (d.hatalar && d.hatalar.length) duzeltDurum((d.duzeltilen ? `${d.duzeltilen} madde düzeltildi. ` : '') + d.hatalar.join(' · '));
+      else duzeltDurum(d.gonderilen ? `${d.duzeltilen} madde düzeltildi` : 'Düzeltilecek yeni madde yok');
+      if (d.duzeltilen) await durumuYukle();
+    } catch (e) {
+      duzeltDurum('Düzeltilemedi: ' + e.message);
+    } finally {
+      $('duzeltBtn').disabled = false; duzeltSurmekte = null;
+    }
+  })();
+  return duzeltSurmekte;
+}
+// Kopyalamadan önce: anahtar varsa ve düzeltilmemiş madde varsa önce düzelt; hata olursa ham metinle devam.
+async function hazirRapor(dugme){
+  if (S.aiAnahtari && duzeltilmemisVar()){
+    const eski = dugme.textContent; dugme.textContent = 'Düzeltiliyor…';
+    try { await duzeltCalistir(); } finally { dugme.textContent = eski; }
+  }
+  return buildReport();
+}
+
+async function raporuKaydet(metin){
+  try {
+    const r = await api('/api/raporlar', 'POST', { metin, tur:'gunluk' });
+    S.sonKopya = r.olusturma; renderStatus();
+  } catch (e) { toast('Geçmişe kaydedilemedi: ' + e.message); }
+}
+
+function eskiYontemleKopyala(txt){
+  const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
+  const ok = document.execCommand('copy'); ta.remove(); return ok;
+}
+async function copyReport(){
+  const btn = $('copyBtn'); btn.disabled = true;
+  // Pano yazımı tıklama anında başlar (Safari, beklemeden sonra izni düşürür); metin düzeltme bitince gelir.
+  const metinSozu = hazirRapor(btn);
+  let txt = null;
+  try {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write && window.isSecureContext) {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': metinSozu.then(t => new Blob([t], { type:'text/plain' })) })]);
+        txt = await metinSozu;
+      } catch { txt = null; }
+    }
+    if (txt === null) {
+      const t = await metinSozu;
+      if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(t); txt = t; } catch { if (eskiYontemleKopyala(t)) txt = t; }
+      } else if (eskiYontemleKopyala(t)) txt = t;
+    }
+    if (txt === null) { toast('Kopyalanamadı — metni elle seç'); return; }
+    toast('Kopyalandı');
+    await raporuKaydet(txt);
+  } finally { btn.disabled = false; }
+}
+async function openWa(){
+  const btn = $('waBtn'); btn.disabled = true;
+  const pencere = window.open('', '_blank');  // tıklama anında açılır; yoksa pop-up engeline takılır
+  try {
+    const txt = await hazirRapor(btn);
+    const p = (S.ayarlar.patron_telefon||'').replace(/\D/g,'');
+    const url = p ? `https://wa.me/${p}?text=${encodeURIComponent(txt)}` : `https://wa.me/?text=${encodeURIComponent(txt)}`;
+    if (pencere) pencere.location.href = url; else location.href = url;
+    await raporuKaydet(txt);
+  } finally { btn.disabled = false; }
 }
 
 // --- Bugün bulunanlar (Gmail + GitHub) ---
-function foundForReport(){ return S.bulunan.filter(it => !it.gizli && it.tikli).map(it => it.metin); }
+function foundForReport(){ return S.bulunan.filter(it => !it.gizli && it.tikli).map(raporMetni); }
 
 function renderFound(){
   const ul = $('foundList'); ul.innerHTML = '';
@@ -272,12 +389,13 @@ function renderFound(){
     const li = document.createElement('li'); if (!it.tikli) li.classList.add('off');
     const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = it.tikli;
     cb.onchange = () => { li.classList.toggle('off', !cb.checked); guncelle(it, { tikli: cb.checked }); renderPreview(); };
-    const txt = document.createElement('div'); txt.className='txt'; txt.textContent = it.metin;
+    const txt = document.createElement('div'); txt.className='txt'; txt.textContent = aiKullaniliyor(it) ? it.metin_ai : it.metin;
     const tag = document.createElement('span'); tag.className='src'; tag.textContent = it.kaynak === 'medusa' ? projeEtiketi() : 'e-posta';
     txt.appendChild(tag);
+    aiPaneli(it, txt);
     txt.onclick = () => cb.click();
     const tools = document.createElement('div'); tools.className='tools';
-    tool(tools, '✎','Metni düzenle', () => { const s = prompt('Metin:', it.metin); if (s && s.trim()){ guncelle(it, { metin: s.trim() }); renderFound(); renderPreview(); } });
+    tool(tools, '✎','Metni düzenle', () => { const eski = raporMetni(it); const s = prompt('Metin:', eski); if (s && s.trim() && s.trim() !== eski){ guncelle(it, { metin: s.trim() }); renderFound(); renderPreview(); } });
     tool(tools, '×','Gizle', () => { guncelle(it, { gizli:true }); renderFound(); renderPreview(); }, 'del');
     li.append(cb, txt, tools); ul.appendChild(li);
   });
@@ -307,14 +425,13 @@ async function loadFound(force){
 async function durumuYukle(){
   try {
     const d = await api('/api/durum');
-    S.tarih = d.tarih; S.ayarlar = d.ayarlar;
+    S.tarih = d.tarih; S.ayarlar = d.ayarlar; S.aiAnahtari = d.ai_anahtari; S.sonKopya = d.son_kopya;
     S.surekli = d.maddeler.filter(m => m.tur === 'surekli');
     S.devam = d.maddeler.filter(m => m.tur === 'devam');
     S.bulunan = d.maddeler.filter(m => m.tur === 'bulunan');
-    for (const k of ['yapilanlar', 'yarin']) {
-      S.bugun[k] = d.maddeler.find(m => m.tur === 'bugun' && m.kaynak === k) || null;
-      if (!gunluk[k].t) S.metin[k] = S.bugun[k] ? S.bugun[k].metin : '';
-    }
+    S.elle = d.maddeler.filter(m => m.tur === 'bugun' && m.kaynak === 'elle');
+    S.bugun.yarin = d.maddeler.find(m => m.tur === 'bugun' && m.kaynak === 'yarin') || null;
+    if (!gunluk.yarin.t) S.metin.yarin = S.bugun.yarin ? S.bugun.yarin.metin : '';
     $('loadError').hidden = true;
   } catch (e) {
     $('loadError').textContent = 'Veriler yüklenemedi: ' + e.message; $('loadError').hidden = false;
@@ -330,10 +447,7 @@ async function eskiVeriyiTasi(){
   let veri; try { veri = JSON.parse(ham); } catch { return; }
   try {
     await api('/api/ice-aktar', 'POST', veri);
-    try {
-      if (veri.lastCopy) localStorage.setItem(SON_KOPYA, JSON.stringify(veri.lastCopy));
-      ESKI_ANAHTARLAR.forEach(k => localStorage.removeItem(k));
-    } catch {}
+    try { ESKI_ANAHTARLAR.forEach(k => localStorage.removeItem(k)); } catch {}
     toast('Önceki veriler taşındı');
   } catch (e) {
     if (e.status !== 409) console.warn('Eski veriler taşınamadı:', e.message);
@@ -341,12 +455,13 @@ async function eskiVeriyiTasi(){
 }
 
 $('foundRefresh').onclick = () => loadFound(true);
-$('done').oninput = e => gunlukDegisti('yapilanlar', e.target.value);
 $('plan').oninput = e => gunlukDegisti('yarin', e.target.value);
+$('doneAdd').onclick = addDone; $('doneNew').onkeydown = e => { if(e.key==='Enter') addDone(); };
 $('recurringAdd').onclick = addRecurring; $('recurringNew').onkeydown = e => { if(e.key==='Enter') addRecurring(); };
 $('ongoingAdd').onclick = addOngoing; $('ongoingNew').onkeydown = e => { if(e.key==='Enter') addOngoing(); };
 $('allOn').onclick = () => hepsi(true);
 $('allOff').onclick = () => hepsi(false);
+$('duzeltBtn').onclick = duzeltCalistir;
 $('copyBtn').onclick = copyReport; $('waBtn').onclick = openWa;
 
 render();

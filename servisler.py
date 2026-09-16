@@ -361,6 +361,43 @@ def _json_dizi_ayikla(metin: str) -> list:
     return veri
 
 
+class ClaudeHatasi(Exception):
+    pass
+
+
+def _claude_cagir(istek: dict, api_anahtari: str, istemci: httpx.Client | None = None) -> str:
+    """Messages API'ye tek istek; yanıtın metin bloklarını döner. Her hata ClaudeHatasi olur."""
+    istemci = istemci or httpx.Client(timeout=90)
+    try:
+        yanit = istemci.post(
+            "https://api.anthropic.com/v1/messages",
+            json=istek,
+            headers={"x-api-key": api_anahtari, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+        )
+        if yanit.status_code >= 400:
+            try:
+                neden = yanit.json()["error"]["message"]
+            except Exception:
+                neden = yanit.text[:200]
+            raise ClaudeHatasi(f"API hatası ({yanit.status_code}: {neden})")
+        govde = yanit.json()
+    except httpx.HTTPError as e:
+        raise ClaudeHatasi(f"bağlanılamadı ({e.__class__.__name__})") from e
+    except ValueError as e:
+        raise ClaudeHatasi("yanıt okunamadı") from e
+    if govde.get("stop_reason") == "refusal":
+        raise ClaudeHatasi("istek reddedildi")
+    return "".join(b.get("text", "") for b in govde.get("content", []) if b.get("type") == "text")
+
+
+def _id_metin_eslesmesi(metin: str) -> dict[str, str]:
+    return {
+        str(x["id"]): x["metin"].strip()
+        for x in _json_dizi_ayikla(metin)
+        if isinstance(x, dict) and isinstance(x.get("metin"), str) and x["metin"].strip() and "id" in x
+    }
+
+
 def claude_cevir(
     maddeler: list[dict], api_anahtari: str, istemci: httpx.Client | None = None, proje_adi: str = ""
 ) -> tuple[list[dict], str | None]:
@@ -383,34 +420,126 @@ def claude_cevir(
             ),
         }],
     }
-    istemci = istemci or httpx.Client(timeout=60)
     try:
-        yanit = istemci.post(
-            "https://api.anthropic.com/v1/messages",
-            json=istek,
-            headers={"x-api-key": api_anahtari, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        )
-        if yanit.status_code >= 400:
-            try:
-                neden = yanit.json()["error"]["message"]
-            except Exception:
-                neden = yanit.text[:200]
-            return maddeler, f"claude: API hatası ({yanit.status_code}: {neden}), ham metin kullanıldı"
-        govde = yanit.json()
-        if govde.get("stop_reason") == "refusal":
-            return maddeler, "claude: istek reddedildi, ham metin kullanıldı"
-        metin = "".join(b.get("text", "") for b in govde.get("content", []) if b.get("type") == "text")
-        ceviri = {
-            str(x["id"]): x["metin"].strip()
-            for x in _json_dizi_ayikla(metin)
-            if isinstance(x, dict) and isinstance(x.get("metin"), str) and x["metin"].strip() and "id" in x
-        }
-    except httpx.HTTPError as e:
-        return maddeler, f"claude: bağlanılamadı ({e.__class__.__name__}), ham metin kullanıldı"
+        ceviri = _id_metin_eslesmesi(_claude_cagir(istek, api_anahtari, istemci))
+    except ClaudeHatasi as e:
+        return maddeler, f"claude: {e}, ham metin kullanıldı"
     except (ValueError, KeyError, TypeError) as e:
         return maddeler, f"claude: yanıt JSON değil ({e}), ham metin kullanıldı"
     # id ham metinden türetildiği için korunur; böylece gün içinde tik durumu kaybolmaz.
     return [{**m, "metin": ceviri.get(m["id"], m["metin"])} for m in maddeler], None
+
+
+def duzelt_sistemi(proje_adi: str = "") -> str:
+    urun = f"Yazılım ürününün adı {proje_adi}; yazılımdan söz ederken bu adı kullan. " if proje_adi else ""
+    return (
+        "Bir müzik edisyon şirketinde çalışan bir danışmanın yöneticisine WhatsApp'tan gönderdiği günlük raporun "
+        "maddelerini düzeltiyorsun.\n"
+        "Kurallar:\n"
+        "- Yazım, noktalama ve kesme işaretini düzelt: özel adlara gelen ekler kesme işaretiyle ayrılır ve ek "
+        "bitişik yazılır (\"Köprü Film den\" → \"Köprü Film'den\", \"Ezgi hanım dan\" → \"Ezgi Hanım'dan\"). "
+        "Kişi adından sonra gelen hanım/bey büyük harfle yazılır.\n"
+        "- Her madde yönetici raporuna uygun TEK cümle olur; sonunda nokta olur. Zaman kipi -di'li geçmiş zamandır "
+        "(\"görüşüldü\", \"gönderildi\", \"istendi\"); \"-mıştır\", \"-mıştı\" kullanma.\n"
+        "- Olgu ekleme, çıkarma, yorum katma; \"tamamlandı\" gibi durum bilgileri de cümlede kalır. "
+        "Kişi, kurum, ürün adları ve sayılar aynen korunur.\n"
+        "- Teknik terimleri yöneticinin anlayacağı iş diline çevir. " + urun + "\n"
+        "- 'devam' türündeki maddelerde işin adı ve aşaması tek cümlede birleşir (örn. \"… için yanıt bekleniyor.\").\n"
+        "- 'surekli' türündeki maddeler her gün tekrarlanan işlerdir: son raporlardaki cümlelerle aynı olmayan "
+        "ama aynı anlama gelen, doğal bir ifade yaz. Metinde | ile ayrılmış seçenekler varsa hepsi aynı işin "
+        "farklı söylenişidir.\n"
+        "Yanıt olarak YALNIZ JSON dizi döndür, başka hiçbir şey yazma: [{\"id\": <sayı>, \"metin\": \"...\"}]"
+    )
+
+
+def claude_duzelt(
+    girdiler: list[dict], son_raporlar: list[str], api_anahtari: str, proje_adi: str = "",
+    istemci: httpx.Client | None = None,
+) -> dict[int, str]:
+    """girdiler: {id, tur, metin, asama?}. Dönen: id → düzeltilmiş metin. Hata → ClaudeHatasi."""
+    if not girdiler:
+        return {}
+    baglam = (
+        "Son günlük raporlar (sürekli işlerde bu cümleleri tekrar etme):\n"
+        + "\n---\n".join(son_raporlar) + "\n\n"
+    ) if son_raporlar else ""
+    istek = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": 2000,
+        "thinking": {"type": "disabled"},
+        "system": duzelt_sistemi(proje_adi),
+        "messages": [{
+            "role": "user",
+            "content": baglam + "Düzeltilecek maddeler:\n" + json.dumps(girdiler, ensure_ascii=False),
+        }],
+    }
+    metin = _claude_cagir(istek, api_anahtari, istemci)
+    try:
+        eslesme = _id_metin_eslesmesi(metin)
+    except (ValueError, KeyError, TypeError) as e:
+        raise ClaudeHatasi(f"yanıt JSON değil ({e})") from e
+    gecerli = {str(g["id"]) for g in girdiler}
+    return {int(k): v for k, v in eslesme.items() if k in gecerli}
+
+
+TR_AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+
+
+def hafta_basligi(baslangic: date, bitis: date) -> str:
+    """'14–18 Eylül 2026', '28 Eylül – 2 Ekim 2026', '29 Aralık 2025 – 2 Ocak 2026'."""
+    if baslangic.year != bitis.year:
+        return (f"{baslangic.day} {TR_AYLAR[baslangic.month - 1]} {baslangic.year} – "
+                f"{bitis.day} {TR_AYLAR[bitis.month - 1]} {bitis.year}")
+    if baslangic.month != bitis.month:
+        return f"{baslangic.day} {TR_AYLAR[baslangic.month - 1]} – {bitis.day} {TR_AYLAR[bitis.month - 1]} {bitis.year}"
+    if baslangic == bitis:
+        return f"{baslangic.day} {TR_AYLAR[baslangic.month - 1]} {baslangic.year}"
+    return f"{baslangic.day}–{bitis.day} {TR_AYLAR[bitis.month - 1]} {bitis.year}"
+
+
+def haftalik_sistemi() -> str:
+    return (
+        "Bir müzik edisyon şirketinde çalışan bir danışmanın bir haftalık günlük raporlarından, yöneticisine "
+        "WhatsApp'tan gönderilecek haftalık özet yazıyorsun.\n"
+        "Biçim (WhatsApp): ilk satır verilen başlık aynen, sonra boş satır, maddeler '• ' ile başlar, "
+        "*yıldızla* kalın yazı yalnız başlıklarda kullanılır, madde içinde kullanılmaz.\n"
+        "Kurallar:\n"
+        "- Maddeleri güne göre değil konuya göre grupla; toplam 6-10 madde.\n"
+        "- Aynı işin tekrarlarını tek maddede birleştir.\n"
+        "- Her gün tekrarlanan sürekli işlerin HEPSİNİ tek bir maddede topla (\"Hafta boyunca … ve … takip edildi\").\n"
+        "- Zaman kipi -di'li geçmiş zamandır (\"gönderildi\", \"görüşüldü\"); \"-mıştır\" kullanma.\n"
+        "- Hafta sonunda hâlâ devam eden işleri en sonda \"*Devam eden*\" başlığı altında ver.\n"
+        "- Raporlarda olmayan hiçbir bilgiyi ekleme; isimler ve sayılar aynen kalır; geçmiş zaman.\n"
+        "Yalnız özet metnini döndür, açıklama yazma."
+    )
+
+
+def claude_haftalik(
+    raporlar: list[tuple[date, str]], baslik: str, api_anahtari: str, istemci: httpx.Client | None = None
+) -> str:
+    govde = "\n\n".join(f"### {t.isoformat()}\n{m}" for t, m in raporlar)
+    istek = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": 2000,
+        "thinking": {"type": "disabled"},
+        "system": haftalik_sistemi(),
+        "messages": [{
+            "role": "user",
+            "content": f"Başlık: *Haftalık Özet – {baslik}*\n\nGünlük raporlar:\n\n{govde}",
+        }],
+    }
+    metin = _claude_cagir(istek, api_anahtari, istemci).strip()
+    if not metin:
+        raise ClaudeHatasi("boş yanıt")
+    return metin
+
+
+def surekli_varyant(metin: str, tarih: date) -> str:
+    """'a | b | c' → yılın gününe göre biri (arayüzdeki eski variantOf ile aynı)."""
+    parcalar = [p.strip() for p in metin.split("|") if p.strip()]
+    if len(parcalar) <= 1:
+        return metin.strip()
+    return parcalar[tarih.timetuple().tm_yday % len(parcalar)]
 
 
 # ---------------------------------------------------------------- birleştirme
@@ -444,9 +573,10 @@ def raporu_uret(ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | f
     yeniler = [m for m in sonuc["eposta"] + sonuc["medusa"] if m["id"] not in haric_idler]
     if api_anahtari and yeniler:
         cevrilmis, hata = claude_cevir(yeniler, api_anahtari, proje_adi=ayarlar.get("proje_adi") or "")
-        metinler = {m["id"]: m["metin"] for m in cevrilmis}
-        for anahtar in ("eposta", "medusa"):
-            sonuc[anahtar] = [{**m, "metin": metinler.get(m["id"], m["metin"])} for m in sonuc[anahtar]]
-        if hata:
+        if not hata:  # metin ham kalır; çeviri metin_ai'ye gider
+            metinler = {m["id"]: m["metin"] for m in cevrilmis}
+            for anahtar in ("eposta", "medusa"):
+                sonuc[anahtar] = [{**m, "metin_ai": metinler[m["id"]]} if m["id"] in metinler else m for m in sonuc[anahtar]]
+        else:
             sonuc["hatalar"].append({"kaynak": "claude", "mesaj": hata})
     return sonuc

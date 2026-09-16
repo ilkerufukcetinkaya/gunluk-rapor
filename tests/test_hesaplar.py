@@ -313,7 +313,7 @@ def test_ice_aktar_turlere_dagilir_ikinci_cagri_409():
             ("Coverz ekibine teknik destek verildi", False, "", None),
         ]
         assert tur("devam") == [("MSG Ağustos itirazı", True, "yanıt bekleniyor", None)]
-        assert sorted(tur("bugun")) == [("Coverz listesi", True, "", "yarin"), ("MSG'ye itiraz gönderildi", True, "", "yapilanlar")]
+        assert sorted(tur("bugun")) == [("Coverz listesi", True, "", "yarin"), ("MSG'ye itiraz gönderildi", True, "", "elle")]
         assert d["ayarlar"]["patron_telefon"] == "905551112233"
         assert d["ayarlar"]["rapor_basligi"] == "Günlük Rapor – Ufuk"
         assert c.post("/api/ice-aktar", json=veri).status_code == 409
@@ -346,7 +346,7 @@ def test_ice_aktar_bulunan_ve_bugun_satirlari_engellemez():
         ]
         assert [m["metin"] for m in d if m["tur"] == "bulunan"] == ["bulunan 0", "bulunan 1", "bulunan 2"]
         assert sorted((m["kaynak"], m["metin"]) for m in d if m["tur"] == "bugun") == [
-            ("yapilanlar", "elle yazılan"), ("yarin", "Coverz listesi"),
+            ("elle", "elle yazılan"), ("yarin", "Coverz listesi"),
         ]
         assert c.post("/api/ice-aktar", json=veri).status_code == 409
 
@@ -398,9 +398,10 @@ def test_claude_yalniz_yeni_maddeleri_ceviri(monkeypatch):
         c.put("/api/ayarlar", json={"github_token": "t", "github_repo": "ben/proje", "proje_adi": "MEDUSA"})
         c.get("/api/bugun?yenile=1")
         commitler.append(servisler.madde("medusa", "b"))
-        metinler = [m["metin"] for m in c.get("/api/bugun?yenile=1").json()["bulunan"]]
+        bulunan = c.get("/api/bugun?yenile=1").json()["bulunan"]
     assert gonderilen == [(["a"], "MEDUSA"), (["b"], "MEDUSA")]
-    assert metinler == ["A", "B"]
+    # çeviri metin_ai'ye yazılır, metin ham kalır
+    assert [(m["metin"], m["metin_ai"], m["rapor_metni"]) for m in bulunan] == [("a", "A", "A"), ("b", "B", "B")]
 
 
 def test_claude_prompt_proje_adi():

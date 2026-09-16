@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="tr">
+<head>
+{% include "_stil.html" %}
+<title>Rapor geçmişi</title>
+<style>
+section{margin:0 0 30px}
+ul{list-style:none; margin:0; padding:0; background:var(--paper); border:1px solid var(--line); border-radius:10px}
+li{padding:10px 12px; border-top:1px solid var(--line)}
+li:first-child{border-top:0}
+li.kayit{cursor:pointer}
+.ust-satir{display:flex; gap:10px; align-items:baseline}
+.ust-satir .tarih{font-weight:600; white-space:nowrap}
+.ust-satir .ozet{flex:1; min-width:0; color:var(--ink-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.ust-satir .sayi{color:var(--ink-2); font-size:15px; white-space:nowrap}
+.empty{color:var(--ink-2)}
+.src{display:inline-block; padding:0 6px; border:1px solid var(--line); border-radius:999px; font-size:12px; line-height:18px; color:var(--ink-2); white-space:nowrap}
+.bubble{
+  background:var(--bubble); color:var(--bubble-ink); border-radius:14px 14px 14px 4px;
+  padding:14px 16px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:16px; line-height:1.5; margin-top:10px;
+}
+.bubble b{font-weight:700}
+.actions{display:flex; gap:10px; margin-top:12px; flex-wrap:wrap}
+.actions button{flex:1}
+.filtre{display:flex; gap:8px; margin:0 0 10px}
+.filtre input{flex:1}
+select{font:inherit; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:10px 12px}
+#haftalikMetin{min-height:260px; margin-top:10px}
+</style>
+</head>
+<body>
+<main>
+  {% include "_ust.html" %}
+  <h1>Rapor geçmişi</h1>
+  <p class="hint">Kopyalanan ya da WhatsApp'ta açılan raporlar burada saklanır.</p>
+
+  <section>
+    <h2>Haftalık özet</h2>
+    <p class="hint">Seçilen haftanın günlük raporlarından Claude konuya göre bir özet yazar.</p>
+    <div class="filtre">
+      <select id="hafta" aria-label="Hafta"></select>
+      <button class="primary" id="haftalikBtn">Haftalık özet üret</button>
+    </div>
+    <p class="warn" id="haftalikHata" role="alert" hidden></p>
+    <div id="haftalikKutu" hidden>
+      <textarea id="haftalikMetin" aria-label="Haftalık özet"></textarea>
+      <div class="actions">
+        <button class="primary" id="haftalikKopyala">Kopyala</button>
+        <button class="secondary" id="haftalikWa">WhatsApp'ta aç</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Kayıtlı raporlar</h2>
+    <div class="filtre">
+      <input type="text" id="ara" placeholder="Raporlarda ara" aria-label="Raporlarda ara">
+      <select id="tur" aria-label="Rapor türü">
+        <option value="">Tümü</option>
+        <option value="gunluk">Günlük</option>
+        <option value="haftalik">Haftalık</option>
+      </select>
+    </div>
+    <ul id="liste"><li class="empty">Yükleniyor…</li></ul>
+    <div class="actions" id="dahaKutu" hidden><button class="secondary" id="daha">Daha fazla</button></div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const BUGUN = '{{ bugun }}';
+const SAYFA = 50;
+const PATRON = { telefon: '' };
+const $ = id => document.getElementById(id);
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
+
+async function api(yol, yontem = 'GET', govde){
+  const r = await fetch(yol, {
+    method: yontem, credentials: 'same-origin',
+    headers: govde === undefined ? {} : { 'Content-Type': 'application/json' },
+    body: govde === undefined ? undefined : JSON.stringify(govde),
+  });
+  if (r.status === 401) { location.href = '/giris'; throw new Error('Oturum kapandı'); }
+  const veri = await r.json().catch(() => ({}));
+  if (r.status === 403 && /şifre/i.test(veri.detail || '')) { location.href = '/sifre'; }
+  if (!r.ok) throw new Error(typeof veri.detail === 'string' ? veri.detail : `sunucu ${r.status} döndürdü`);
+  return veri;
+}
+
+// Tarihler sunucunun İstanbul gününe göre; saat dilimi kaymasın diye öğlen UTC kullanılır.
+const gun = iso => new Date(iso + 'T12:00:00Z');
+const isoGun = d => d.toISOString().slice(0, 10);
+const gunEkle = (iso, n) => { const d = gun(iso); d.setUTCDate(d.getUTCDate() + n); return isoGun(d); };
+const uzunTarih = iso => gun(iso).toLocaleDateString('tr-TR', { day:'numeric', month:'long', year:'numeric', timeZone:'UTC' });
+const kisaTarih = iso => gun(iso).toLocaleDateString('tr-TR', { day:'numeric', month:'long', timeZone:'UTC' });
+const esc = s => s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+async function kopyala(txt){
+  try {
+    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(txt);
+    else { const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    toast('Kopyalandı'); return true;
+  } catch { toast('Kopyalanamadı — metni elle seç'); return false; }
+}
+
+// --- haftalık özet ---
+function haftalariDoldur(){
+  const pzt = gunEkle(BUGUN, -((gun(BUGUN).getUTCDay() + 6) % 7));
+  for (let i = 0; i < 9; i++){
+    const o = document.createElement('option'); o.value = gunEkle(pzt, -7 * i);
+    o.textContent = i === 0 ? `Bu hafta (${kisaTarih(o.value)} – ${kisaTarih(BUGUN)})` : `${kisaTarih(o.value)} haftası`;
+    $('hafta').appendChild(o);
+  }
+}
+let haftalikHafta = null;
+async function haftalikUret(){
+  const btn = $('haftalikBtn'); btn.disabled = true; btn.textContent = 'Üretiliyor…';
+  $('haftalikHata').hidden = true;
+  try {
+    const d = await api('/api/haftalik', 'POST', { hafta_baslangic: $('hafta').value });
+    haftalikHafta = d.hafta_baslangic;
+    $('haftalikMetin').value = d.metin; $('haftalikKutu').hidden = false;
+  } catch (e) {
+    $('haftalikHata').textContent = e.message; $('haftalikHata').hidden = false;
+  } finally { btn.disabled = false; btn.textContent = 'Haftalık özet üret'; }
+}
+async function haftalikKaydet(metin){
+  try { await api('/api/raporlar', 'POST', { metin, tur:'haftalik', hafta_baslangic: haftalikHafta }); yukle(); }
+  catch (e) { toast('Geçmişe kaydedilemedi: ' + e.message); }
+}
+$('haftalikBtn').onclick = haftalikUret;
+$('haftalikKopyala').onclick = async () => { const t = $('haftalikMetin').value.trim(); if (t && await kopyala(t)) haftalikKaydet(t); };
+$('haftalikWa').onclick = () => {
+  const t = $('haftalikMetin').value.trim(); if (!t) return;
+  const p = PATRON.telefon.replace(/\D/g,'');
+  window.open(p ? `https://wa.me/${p}?text=${encodeURIComponent(t)}` : `https://wa.me/?text=${encodeURIComponent(t)}`, '_blank');
+  haftalikKaydet(t);
+};
+
+// --- liste ---
+let kayitlar = [], toplam = 0, acik = null;
+function ciz(){
+  const ul = $('liste'); ul.innerHTML = '';
+  if (!kayitlar.length){ ul.innerHTML = `<li class="empty">${$('ara').value.trim() || $('tur').value ? 'Eşleşen rapor yok.' : 'Henüz kayıtlı rapor yok. Ana sayfada Kopyala ile kaydedilir.'}</li>`; }
+  kayitlar.forEach(r => {
+    const li = document.createElement('li'); li.className = 'kayit';
+    const ust = document.createElement('div'); ust.className = 'ust-satir';
+    const t = document.createElement('span'); t.className = 'tarih';
+    t.textContent = r.tur === 'haftalik' ? `${kisaTarih(r.hafta_baslangic || r.tarih)} haftası` : uzunTarih(r.tarih);
+    const o = document.createElement('span'); o.className = 'ozet'; o.textContent = r.ilk_satir.replace(/\*/g, '');
+    const s = document.createElement('span'); s.className = 'sayi';
+    s.textContent = `${r.madde_sayisi} madde`;
+    ust.append(t, o);
+    if (r.tur === 'haftalik'){ const e = document.createElement('span'); e.className = 'src'; e.textContent = 'haftalık'; ust.append(e); }
+    ust.append(s);
+    li.appendChild(ust);
+    li.onclick = () => { acik = acik === r.id ? null : r.id; ciz(); };
+    if (acik === r.id){
+      const b = document.createElement('div'); b.className = 'bubble';
+      b.innerHTML = esc(r.metin).replace(/\*([^*\n]+)\*/g,'<b>$1</b>');
+      const a = document.createElement('div'); a.className = 'actions';
+      const k = document.createElement('button'); k.className = 'primary'; k.textContent = 'Kopyala';
+      k.onclick = e => { e.stopPropagation(); kopyala(r.metin); };
+      a.appendChild(k);
+      b.onclick = e => e.stopPropagation();
+      li.append(b, a);
+    }
+    ul.appendChild(li);
+  });
+  $('dahaKutu').hidden = kayitlar.length >= toplam;
+}
+let istekNo = 0;
+async function yukle(ekle){
+  const no = ++istekNo;
+  const params = new URLSearchParams({ q: $('ara').value.trim(), tur: $('tur').value, limit: SAYFA, offset: ekle ? kayitlar.length : 0 });
+  try {
+    const d = await api('/api/raporlar?' + params);
+    if (no !== istekNo) return;  // arada yeni arama başladı
+    kayitlar = ekle ? kayitlar.concat(d.raporlar) : d.raporlar; toplam = d.toplam;
+    ciz();
+  } catch (e) {
+    $('liste').innerHTML = ''; const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'Yüklenemedi: ' + e.message; $('liste').appendChild(li);
+  }
+}
+let aramaZamani = null;
+$('ara').oninput = () => { clearTimeout(aramaZamani); aramaZamani = setTimeout(() => yukle(), 300); };
+$('tur').onchange = () => yukle();
+$('daha').onclick = () => yukle(true);
+
+haftalariDoldur();
+yukle();
+api('/api/ayarlar').then(a => { PATRON.telefon = a.patron_telefon || ''; }).catch(() => {});
+</script>
+</body>
+</html>

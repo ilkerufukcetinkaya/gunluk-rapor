@@ -1,15 +1,19 @@
 """Veritabanı: bağlantı, tablolar. DATABASE_URL yoksa yerel sqlite (rapor.db)."""
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, datetime, timezone
 
 from sqlalchemy import (
-    JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine,
+    JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 TURLER = ("surekli", "devam", "bugun", "bulunan")
+RAPOR_TURLERI = ("gunluk", "haftalik")
+
+log = logging.getLogger("gunluk-rapor")
 
 
 def simdi() -> datetime:
@@ -87,27 +91,99 @@ class Madde(Temel):
     kaynak_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     sira: Mapped[int] = mapped_column(Integer, default=0)
     olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
+    # Claude düzeltmesi: metin kullanıcının yazdığıdır, metin_ai ayrı saklanır.
+    metin_ai: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_tarih: Mapped[date | None] = mapped_column(Date, nullable=True)
+    kullanici_duzenledi: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_kullan: Mapped[bool] = mapped_column(Boolean, default=True)
 
     def sozluk(self) -> dict:
         return {
             "id": self.id, "tur": self.tur, "metin": self.metin, "asama": self.asama or "",
             "tikli": self.tikli, "gizli": self.gizli, "tarih": self.tarih.isoformat() if self.tarih else None,
             "kaynak": self.kaynak, "kaynak_id": self.kaynak_id, "sira": self.sira,
+            "metin_ai": self.metin_ai, "kullanici_duzenledi": bool(self.kullanici_duzenledi),
+            "ai_kullan": self.ai_kullan is not False,
         }
+
+
+class GunlukIfade(Temel):
+    """Sürekli işin o güne özel ifadesi."""
+    __tablename__ = "gunluk_ifadeler"
+    __table_args__ = (UniqueConstraint("item_id", "tarih", name="uq_gunluk_ifadeler_item_tarih"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"))
+    tarih: Mapped[date] = mapped_column(Date)
+    metin_ai: Mapped[str] = mapped_column(Text)
 
 
 class Rapor(Temel):
     __tablename__ = "reports"
+    # Haftalık raporda tarih = hafta_baslangic; böylece tek anahtar iki türü de kapsar.
+    __table_args__ = (Index("uq_reports_user_tarih_tur", "user_id", "tarih", "tur", unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     tarih: Mapped[date] = mapped_column(Date)
     metin: Mapped[str] = mapped_column(Text)
     olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
+    tur: Mapped[str] = mapped_column(String(10), default="gunluk")
+    hafta_baslangic: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
+# create_all mevcut tabloya kolon eklemez; eklenen kolonlar burada (tablo, kolon, Postgres tipi, sqlite tipi).
+EK_KOLONLAR = [
+    ("items", "metin_ai", "TEXT", "TEXT"),
+    ("items", "ai_tarih", "DATE", "DATE"),
+    ("items", "kullanici_duzenledi", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("items", "ai_kullan", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("reports", "tur", "VARCHAR(10) NOT NULL DEFAULT 'gunluk'", "VARCHAR(10) NOT NULL DEFAULT 'gunluk'"),
+    ("reports", "hafta_baslangic", "DATE", "DATE"),
+]
+EK_INDEKSLER = [
+    ("uq_reports_user_tarih_tur", "CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_user_tarih_tur ON reports (user_id, tarih, tur)"),
+]
+
+
+def sema_guncelle(motor_=None) -> list[str]:
+    """İdempotent: eksik kolon ve indeksleri ekler, eklenenlerin adlarını döner."""
+    motor_ = motor_ or motor
+    eklenen = []
+    with motor_.begin() as b:
+        sqlite = motor_.dialect.name == "sqlite"
+        for tablo, kolon, pg_tipi, sqlite_tipi in EK_KOLONLAR:
+            if sqlite:
+                mevcut = {satir[1] for satir in b.execute(text(f"PRAGMA table_info({tablo})"))}
+                if kolon in mevcut:
+                    continue
+                b.execute(text(f"ALTER TABLE {tablo} ADD COLUMN {kolon} {sqlite_tipi}"))
+            else:
+                var = b.scalar(text(
+                    "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+                    "AND table_name = :t AND column_name = :k"
+                ), {"t": tablo, "k": kolon})
+                if var:
+                    continue
+                b.execute(text(f"ALTER TABLE {tablo} ADD COLUMN IF NOT EXISTS {kolon} {pg_tipi}"))
+            eklenen.append(f"{tablo}.{kolon}")
+        for ad, ddl in EK_INDEKSLER:
+            if sqlite:
+                var = b.scalar(text("SELECT 1 FROM sqlite_master WHERE type='index' AND name=:a"), {"a": ad})
+            else:
+                var = b.scalar(text("SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = :a"), {"a": ad})
+            if not var:
+                b.execute(text(ddl))
+                eklenen.append(ad)
+    return eklenen
 
 
 def tablolari_olustur() -> None:
     Temel.metadata.create_all(motor)
+    eklenen = sema_guncelle()
+    if eklenen:
+        log.warning("Şema güncellendi: %s", ", ".join(eklenen))
 
 
 def oturum():
@@ -116,4 +192,4 @@ def oturum():
         yield db
 
 
-__all__ = ["Kullanici", "KullaniciAyari", "Madde", "Rapor", "Session", "motor", "oturum", "tablolari_olustur"]
+__all__ = ["GunlukIfade", "Kullanici", "KullaniciAyari", "Madde", "Rapor", "Session", "motor", "oturum", "tablolari_olustur"]

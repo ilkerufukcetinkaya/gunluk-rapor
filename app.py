@@ -153,6 +153,11 @@ def ana_sayfa(request: Request, kullanici: Kullanici = Depends(aktif_kullanici))
     return sayfa(request, "index.html", kullanici=kullanici)
 
 
+@app.get("/gecmis", response_class=HTMLResponse)
+def gecmis_sayfasi(request: Request, kullanici: Kullanici = Depends(aktif_kullanici)):
+    return sayfa(request, "gecmis.html", kullanici=kullanici, bugun=api.bugun().isoformat())
+
+
 @app.get("/ayarlar", response_class=HTMLResponse)
 def ayarlar_sayfasi(request: Request, kullanici: Kullanici = Depends(aktif_kullanici)):
     return sayfa(request, "ayarlar.html", kullanici=kullanici)
