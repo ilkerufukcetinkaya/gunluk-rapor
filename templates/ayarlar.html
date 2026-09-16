@@ -11,6 +11,17 @@ section{margin:0 0 30px}
 #testSonuc{margin:12px 0 0; font-size:15px; white-space:pre-wrap}
 #testSonuc.ok{color:var(--ink)}
 #testSonuc.hata{color:var(--danger)}
+input[type=time]{font:inherit; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:10px 12px}
+.gunler{display:flex; flex-wrap:wrap; gap:4px 16px}
+.gunler .check{margin-top:6px}
+.cihazlar{list-style:none; margin:10px 0 0; padding:0}
+.cihazlar li{display:flex; align-items:baseline; gap:10px; padding:8px 0; border-top:1px solid var(--line); font-size:15px}
+.cihazlar li:first-child{border-top:0}
+.cihazlar .bilgi{flex:1; min-width:0}
+.cihazlar .bilgi small{display:block; color:var(--ink-2)}
+.cihazlar .bilgi small.hata{color:var(--danger)}
+.cihazlar button{background:none; border:0; padding:0; font:inherit; color:var(--accent); cursor:pointer}
+#pushSonuc{margin:10px 0 0; font-size:15px; white-space:pre-wrap}
 </style>
 </head>
 <body>
@@ -51,6 +62,33 @@ section{margin:0 0 30px}
       <textarea id="sozluk" name="alan_sozlugu" spellcheck="false"></textarea>
     </section>
 
+    <section>
+      <h2>Hatırlatma</h2>
+      <p class="hint">Seçili günlerde bu saatten sonra raporu henüz kopyalamadıysanız hatırlatılır.</p>
+      <label for="hatirlatma_saat">Saat</label>
+      <input type="time" id="hatirlatma_saat" name="hatirlatma_saat" value="17:00" required>
+      <label>Günler</label>
+      <div class="gunler" id="gunler">
+        {% for no, ad in [(1,'Pzt'),(2,'Sal'),(3,'Çar'),(4,'Per'),(5,'Cum'),(6,'Cmt'),(7,'Paz')] %}
+        <label class="check"><input type="checkbox" name="gun" value="{{ no }}"> {{ ad }}</label>
+        {% endfor %}
+      </div>
+
+      <label class="check"><input type="checkbox" id="hatirlatma_push"> Telefon bildirimi</label>
+      <ul class="cihazlar" id="cihazlar"></ul>
+      <p class="hint" id="pushBilgi" hidden></p>
+      <div class="actions">
+        <button class="secondary" type="button" id="pushAc">Bu cihazda bildirimleri aç</button>
+        <button class="secondary" type="button" id="pushDene">Test bildirimi gönder</button>
+      </div>
+      <p id="pushSonuc" aria-live="polite"></p>
+
+      <label class="check"><input type="checkbox" id="hatirlatma_eposta"> E-posta hatırlatması</label>
+      <label for="hatirlatma_eposta_adres">Adres <small>— boşsa giriş e-postanız</small></label>
+      <input type="email" id="hatirlatma_eposta_adres" name="hatirlatma_eposta_adres">
+      <p class="kayitli" id="epostaBilgi" hidden>Önce yukarıya Gmail adresi ve uygulama şifresi girin; hatırlatma sizin Gmail'inizden size gönderilir.</p>
+    </section>
+
     <div class="actions">
       <button class="primary" type="submit" id="kaydet">Kaydet</button>
       <button class="secondary" type="button" id="test">Bağlantıyı test et</button>
@@ -84,6 +122,16 @@ function doldur(a){
   $('github_token').placeholder = a.github_token_kayitli ? 'kayıtlı ••••' : '';
   $('gmail_sifre_durum').textContent = a.gmail_sifre_kayitli ? 'Kayıtlı. Değiştirmek istemiyorsanız boş bırakın.' : 'Henüz girilmedi.';
   $('github_token_durum').textContent = a.github_token_kayitli ? 'Kayıtlı. Değiştirmek istemiyorsanız boş bırakın.' : 'Henüz girilmedi.';
+  $('hatirlatma_saat').value = a.hatirlatma_saat || '17:00';
+  document.querySelectorAll('#gunler input').forEach(k => k.checked = (a.hatirlatma_gunler || []).includes(Number(k.value)));
+  $('hatirlatma_push').checked = a.hatirlatma_push !== false;
+  $('hatirlatma_eposta').checked = a.hatirlatma_eposta !== false;
+  $('hatirlatma_eposta_adres').value = a.hatirlatma_eposta_adres || '';
+  $('hatirlatma_eposta_adres').placeholder = a.giris_eposta || '';
+  const gmailYok = !(a.gmail_kullanici && a.gmail_sifre_kayitli);
+  $('hatirlatma_eposta').disabled = gmailYok;
+  $('hatirlatma_eposta_adres').disabled = gmailYok;
+  $('epostaBilgi').hidden = !gmailYok;
 }
 
 async function kaydet(){
@@ -91,6 +139,13 @@ async function kaydet(){
   ALANLAR.forEach(k => govde[k] = $(k).value);
   if ($('gmail_sifre').value.trim()) govde.gmail_sifre = $('gmail_sifre').value;
   if ($('github_token').value.trim()) govde.github_token = $('github_token').value;
+  govde.hatirlatma_saat = $('hatirlatma_saat').value || '17:00';
+  govde.hatirlatma_gunler = [...document.querySelectorAll('#gunler input:checked')].map(k => Number(k.value));
+  govde.hatirlatma_push = $('hatirlatma_push').checked;
+  if (!$('hatirlatma_eposta').disabled) {
+    govde.hatirlatma_eposta = $('hatirlatma_eposta').checked;
+    govde.hatirlatma_eposta_adres = $('hatirlatma_eposta_adres').value;
+  }
   const a = await istek('/api/ayarlar', { method:'PUT', body: JSON.stringify(govde) });
   doldur(a); hataGoster('');
   return a;
@@ -115,6 +170,94 @@ $('test').onclick = async () => {
 };
 
 istek('/api/ayarlar').then(doldur).catch(err => hataGoster(err.message));
+
+// ---------------------------------------------------------------- telefon bildirimi
+const pushDestekli = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const iosCihaz = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const anaEkranda = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+if (pushDestekli) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+const saatBicimi = z => new Date(z).toLocaleString('tr-TR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+
+function pushBilgi(msg){ $('pushBilgi').textContent = msg || ''; $('pushBilgi').hidden = !msg; }
+
+function b64UrlBaytlar(metin){
+  const b64 = (metin + '='.repeat((4 - metin.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+async function cihazlariYukle(){
+  const { cihazlar } = await istek('/api/push/abone');
+  const ul = $('cihazlar');
+  ul.replaceChildren();
+  if (!cihazlar.length) {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="bilgi"><small>Bildirim açılmış cihaz yok.</small></span>';
+    ul.append(li);
+  }
+  cihazlar.forEach(c => {
+    const li = document.createElement('li');
+    const bilgi = document.createElement('span'); bilgi.className = 'bilgi';
+    bilgi.textContent = c.cihaz_adi || 'Cihaz';
+    const alt = document.createElement('small');
+    alt.textContent = `Eklendi ${saatBicimi(c.olusturma)}` + (c.son_hata ? ` · ${c.son_hata}` : c.son_basari ? ` · son bildirim ${saatBicimi(c.son_basari)}` : '');
+    if (c.son_hata) alt.className = 'hata';
+    bilgi.append(alt);
+    const kaldir = document.createElement('button'); kaldir.type = 'button'; kaldir.textContent = 'Kaldır';
+    kaldir.onclick = async () => {
+      kaldir.disabled = true;
+      try { await istek(`/api/push/abone/${c.id}`, { method:'DELETE' }); await cihazlariYukle(); toast('Kaldırıldı'); }
+      catch (err) { hataGoster(err.message); kaldir.disabled = false; }
+    };
+    li.append(bilgi, kaldir);
+    ul.append(li);
+  });
+  $('pushDene').disabled = !cihazlar.length;
+}
+
+if (!pushDestekli) {
+  $('pushAc').hidden = true;
+  pushBilgi(iosCihaz && !anaEkranda
+    ? "iPhone'da önce Paylaş → Ana Ekrana Ekle, sonra buradan aç"
+    : 'Bu tarayıcı bildirimleri desteklemiyor.');
+} else if (iosCihaz && !anaEkranda) {
+  pushBilgi("iPhone'da önce Paylaş → Ana Ekrana Ekle, sonra buradan aç");
+} else if (Notification.permission === 'denied') {
+  pushBilgi('Bu cihazda bildirim izni reddedilmiş; tarayıcı ayarlarından izin verin.');
+}
+
+$('pushAc').onclick = async () => {
+  $('pushAc').disabled = true; $('pushSonuc').textContent = '';
+  try {
+    const izin = await Notification.requestPermission();
+    if (izin !== 'granted') { pushBilgi('Bildirim izni verilmedi.'); return; }
+    const { anahtar } = await istek('/api/push/anahtar');
+    const kayit = await navigator.serviceWorker.ready;
+    let abonelik = await kayit.pushManager.getSubscription();
+    if (abonelik) {
+      const mevcut = abonelik.options && abonelik.options.applicationServerKey;
+      const ayni = mevcut && btoa(String.fromCharCode(...new Uint8Array(mevcut))) === btoa(String.fromCharCode(...b64UrlBaytlar(anahtar)));
+      if (!ayni) { await abonelik.unsubscribe(); abonelik = null; }
+    }
+    if (!abonelik) abonelik = await kayit.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64UrlBaytlar(anahtar) });
+    await istek('/api/push/abone', { method:'POST', body: JSON.stringify({ subscription: abonelik.toJSON() }) });
+    pushBilgi(''); await cihazlariYukle(); toast('Bildirimler açıldı');
+  } catch (err) { hataGoster(`Bildirim açılamadı: ${err.message}`); }
+  finally { $('pushAc').disabled = false; }
+};
+
+$('pushDene').onclick = async () => {
+  $('pushDene').disabled = true; $('pushSonuc').textContent = 'Gönderiliyor…';
+  try {
+    const s = await istek('/api/push/dene', { method:'POST' });
+    $('pushSonuc').textContent = s.cihazlar.length
+      ? s.cihazlar.map(c => `${c.cihaz_adi}: ${c.durum === 'ok' ? 'gönderildi' : c.mesaj}`).join('\n')
+      : 'Bildirim açılmış cihaz yok.';
+    await cihazlariYukle();
+  } catch (err) { $('pushSonuc').textContent = err.message; $('pushDene').disabled = false; }
+};
+
+cihazlariYukle().catch(err => hataGoster(err.message));
 </script>
 </body>
 </html>

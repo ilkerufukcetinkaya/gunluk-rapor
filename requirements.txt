@@ -11,3 +11,5 @@ cryptography>=43
 itsdangerous>=2.2
 jinja2>=3.1
 python-multipart>=0.0.9
+pywebpush>=2.0
+pillow>=10.0

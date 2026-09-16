@@ -1,5 +1,6 @@
 """Günlük rapor servisi: hesaplar, sayfalar ve API. Her kullanıcı kendi Gmail/GitHub ayarlarıyla çalışır."""
 import logging
+import mimetypes
 import os
 import re
 from contextlib import asynccontextmanager
@@ -10,7 +11,8 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).with_name(".env"))
 
 from fastapi import Depends, FastAPI, Form, Request  # noqa: E402
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse  # noqa: E402
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 from sqlalchemy.exc import IntegrityError  # noqa: E402
@@ -26,6 +28,8 @@ from veritabani import Kullanici, OturumYapici, oturum, simdi, tablolari_olustur
 
 log = logging.getLogger("gunluk-rapor")
 sablonlar = Jinja2Templates(directory=Path(__file__).with_name("templates"))
+STATIK = Path(__file__).with_name("static")
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 EPOSTA_BICIMI = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 EN_KISA_SIFRE = 10
 
@@ -55,6 +59,7 @@ async def yasam(_: FastAPI):
 
 app = FastAPI(title="Günlük rapor", lifespan=yasam, docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(api.router)
+app.mount("/static", StaticFiles(directory=STATIK), name="static")
 
 
 @app.exception_handler(GirisGerekli)
@@ -77,7 +82,13 @@ def sayfa(request: Request, ad: str, durum: int = 200, **baglam) -> HTMLResponse
 
 @app.get("/api/saglik")
 def saglik() -> dict:
-    return {"ok": True}
+    return {"ok": True, "son_hatirlat_ping": api.son_hatirlat_ping}
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker():
+    """Kökten sunulur ki kapsam '/' olsun; yalnız bildirim için, önbellek yok."""
+    return FileResponse(STATIK / "sw.js", media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
 
 # ---------------------------------------------------------------- giriş / çıkış / şifre

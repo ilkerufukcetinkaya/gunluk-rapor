@@ -1,6 +1,6 @@
 # Günlük rapor
 
-Patrona WhatsApp'tan gönderilen günlük raporu hazırlayan küçük web servisi. Her kullanıcının kendi hesabı, Gmail/GitHub ayarları ve maddeleri sunucuda durur. Bugün gönderilen iş e-postalarını (Gmail) ve projenin bugünkü commit'lerini (GitHub) tarar, rapor maddesi önerir; tikle, düzenle, kopyala. Maddeler tek Claude çağrısıyla yazım ve üslup yönünden düzeltilir (orijinal saklanır, geri alınabilir). Kopyalanan raporlar geçmişte birikir; geçmişten haftalık özet üretilir. Gönderim elle yapılır.
+Patrona WhatsApp'tan gönderilen günlük raporu hazırlayan küçük web servisi. Her kullanıcının kendi hesabı, Gmail/GitHub ayarları ve maddeleri sunucuda durur. Bugün gönderilen iş e-postalarını (Gmail) ve projenin bugünkü commit'lerini (GitHub) tarar, rapor maddesi önerir; tikle, düzenle, kopyala. Maddeler tek Claude çağrısıyla yazım ve üslup yönünden düzeltilir (orijinal saklanır, geri alınabilir). Kopyalanan raporlar geçmişte birikir; geçmişten haftalık özet üretilir. Gönderim elle yapılır; rapor kopyalanmamışsa ayarlanan saatte (varsayılan hafta içi 17:00) telefona bildirim ve e-posta ile hatırlatılır.
 
 ## Çalıştırma
 
@@ -18,6 +18,10 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `GIZLI_ANAHTAR` | Fernet anahtarı (zorunlu). Gmail şifresi ve GitHub token'ı bununla şifrelenir; değişirse kayıtlı şifreler okunamaz. Üretmek: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `ADMIN_EPOSTA`, `ADMIN_SIFRE` | Tablo boşken ilk açılışta yönetici hesabı bunlarla oluşur |
 | `ANTHROPIC_API_KEY` | İsteğe bağlı, tüm kullanıcılar için ortak; bulunan maddelerin çevirisi, "Claude ile düzelt" ve haftalık özet için. Yoksa ham metin kullanılır, haftalık özet üretilemez |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Web push anahtar çifti (base64url). Render ve yerel aynı olmalı: abonelikler ortak veritabanında, anahtar değişirse telefonlarda bildirimler yeniden açılmalı. Üretmek: `python -c "import servisler; print(servisler.vapid_cifti_uret())"` |
+| `VAPID_CLAIM_EMAIL` | `mailto:adres` biçiminde; push servisleri sorun olursa buna ulaşır |
+| `APP_URL` | Bildirim ve e-postadaki bağlantı, örn. `https://gunluk-rapor.onrender.com` |
+| `CRON_TOKEN` | `/api/hatirlat` ucunun parolası (32 bayt rastgele). Üretmek: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 
 Tablolar açılışta otomatik oluşur; sonradan eklenen kolon ve indeksler de açılışta idempotent olarak eklenir (`veritabani.sema_guncelle`, ayrı migration aracı yok).
 
@@ -32,6 +36,20 @@ Tablolar açılışta otomatik oluşur; sonradan eklenen kolon ve indeksler de a
 7. Şifresini unutan için Yönetim › Şifre sıfırla; ayrılan için Pasife al (oturumu hemen düşer).
 8. Eski sürümü kullanan tarayıcıda sayfa ilk açıldığında localStorage verileri hesaba otomatik taşınır.
 
+## Hatırlatma (17:00)
+
+Render free uyuduğu için zamanlayıcı dışarıdadır. cron-job.org kurulumu:
+
+1. cron-job.org'da hesap açın → **Create cronjob**.
+2. URL: `https://gunluk-rapor.onrender.com/api/hatirlat`, Schedule: her 5 dakika (saat dilimi fark etmez; karar Europe/Istanbul'a göre sunucuda verilir).
+3. **Advanced** → Request method `POST`, Headers: `Authorization: Bearer <CRON_TOKEN>` (ya da URL sonuna `?token=<CRON_TOKEN>`; bu biçim Render erişim loglarına düşer, başlık tercih edilir).
+4. Kaydedip **Test run** → yanıt 200 ve kullanıcı başına `push` / `eposta` / `neden`.
+5. `GET /api/saglik` yanıtındaki `son_hatirlat_ping` cron'un geldiğini gösterir (bellekte tutulur; sık ping servisi uyanık tutar).
+
+Kural: aktif kullanıcı için bugün hatırlatma günüyse, saat geçtiyse ve bugün günlük rapor kopyalanmadıysa tarama yapılır, telefon bildirimi ve e-posta (kullanıcının kendi Gmail'inden kendisine) gider. Kanal başına günde bir kez; geç gelen ping (17:04) sorun değildir. Tek istek 20 saniyeyi aşarsa kalan kullanıcılar bir sonraki ping'e kalır.
+
+**iPhone:** bildirimler yalnız ana ekrana eklenmiş uygulamada çalışır (iOS 16.4+). Safari'de siteyi açın → Paylaş → **Ana Ekrana Ekle** → ana ekrandaki "Rapor" simgesinden açıp Ayarlar › Hatırlatma › **Bu cihazda bildirimleri aç**. Android/masaüstü Chrome'da doğrudan Ayarlar'dan açılır.
+
 ## Uçlar
 
 - `GET /` arayüz · `/gecmis` rapor geçmişi ve haftalık özet · `/giris` · `/sifre` · `/ayarlar` · `/yonetim` (yalnız yönetici)
@@ -42,6 +60,8 @@ Tablolar açılışta otomatik oluşur; sonradan eklenen kolon ve indeksler de a
 - `POST /api/haftalik` `{"hafta_baslangic": "YYYY-MM-DD"}` (Pazartesi) o haftanın günlük raporlarından özet
 - `GET /api/bugun` bugünkü öneriler (kullanıcı başına günde bir tarama, `?yenile=1` ile yeniden)
 - `GET/PUT /api/ayarlar`, `POST /api/ayarlar/test`, `POST /api/ice-aktar`
-- `GET /api/saglik` (korumasız)
+- `GET /api/push/anahtar`, `GET/POST /api/push/abone`, `DELETE /api/push/abone/{id}`, `POST /api/push/dene` bu kullanıcının cihazlarına test bildirimi
+- `POST /api/hatirlat?token=` ya da `Authorization: Bearer` — oturumsuz cron ucu, yanlış token 401
+- `GET /api/saglik` (korumasız) `{"ok", "son_hatirlat_ping"}` · `/sw.js` ve `/static/*` (PWA; ikonlar `ikon_uret.py` ile üretilir)
 
 Tüm tarihler Europe/Istanbul.

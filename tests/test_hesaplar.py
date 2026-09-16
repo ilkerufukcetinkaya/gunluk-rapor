@@ -85,7 +85,7 @@ def test_oturumsuz_istekler():
         for yontem, yol in (("GET", "/api/durum"), ("GET", "/api/bugun"), ("POST", "/api/maddeler"), ("PUT", "/api/ayarlar")):
             r = c.request(yontem, yol, json={})
             assert r.status_code == 401 and r.json()["detail"] == "Oturum açılmamış", yol
-        assert c.get("/api/saglik").json() == {"ok": True}
+        assert c.get("/api/saglik").json() == {"ok": True, "son_hatirlat_ping": None}
         c.cookies.set("oturum", "sahte.imza")
         assert c.get("/api/durum").status_code == 401
 

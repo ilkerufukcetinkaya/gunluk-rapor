@@ -17,3 +17,13 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_CLAIM_EMAIL
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: CRON_TOKEN
+        sync: false

@@ -1,13 +1,15 @@
 """JSON uçları. Kullanıcı her zaman oturumdan gelir; tüm sorgular user_id ile süzülür."""
 from __future__ import annotations
 
+import hmac
 import os
 import re
 import threading
-from datetime import date, datetime, timedelta, timezone
+import time as saat_
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -16,11 +18,17 @@ from sqlalchemy.orm import Session
 import guvenlik
 import servisler
 from kimlik import aktif_kullanici
-from veritabani import GunlukIfade, Kullanici, KullaniciAyari, Madde, Rapor, oturum, simdi
+from veritabani import (
+    GunlukIfade, HatirlatmaGonderimi, Kullanici, KullaniciAyari, Madde, PushAbonelik, Rapor, oturum, simdi,
+)
 
 router = APIRouter(prefix="/api")
 
 REPO_BICIMI = re.compile(r"^[\w.-]+/[\w.-]+$")
+EPOSTA_BICIMI = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+SAAT_BICIMI = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+VARSAYILAN_SAAT = time(17, 0)
+VARSAYILAN_GUNLER = "1,2,3,4,5"
 
 
 def bugun() -> date:
@@ -37,9 +45,44 @@ def ayar_satiri(db: Session, kullanici: Kullanici) -> KullaniciAyari:
     return db.get(KullaniciAyari, kullanici.id) or KullaniciAyari(user_id=kullanici.id)
 
 
-def ayar_ozeti(a: KullaniciAyari) -> dict:
-    """Şifre ve token hiçbir zaman dönmez; yalnız kayıtlı olup olmadıkları."""
+def gunleri_ayristir(deger: str | list) -> list[int]:
+    parcalar = deger.split(",") if isinstance(deger, str) else deger
+    gunler = set()
+    for g in parcalar:
+        if isinstance(g, str):
+            g = g.strip()
+            if not g:
+                continue
+            if not g.isdigit():
+                raise HTTPException(status_code=422, detail="Hatırlatma günleri 1–7 arası olmalı")
+            g = int(g)
+        if isinstance(g, bool) or not isinstance(g, int) or not 1 <= g <= 7:
+            raise HTTPException(status_code=422, detail="Hatırlatma günleri 1–7 arası olmalı")
+        gunler.add(g)
+    return sorted(gunler)
+
+
+def hatirlatma_ayari(a: KullaniciAyari) -> dict:
+    """Satır yoksa ya da kolon boşsa varsayılanlar."""
     return {
+        "saat": a.hatirlatma_saat or VARSAYILAN_SAAT,
+        "gunler": gunleri_ayristir(VARSAYILAN_GUNLER if a.hatirlatma_gunler is None else a.hatirlatma_gunler),
+        "push": a.hatirlatma_push is not False,
+        "eposta": a.hatirlatma_eposta is not False,
+        "adres": a.hatirlatma_eposta_adres or "",
+    }
+
+
+def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
+    """Şifre ve token hiçbir zaman dönmez; yalnız kayıtlı olup olmadıkları."""
+    h = hatirlatma_ayari(a)
+    return {
+        "hatirlatma_saat": h["saat"].strftime("%H:%M"),
+        "hatirlatma_gunler": h["gunler"],
+        "hatirlatma_push": h["push"],
+        "hatirlatma_eposta": h["eposta"],
+        "hatirlatma_eposta_adres": h["adres"],
+        "giris_eposta": kullanici.eposta if kullanici else "",
         "gmail_kullanici": a.gmail_kullanici or "",
         "gmail_sifre_kayitli": bool(a.gmail_sifre_enc),
         "github_token_kayitli": bool(a.github_token_enc),
@@ -156,7 +199,7 @@ def durum(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends
         "kullanici": {"ad": kullanici.ad, "rol": kullanici.rol},
         "tarih": tarih.isoformat(),
         "maddeler": [madde_json(m, ifadeler, tarih) for m in maddeler],
-        "ayarlar": ayar_ozeti(ayar_satiri(db, kullanici)),
+        "ayarlar": ayar_ozeti(ayar_satiri(db, kullanici), kullanici),
         "ai_anahtari": bool(ai_anahtari()),
         "son_kopya": zaman_iso(son_kopya),
     }
@@ -310,11 +353,8 @@ def onbellegi_temizle() -> None:
     _onbellek.clear()
 
 
-@router.get("/bugun")
-def bugun_bulunanlar(
-    yenile: int = 0, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)
-) -> dict:
-    tarih = bugun()
+def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool = False) -> dict:
+    """Kullanıcı başına günde bir tarama (kilit + önbellek); bulunanları maddelere yazar, önbellek özetini döner."""
     anahtar = (kullanici.id, tarih.isoformat())
     with _kullanici_kilidi(kullanici.id):
         if yenile or anahtar not in _onbellek:
@@ -342,7 +382,15 @@ def bugun_bulunanlar(
                 "hatalar": sonuc["hatalar"],
                 "sayim": {"eposta": len(sonuc["eposta"]), "medusa": len(sonuc["medusa"])},
             }
-        onbellek = _onbellek[anahtar]
+        return _onbellek[anahtar]
+
+
+@router.get("/bugun")
+def bugun_bulunanlar(
+    yenile: int = 0, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)
+) -> dict:
+    tarih = bugun()
+    onbellek = bugun_taramasi(db, kullanici, tarih, bool(yenile))
     bulunanlar = db.scalars(select(Madde).where(
         Madde.user_id == kullanici.id, Madde.tur == "bulunan", Madde.tarih == tarih,
     ).order_by(Madde.sira, Madde.id)).all()
@@ -542,6 +590,11 @@ class AyarGuncelle(BaseModel):
     patron_telefon: str | None = None
     rapor_basligi: str | None = None
     alan_sozlugu: str | dict[str, str] | None = None
+    hatirlatma_saat: str | None = None
+    hatirlatma_gunler: list[int] | str | None = None
+    hatirlatma_push: bool | None = None
+    hatirlatma_eposta: bool | None = None
+    hatirlatma_eposta_adres: str | None = None
 
 
 def sozlugu_ayristir(deger: str | dict[str, str]) -> dict[str, str]:
@@ -562,7 +615,7 @@ def sozlugu_ayristir(deger: str | dict[str, str]) -> dict[str, str]:
 
 @router.get("/ayarlar")
 def ayarlari_getir(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    return ayar_ozeti(ayar_satiri(db, kullanici))
+    return ayar_ozeti(ayar_satiri(db, kullanici), kullanici)
 
 
 @router.put("/ayarlar")
@@ -577,6 +630,24 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
     if "alan_sozlugu" in veri:
         deger = veri.pop("alan_sozlugu")
         a.alan_sozlugu = None if deger is None else sozlugu_ayristir(deger)
+    saat = veri.pop("hatirlatma_saat", None)
+    if saat is not None:
+        eslesme = SAAT_BICIMI.match(saat.strip())
+        if not eslesme:
+            raise HTTPException(status_code=422, detail="Hatırlatma saati SS:DD biçiminde olmalı")
+        a.hatirlatma_saat = time(int(eslesme.group(1)), int(eslesme.group(2)))
+    gunler = veri.pop("hatirlatma_gunler", None)
+    if gunler is not None:
+        a.hatirlatma_gunler = ",".join(map(str, gunleri_ayristir(gunler)))
+    for alan in ("hatirlatma_push", "hatirlatma_eposta"):
+        deger = veri.pop(alan, None)
+        if deger is not None:
+            setattr(a, alan, deger)
+    if "hatirlatma_eposta_adres" in veri:
+        adres = (veri.pop("hatirlatma_eposta_adres") or "").strip().lower() or None
+        if adres and not EPOSTA_BICIMI.match(adres):
+            raise HTTPException(status_code=422, detail="Hatırlatma e-posta adresi geçerli değil")
+        a.hatirlatma_eposta_adres = adres
     for alan, deger in veri.items():
         deger = (deger or "").strip() or None
         if alan == "github_repo" and deger and not REPO_BICIMI.match(deger):
@@ -585,7 +656,7 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
             deger = deger.lower()
         setattr(a, alan, deger)
     db.commit()
-    return ayar_ozeti(a)
+    return ayar_ozeti(a, kullanici)
 
 
 @router.post("/ayarlar/test")
@@ -674,3 +745,295 @@ def ice_aktar(
 
     db.commit()
     return {"ok": True, **sayim}
+
+
+# ---------------------------------------------------------------- web push abonelikleri
+
+def app_url() -> str:
+    return (os.environ.get("APP_URL") or "").strip() or "https://gunluk-rapor.onrender.com"
+
+
+def cihaz_adi_bul(ua: str) -> str:
+    """User-Agent'tan kısa ad: 'iPhone Safari', 'Mac Chrome'."""
+    ua = ua or ""
+    cihaz = next((ad for anahtar, ad in (
+        ("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"), ("Macintosh", "Mac"),
+        ("Windows", "Windows"), ("Linux", "Linux"),
+    ) if anahtar in ua), "Cihaz")
+    if "Edg" in ua:
+        tarayici = "Edge"
+    elif "Firefox/" in ua or "FxiOS/" in ua:
+        tarayici = "Firefox"
+    elif "Chrome/" in ua or "CriOS/" in ua:
+        tarayici = "Chrome"
+    elif "Safari/" in ua or cihaz in ("iPhone", "iPad", "Mac"):  # ana ekran uygulamasının UA'sında 'Safari' yok
+        tarayici = "Safari"
+    else:
+        tarayici = "Tarayıcı"
+    return f"{cihaz} {tarayici}"
+
+
+def abonelik_json(a: PushAbonelik) -> dict:
+    return {
+        "id": a.id, "cihaz_adi": a.cihaz_adi, "olusturma": zaman_iso(a.olusturma),
+        "son_basari": zaman_iso(a.son_basari), "son_hata": a.son_hata,
+    }
+
+
+class PushAnahtarlari(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushAbonelikBilgisi(BaseModel):
+    endpoint: str
+    keys: PushAnahtarlari
+
+
+class PushAboneIstek(BaseModel):
+    subscription: PushAbonelikBilgisi
+    cihaz_adi: str | None = None
+
+
+def push_cihazlarina_gonder(db: Session, user_id: int, veri: dict) -> tuple[int, int, list[dict]]:
+    """404/410 → abonelik silinir; diğer hata son_hata'ya yazılır. (başarılı, toplam, cihaz başına ayrıntı)."""
+    abonelikler = db.scalars(select(PushAbonelik).where(PushAbonelik.user_id == user_id).order_by(PushAbonelik.id)).all()
+    basarili, ayrinti = 0, []
+    for a in abonelikler:
+        kod, mesaj = servisler.push_gonder({"endpoint": a.endpoint, "keys": {"p256dh": a.p256dh, "auth": a.auth}}, veri)
+        satir = {"id": a.id, "cihaz_adi": a.cihaz_adi}
+        if kod is None:
+            basarili += 1
+            a.son_basari, a.son_hata = simdi(), None
+            satir.update(durum="ok", mesaj="")
+        elif kod in (404, 410):
+            db.delete(a)
+            satir.update(durum="silindi", mesaj="Abonelik artık geçerli değil; kaldırıldı")
+        else:
+            a.son_hata = mesaj
+            satir.update(durum="hata", mesaj=mesaj)
+        ayrinti.append(satir)
+        db.commit()
+    return basarili, len(abonelikler), ayrinti
+
+
+@router.get("/push/anahtar")
+def push_anahtari(kullanici: Kullanici = Depends(aktif_kullanici)) -> dict:
+    return {"anahtar": servisler.vapid_anahtarlari()[0]}
+
+
+@router.get("/push/abone")
+def push_abonelikleri(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    abonelikler = db.scalars(select(PushAbonelik).where(PushAbonelik.user_id == kullanici.id).order_by(PushAbonelik.id))
+    return {"cihazlar": [abonelik_json(a) for a in abonelikler]}
+
+
+@router.post("/push/abone")
+def push_abone_ol(
+    govde: PushAboneIstek, request: Request,
+    kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
+) -> dict:
+    abonelik = govde.subscription
+    if not abonelik.endpoint.startswith("https://"):
+        raise HTTPException(status_code=422, detail="Geçersiz abonelik adresi")
+    cihaz = ((govde.cihaz_adi or "").strip() or cihaz_adi_bul(request.headers.get("user-agent", "")))[:60]
+    for deneme in range(2):
+        a = db.scalar(select(PushAbonelik).where(PushAbonelik.endpoint == abonelik.endpoint))
+        if a is None:
+            a = PushAbonelik(endpoint=abonelik.endpoint)
+            db.add(a)
+        a.user_id, a.cihaz_adi, a.son_hata = kullanici.id, cihaz, None
+        a.p256dh, a.auth = abonelik.keys.p256dh, abonelik.keys.auth
+        try:
+            db.commit()
+            break
+        except IntegrityError:
+            db.rollback()
+            if deneme:
+                raise
+    return abonelik_json(a)
+
+
+@router.delete("/push/abone/{abonelik_id}")
+def push_abonelik_sil(abonelik_id: int, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    a = db.get(PushAbonelik, abonelik_id)
+    if a is None or a.user_id != kullanici.id:
+        raise HTTPException(status_code=404, detail="Abonelik bulunamadı")
+    db.delete(a)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/push/dene")
+def push_dene(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    basarili, toplam, ayrinti = push_cihazlarina_gonder(
+        db, kullanici.id, {"baslik": "Günlük Rapor", "govde": "Bildirimler çalışıyor", "url": app_url()},
+    )
+    return {"basarili": basarili, "toplam": toplam, "cihazlar": ayrinti}
+
+
+# ---------------------------------------------------------------- 17:00 hatırlatması (cron ucu)
+
+SURE_SINIRI = 20  # sn; aşılırsa kalan kullanıcılar sonraki ping'e kalır
+son_hatirlat_ping: str | None = None
+_hatirlat_kilidi = threading.Lock()
+
+
+def istanbul_simdi() -> datetime:
+    return datetime.now(servisler.ISTANBUL)
+
+
+def cron_tokeni_dogru(request: Request, token: str) -> bool:
+    beklenen = (os.environ.get("CRON_TOKEN") or "").strip()
+    if not beklenen:
+        return False
+    yetki = request.headers.get("authorization", "")
+    gelen = token or (yetki[7:].strip() if yetki[:7].lower() == "bearer " else "")
+    return hmac.compare_digest(gelen.encode(), beklenen.encode())
+
+
+def hatirlatma_ozeti(bulunanlar: list[Madde]) -> str:
+    eposta = sum(1 for m in bulunanlar if m.kaynak == "eposta")
+    commit = len(bulunanlar) - eposta
+    parcalar = ([f"{eposta} e-posta"] if eposta else []) + ([f"{commit} commit"] if commit else [])
+    if not parcalar:
+        return "Bugün için bulunan yok, yapılanları ekle"
+    return "Bugünün raporu hazır bekliyor · " + ", ".join(parcalar) + " bulundu"
+
+
+def hatirlatma_epostasi(ozet: str, bulunanlar: list[Madde], tarih: date) -> str:
+    satirlar = [ozet, ""]
+    if bulunanlar:
+        satirlar += [f"• {madde_rapor_metni(m, None, tarih)}" for m in bulunanlar] + [""]
+    return "\n".join(satirlar + [app_url(), "", "Bu hatırlatma, raporu kopyaladığın gün gelmez."])
+
+
+def kanal_talep_et(db: Session, user_id: int, tarih: date, kanal: str) -> HatirlatmaGonderimi | None:
+    """Gönderimden önce satırı yazar; aynı gün başka bir ping bu kanalı aldıysa None."""
+    kayit = HatirlatmaGonderimi(user_id=user_id, tarih=tarih, kanal=kanal, durum="gonderiliyor")
+    db.add(kayit)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return None
+    return kayit
+
+
+def kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
+    tarih = an.date()
+    sonuc = {"user_id": k.id, "push": "atlandı", "eposta": "atlandı", "neden": ""}
+    a = ayar_satiri(db, k)
+    h = hatirlatma_ayari(a)
+    if tarih.isoweekday() not in h["gunler"]:
+        sonuc["neden"] = "bugün hatırlatma günü değil"
+        return sonuc
+    if an.time() < h["saat"]:
+        sonuc["neden"] = f"saat {h['saat'].strftime('%H:%M')} olmadı"
+        return sonuc
+    if db.scalar(select(Rapor.id).where(Rapor.user_id == k.id, Rapor.tur == "gunluk", Rapor.tarih == tarih)):
+        sonuc["neden"] = "bugünün raporu kopyalanmış"
+        return sonuc
+
+    islenmis = set(db.scalars(select(HatirlatmaGonderimi.kanal).where(
+        HatirlatmaGonderimi.user_id == k.id, HatirlatmaGonderimi.tarih == tarih,
+    )))
+    cihaz_sayisi = db.scalar(select(func.count()).select_from(PushAbonelik).where(PushAbonelik.user_id == k.id))
+    ayarlar = cozulmus_ayarlar(a)
+    gmail_var = bool(ayarlar["gmail_kullanici"] and ayarlar["gmail_sifre"])
+    nedenler = []
+    push_gerekli = eposta_gerekli = False
+    if not h["push"]:
+        nedenler.append("push kapalı")
+    elif "push" in islenmis:
+        nedenler.append("push bugün gönderildi")
+    elif not cihaz_sayisi:
+        sonuc["push"] = "0/0"  # kayıt açılmaz: gün içinde cihaz eklenirse sonraki ping gönderir
+    else:
+        push_gerekli = True
+    if not h["eposta"]:
+        nedenler.append("e-posta kapalı")
+    elif "eposta" in islenmis:
+        nedenler.append("e-posta bugün gönderildi")
+    elif not gmail_var:
+        nedenler.append("Gmail ayarı yok")
+    else:
+        eposta_gerekli = True
+    if not (push_gerekli or eposta_gerekli):
+        sonuc["neden"] = "; ".join(nedenler)
+        return sonuc
+
+    try:
+        bugun_taramasi(db, k, tarih)
+    except Exception as e:  # tarama düşerse hatırlatma yine gider
+        db.rollback()
+        nedenler.append(f"tarama yapılamadı ({e.__class__.__name__})")
+    bulunanlar = db.scalars(select(Madde).where(
+        Madde.user_id == k.id, Madde.tur == "bulunan", Madde.tarih == tarih, Madde.gizli.is_(False),
+    ).order_by(Madde.sira, Madde.id)).all()
+    ozet = hatirlatma_ozeti(bulunanlar)
+
+    # Kanallar bağımsız: biri düşerse diğeri yine gider. Hata da kaydedilir; aynı gün yeniden denenmez.
+    if push_gerekli:
+        kayit = kanal_talep_et(db, k.id, tarih, "push")
+        if kayit is None:
+            nedenler.append("push bugün gönderildi")
+        else:
+            try:
+                basarili, toplam, _ = push_cihazlarina_gonder(db, k.id, {"baslik": "Günlük Rapor", "govde": ozet, "url": app_url()})
+                sonuc["push"] = f"{basarili}/{toplam}"
+                kayit.durum = "gonderildi" if basarili else "hata"
+            except Exception as e:
+                db.rollback()
+                sonuc["push"] = "hata"
+                nedenler.append(f"push: beklenmeyen hata ({e.__class__.__name__})")
+                kayit.durum = "hata"
+            db.commit()
+
+    if eposta_gerekli:
+        kayit = kanal_talep_et(db, k.id, tarih, "eposta")
+        if kayit is None:
+            nedenler.append("e-posta bugün gönderildi")
+        else:
+            try:
+                hata = servisler.eposta_gonder(
+                    ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], h["adres"] or k.eposta,
+                    f"Günlük rapor hatırlatması – {tarih.strftime('%d.%m.%Y')}",
+                    hatirlatma_epostasi(ozet, bulunanlar, tarih),
+                )
+            except Exception as e:
+                hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
+            sonuc["eposta"] = "hata" if hata else "gönderildi"
+            if hata:
+                nedenler.append(hata)
+            kayit.durum = "hata" if hata else "gonderildi"
+            db.commit()
+    sonuc["neden"] = "; ".join(nedenler)
+    return sonuc
+
+
+@router.post("/hatirlat")
+def hatirlat(request: Request, token: str = "", db: Session = Depends(oturum)) -> dict:
+    """Oturumsuz; cron-job.org çağırır. Kullanıcılar id sırasıyla, süre sınırı aşılırsa kalanlar sonraki ping'e."""
+    global son_hatirlat_ping
+    if not cron_tokeni_dogru(request, token):
+        raise HTTPException(status_code=401, detail="Geçersiz token")
+    an = istanbul_simdi()
+    son_hatirlat_ping = an.isoformat(timespec="seconds")
+    if not _hatirlat_kilidi.acquire(blocking=False):
+        return {"zaman": son_hatirlat_ping, "mesgul": True, "kullanicilar": [], "kalan": 0}
+    try:
+        baslangic = saat_.monotonic()
+        idler = list(db.scalars(select(Kullanici.id).where(Kullanici.aktif.is_(True)).order_by(Kullanici.id)))
+        sonuclar = []
+        for sira, uid in enumerate(idler):
+            if saat_.monotonic() - baslangic >= SURE_SINIRI:
+                return {"zaman": son_hatirlat_ping, "kullanicilar": sonuclar, "kalan": len(idler) - sira}
+            try:
+                sonuclar.append(kullaniciya_hatirlat(db, db.get(Kullanici, uid), istanbul_simdi()))
+            except Exception as e:
+                db.rollback()
+                sonuclar.append({"user_id": uid, "push": "hata", "eposta": "hata", "neden": f"beklenmeyen hata ({e.__class__.__name__})"})
+        return {"zaman": son_hatirlat_ping, "kullanicilar": sonuclar, "kalan": 0}
+    finally:
+        _hatirlat_kilidi.release()

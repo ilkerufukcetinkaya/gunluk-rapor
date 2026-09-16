@@ -93,6 +93,8 @@ button.src{background:none; font-family:inherit; cursor:pointer}
 <div class="toast" id="toast"></div>
 
 <script>
+// Service worker yalnız bildirimler için; sayfa önbelleği yok.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 const ESKI_ANAHTARLAR = ['gunluk-rapor-v2', 'gunluk-rapor-v1'];
 const trDate = d => d.toLocaleDateString('tr-TR', { day:'numeric', month:'long', year:'numeric', weekday:'long' });
 const shortDate = d => d.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric' });

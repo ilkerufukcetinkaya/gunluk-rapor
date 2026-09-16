@@ -6,15 +6,23 @@ import email
 import hashlib
 import imaplib
 import json
+import logging
+import os
 import re
+import smtplib
 from datetime import date, datetime, time, timedelta, timezone
 from email.header import decode_header, make_header
+from email.message import EmailMessage
 from email.utils import getaddresses, parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
 import httpx
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from pywebpush import WebPushException, webpush
 
 ISTANBUL = ZoneInfo("Europe/Istanbul")
+log = logging.getLogger("gunluk-rapor")
 
 KURUMLAR = {
     "mesam.org.tr": "MESAM",
@@ -580,3 +588,73 @@ def raporu_uret(ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | f
         else:
             sonuc["hatalar"].append({"kaynak": "claude", "mesaj": hata})
     return sonuc
+
+
+# ---------------------------------------------------------------- hatırlatma: e-posta ve web push
+
+def eposta_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, metin: str) -> str | None:
+    """Kullanıcının kendi Gmail'inden gönderir. Başarıda None, hatada kısa mesaj döner; yükseltmez."""
+    mesaj = EmailMessage()
+    mesaj["From"] = gmail_kullanici
+    mesaj["To"] = kime
+    mesaj["Subject"] = konu
+    mesaj.set_content(metin, charset="utf-8")
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as sunucu:
+            sunucu.login(gmail_kullanici, gmail_sifre)
+            sunucu.send_message(mesaj)
+    except smtplib.SMTPAuthenticationError:
+        return "Gmail'e giriş yapılamadı (kullanıcı adı veya uygulama şifresi hatalı)"
+    except smtplib.SMTPRecipientsRefused:
+        return "Alıcı adresi reddedildi"
+    except (smtplib.SMTPException, OSError) as e:
+        return f"E-posta gönderilemedi ({e.__class__.__name__})"
+    except Exception as e:
+        return f"E-posta gönderilemedi: beklenmeyen hata ({e.__class__.__name__})"
+    return None
+
+
+def _b64url(veri: bytes) -> str:
+    return base64.urlsafe_b64encode(veri).rstrip(b"=").decode()
+
+
+def vapid_cifti_uret() -> tuple[str, str]:
+    """(public, private): public 65 baytlık sıkıştırmasız P-256 noktası, private 32 bayt ham; ikisi base64url."""
+    anahtar = ec.generate_private_key(ec.SECP256R1())
+    public = anahtar.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+    return _b64url(public), _b64url(anahtar.private_numbers().private_value.to_bytes(32, "big"))
+
+
+_gecici_vapid: tuple[str, str] | None = None
+
+
+def vapid_anahtarlari() -> tuple[str, str]:
+    """Env'deki çift; yoksa süreç ömrü boyunca geçici çift (abonelikler yeniden başlatmada geçersizleşir)."""
+    global _gecici_vapid
+    public = (os.environ.get("VAPID_PUBLIC_KEY") or "").strip()
+    private = (os.environ.get("VAPID_PRIVATE_KEY") or "").strip()
+    if public and private:
+        return public, private
+    if _gecici_vapid is None:
+        log.warning("VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY tanımlı değil; geçici anahtar çifti kullanılıyor.")
+        _gecici_vapid = vapid_cifti_uret()
+    return _gecici_vapid
+
+
+def push_gonder(abonelik: dict, veri: dict) -> tuple[int | None, str]:
+    """abonelik: {endpoint, keys:{p256dh, auth}}. Başarıda (None, ""), hatada (HTTP durum kodu ya da 0, mesaj)."""
+    _, private = vapid_anahtarlari()
+    claim = (os.environ.get("VAPID_CLAIM_EMAIL") or "").strip() or "mailto:admin@example.com"
+    try:
+        webpush(
+            subscription_info=abonelik, data=json.dumps(veri, ensure_ascii=False),
+            vapid_private_key=private,
+            vapid_claims={"sub": claim},  # her çağrıda yeni sözlük: pywebpush 'aud'u içine yazar
+            ttl=12 * 60 * 60, timeout=10,
+        )
+    except WebPushException as e:
+        kod = getattr(e.response, "status_code", None) or 0
+        return kod, f"Push servisi {kod or 'yanıt vermedi'}"
+    except Exception as e:
+        return 0, f"Push gönderilemedi ({e.__class__.__name__})"
+    return None, ""

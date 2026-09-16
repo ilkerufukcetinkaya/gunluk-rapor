@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 
 from sqlalchemy import (
-    JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, text,
+    JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint, create_engine, inspect,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -69,6 +70,11 @@ class KullaniciAyari(Temel):
     patron_telefon: Mapped[str | None] = mapped_column(String(30), nullable=True)
     rapor_basligi: Mapped[str | None] = mapped_column(String(120), nullable=True)
     alan_sozlugu: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    hatirlatma_saat: Mapped[time] = mapped_column(Time, default=time(17, 0))
+    hatirlatma_gunler: Mapped[str] = mapped_column(String(20), default="1,2,3,4,5")  # ISO haftanın günü
+    hatirlatma_push: Mapped[bool] = mapped_column(Boolean, default=True)
+    hatirlatma_eposta: Mapped[bool] = mapped_column(Boolean, default=True)
+    hatirlatma_eposta_adres: Mapped[str | None] = mapped_column(String(254), nullable=True)  # boş → giriş e-postası
     guncelleme: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi, onupdate=simdi)
 
 
@@ -133,6 +139,33 @@ class Rapor(Temel):
     hafta_baslangic: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
+class PushAbonelik(Temel):
+    __tablename__ = "push_abonelikleri"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(200))
+    auth: Mapped[str] = mapped_column(String(100))
+    cihaz_adi: Mapped[str] = mapped_column(String(60), default="")
+    olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
+    son_basari: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    son_hata: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class HatirlatmaGonderimi(Temel):
+    """Kullanıcı + gün + kanal başına tek satır: aynı gün ikinci kez gönderilmez."""
+    __tablename__ = "hatirlatma_gonderimleri"
+    __table_args__ = (UniqueConstraint("user_id", "tarih", "kanal", name="uq_hatirlatma_gonderimleri"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    tarih: Mapped[date] = mapped_column(Date)
+    kanal: Mapped[str] = mapped_column(String(10))  # 'push' | 'eposta'
+    durum: Mapped[str] = mapped_column(String(20), default="gonderiliyor")
+    olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
+
+
 # create_all mevcut tabloya kolon eklemez; eklenen kolonlar burada (tablo, kolon, Postgres tipi, sqlite tipi).
 EK_KOLONLAR = [
     ("items", "metin_ai", "TEXT", "TEXT"),
@@ -141,19 +174,35 @@ EK_KOLONLAR = [
     ("items", "ai_kullan", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
     ("reports", "tur", "VARCHAR(10) NOT NULL DEFAULT 'gunluk'", "VARCHAR(10) NOT NULL DEFAULT 'gunluk'"),
     ("reports", "hafta_baslangic", "DATE", "DATE"),
+    ("user_settings", "hatirlatma_saat", "TIME NOT NULL DEFAULT '17:00'", "TIME NOT NULL DEFAULT '17:00:00'"),
+    ("user_settings", "hatirlatma_gunler", "VARCHAR(20) NOT NULL DEFAULT '1,2,3,4,5'", "VARCHAR(20) NOT NULL DEFAULT '1,2,3,4,5'"),
+    ("user_settings", "hatirlatma_push", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("user_settings", "hatirlatma_eposta", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("user_settings", "hatirlatma_eposta_adres", "VARCHAR(254)", "VARCHAR(254)"),
 ]
+# Sonradan eklenen tablolar; users tablosu olan şemada eksikse oluşturulur.
+EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri"]
 EK_INDEKSLER = [
-    ("uq_reports_user_tarih_tur", "CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_user_tarih_tur ON reports (user_id, tarih, tur)"),
+    ("uq_reports_user_tarih_tur", "reports", "CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_user_tarih_tur ON reports (user_id, tarih, tur)"),
 ]
 
 
 def sema_guncelle(motor_=None) -> list[str]:
-    """İdempotent: eksik kolon ve indeksleri ekler, eklenenlerin adlarını döner."""
+    """İdempotent: eksik tablo, kolon ve indeksleri ekler, eklenenlerin adlarını döner."""
     motor_ = motor_ or motor
     eklenen = []
     with motor_.begin() as b:
         sqlite = motor_.dialect.name == "sqlite"
+        tablolar = set(inspect(b).get_table_names())
+        if "users" in tablolar:
+            for ad in EK_TABLOLAR:
+                if ad not in tablolar:
+                    Temel.metadata.tables[ad].create(b)
+                    tablolar.add(ad)
+                    eklenen.append(ad)
         for tablo, kolon, pg_tipi, sqlite_tipi in EK_KOLONLAR:
+            if tablo not in tablolar:
+                continue
             if sqlite:
                 mevcut = {satir[1] for satir in b.execute(text(f"PRAGMA table_info({tablo})"))}
                 if kolon in mevcut:
@@ -168,7 +217,9 @@ def sema_guncelle(motor_=None) -> list[str]:
                     continue
                 b.execute(text(f"ALTER TABLE {tablo} ADD COLUMN IF NOT EXISTS {kolon} {pg_tipi}"))
             eklenen.append(f"{tablo}.{kolon}")
-        for ad, ddl in EK_INDEKSLER:
+        for ad, tablo, ddl in EK_INDEKSLER:
+            if tablo not in tablolar:
+                continue
             if sqlite:
                 var = b.scalar(text("SELECT 1 FROM sqlite_master WHERE type='index' AND name=:a"), {"a": ad})
             else:
@@ -192,4 +243,4 @@ def oturum():
         yield db
 
 
-__all__ = ["GunlukIfade", "Kullanici", "KullaniciAyari", "Madde", "Rapor", "Session", "motor", "oturum", "tablolari_olustur"]
+__all__ = ["GunlukIfade", "HatirlatmaGonderimi", "Kullanici", "KullaniciAyari", "Madde", "PushAbonelik", "Rapor", "Session", "motor", "oturum", "tablolari_olustur"]
