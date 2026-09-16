@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Günlük rapor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f3f5f7; --paper:#ffffff; --ink:#1c2430; --ink-2:#5b6673; --line:#d8dee5;
+  --accent:#1f5fa8; --accent-ink:#ffffff; --bubble:#dcf3d0; --bubble-ink:#16301c;
+  --danger:#a83d3d; --focus:#1f5fa8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#151a21; --paper:#1d232c; --ink:#e6eaef; --ink-2:#9aa5b1; --line:#2f3844;
+    --accent:#6ea8ea; --accent-ink:#0d1620; --bubble:#1f3b2a; --bubble-ink:#d6f0dc;
+    --danger:#e08585; --focus:#6ea8ea;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#151a21; --paper:#1d232c; --ink:#e6eaef; --ink-2:#9aa5b1; --line:#2f3844;
+  --accent:#6ea8ea; --accent-ink:#0d1620; --bubble:#1f3b2a; --bubble-ink:#d6f0dc;
+  --danger:#e08585; --focus:#6ea8ea;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"Source Sans 3", "Segoe UI", Roboto, system-ui, sans-serif;
+  font-size:17px; line-height:1.45; font-variant-numeric:tabular-nums;
+}
+main{max-width:640px; margin:0 auto; padding:20px 16px 96px}
+h1{font-size:30px; font-weight:700; letter-spacing:-.01em; margin:0 0 2px}
+.date{color:var(--ink-2); margin:0 0 4px}
+.status{font-size:15px; color:var(--ink-2); margin:0 0 28px}
+.status b{color:var(--ink); font-weight:600}
+section{margin:0 0 30px}
+h2{font-size:20px; font-weight:600; margin:0 0 4px; display:flex; align-items:baseline; gap:12px}
+h2 small{font-size:15px; font-weight:400; color:var(--ink-2); margin-left:auto}
+h2 small button{font-size:15px; padding:0; background:none; border:0; color:var(--accent); cursor:pointer}
+.hint{color:var(--ink-2); font-size:15px; margin:0 0 10px}
+ul{list-style:none; margin:0; padding:0; background:var(--paper); border:1px solid var(--line); border-radius:10px}
+li{display:flex; align-items:flex-start; gap:10px; padding:10px 12px; border-top:1px solid var(--line)}
+li:first-child{border-top:0}
+li.off .txt{color:var(--ink-2)}
+li input[type=checkbox]{width:22px; height:22px; margin:2px 0 0; accent-color:var(--accent); flex:none}
+.txt{flex:1; cursor:pointer; min-width:0; overflow-wrap:anywhere}
+.txt .alt{color:var(--ink-2); font-size:14px; display:block}
+.stage{font-style:italic; color:var(--ink-2)}
+.tools{display:flex; gap:4px; flex:none}
+.tools button{background:none; border:0; color:var(--ink-2); font-size:17px; padding:2px 6px; cursor:pointer; border-radius:6px}
+.tools button:hover{color:var(--ink); background:var(--bg)}
+.tools button.del:hover{color:var(--danger)}
+.empty{padding:14px 12px; color:var(--ink-2)}
+.src{display:inline-block; margin-left:6px; padding:0 6px; border:1px solid var(--line); border-radius:999px; font-size:12px; line-height:18px; color:var(--ink-2); vertical-align:1px; white-space:nowrap}
+.warn{color:var(--danger); font-size:15px; margin:0 0 8px}
+.add{display:flex; gap:8px; margin-top:8px}
+input[type=text], textarea{
+  width:100%; font:inherit; color:var(--ink); background:var(--paper);
+  border:1px solid var(--line); border-radius:10px; padding:10px 12px;
+}
+textarea{min-height:110px; resize:vertical}
+input:focus, textarea:focus, button:focus-visible{outline:2px solid var(--focus); outline-offset:2px}
+button.primary{
+  font:inherit; font-weight:600; background:var(--accent); color:var(--accent-ink);
+  border:0; border-radius:10px; padding:10px 16px; cursor:pointer; white-space:nowrap;
+}
+button.secondary{
+  font:inherit; font-weight:600; background:var(--paper); color:var(--ink);
+  border:1px solid var(--line); border-radius:10px; padding:10px 16px; cursor:pointer; white-space:nowrap;
+}
+.bubble{
+  background:var(--bubble); color:var(--bubble-ink); border-radius:14px 14px 14px 4px;
+  padding:14px 16px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:16px; line-height:1.5;
+  min-height:80px;
+}
+.bubble b{font-weight:700}
+.actions{display:flex; gap:10px; margin-top:12px; flex-wrap:wrap}
+.actions button{flex:1}
+.settings{margin-top:34px; border-top:1px solid var(--line); padding-top:16px}
+.settings summary{cursor:pointer; color:var(--ink-2)}
+.settings label{display:block; margin:12px 0 4px; color:var(--ink-2); font-size:15px}
+.toast{
+  position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
+  background:var(--ink); color:var(--bg); padding:10px 18px; border-radius:999px;
+  opacity:0; transition:opacity .2s, transform .2s; pointer-events:none; font-weight:600;
+}
+.toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+@media (prefers-reduced-motion: reduce){ .toast{transition:none} }
+</style>
+</head>
+<body>
+<main>
+  <h1>Günlük rapor</h1>
+  <p class="date" id="dateLine"></p>
+  <p class="status" id="statusLine"></p>
+
+  <section>
+    <h2>Bugün yapılanlar</h2>
+    <p class="hint">Her satır bir madde. Gün değişince temizlenir.</p>
+    <textarea id="done" placeholder="MSG'ye Ağustos itirazı gönderildi&#10;Coverz listesinde 40 eser işlendi"></textarea>
+  </section>
+
+  <section>
+    <h2>Bugün bulunanlar <small><span id="hiddenInfo"></span><button id="foundRefresh">Yenile</button></small></h2>
+    <div id="foundErrors"></div>
+    <p class="hint" id="foundStatus">Gmail ve MEDUSA taranıyor…</p>
+    <ul id="foundList"></ul>
+  </section>
+
+  <section>
+    <h2>Sürekli işler <small><button id="allOn">hepsi</button> · <button id="allOff">hiçbiri</button></small></h2>
+    <p class="hint">Tikli olanlar rapora girer. Metinde <b>|</b> ile ayırırsan her gün farklı ifade seçilir.</p>
+    <ul id="recurringList"></ul>
+    <div class="add"><input type="text" id="recurringNew" placeholder="Yeni sürekli iş"><button class="primary" id="recurringAdd">Ekle</button></div>
+  </section>
+
+  <section>
+    <h2>Devam eden işler</h2>
+    <p class="hint">Bitene kadar her gün görünür. Aşamayı tıklayıp güncelle; bitince ✓ ile bugünün yapılanlarına geçer.</p>
+    <ul id="ongoingList"></ul>
+    <div class="add"><input type="text" id="ongoingNew" placeholder="Yeni iş — aşama"><button class="primary" id="ongoingAdd">Ekle</button></div>
+  </section>
+
+  <section>
+    <h2>Yarın</h2>
+    <textarea id="plan" style="min-height:70px" placeholder="İsteğe bağlı"></textarea>
+  </section>
+
+  <section>
+    <h2>Rapor</h2>
+    <div class="bubble" id="preview"></div>
+    <div class="actions">
+      <button class="primary" id="copyBtn">Kopyala</button>
+      <button class="secondary" id="waBtn">WhatsApp'ta aç</button>
+    </div>
+  </section>
+
+  <details class="settings">
+    <summary>Ayarlar</summary>
+    <label for="phone">Patronun WhatsApp numarası (ülke koduyla, örn. 905xxxxxxxxx) — boşsa WhatsApp kişi seçtirir</label>
+    <input type="text" id="phone" inputmode="numeric">
+    <label for="title">Rapor başlığı</label>
+    <input type="text" id="title">
+  </details>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const KEY = 'gunluk-rapor-v2';
+const OLD_KEY = 'gunluk-rapor-v1';
+const uid = () => Math.random().toString(36).slice(2, 9);
+const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+const trDate = d => d.toLocaleDateString('tr-TR', { day:'numeric', month:'long', year:'numeric', weekday:'long' });
+const shortDate = d => d.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric' });
+
+const seed = () => ({
+  recurring: [
+    ['MESAM / MSG / IMRO yazışmaları takip edildi | Meslek birlikleriyle (MESAM, MSG, IMRO) günlük yazışma ve takip yapıldı', true],
+    ['CRD raporları kontrol edildi | CRD rapor akışı izlendi, tutarsızlık kontrolü yapıldı', true],
+    ['Coverz iş listeleri güncellendi | Coverz iş listelerinde ilerleme kaydedildi', true],
+    ['Coverz ekibine teknik destek verildi', false],
+    ['Telif takibi ve eşleşme kontrolleri yapıldı', true],
+    ['MEDUSA geliştirme çalışmaları sürdü', true],
+  ].map(([text,on]) => ({ id:uid(), text, on })),
+  ongoing: [],
+  daily: { date: todayKey(), done:'', plan:'' },
+  settings: { phone:'', title:'Günlük Rapor' },
+  lastCopy: null,
+  found: {},
+});
+
+let S;
+function load(){
+  try {
+    const raw = localStorage.getItem(KEY) || localStorage.getItem(OLD_KEY);
+    S = raw ? JSON.parse(raw) : seed();
+  } catch { S = seed(); }
+  if (!S.daily || S.daily.date !== todayKey()) S.daily = { date: todayKey(), done:'', plan:'' };
+  S.settings = S.settings || { phone:'', title:'Günlük Rapor' };
+  S.found = S.found || {};
+}
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
+
+const $ = id => document.getElementById(id);
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
+
+function variantOf(text){
+  const parts = text.split('|').map(s=>s.trim()).filter(Boolean);
+  if (parts.length <= 1) return text.trim();
+  const d = new Date(); const day = Math.floor((d - new Date(d.getFullYear(),0,0)) / 86400000);
+  return parts[day % parts.length];
+}
+const lines = s => s.split('\n').map(x=>x.trim().replace(/^[-•*]\s*/,'')).filter(Boolean);
+
+function buildReport(){
+  const out = [`*${S.settings.title || 'Günlük Rapor'} – ${shortDate(new Date())}*`, ''];
+  const done = [...lines(S.daily.done), ...foundForReport(), ...S.recurring.filter(r=>r.on).map(r=>variantOf(r.text))];
+  if (done.length){ out.push('*Yapılanlar*'); done.forEach(x=>out.push('• '+x)); out.push(''); }
+  const ong = S.ongoing.filter(o=>o.on);
+  if (ong.length){ out.push('*Devam eden*'); ong.forEach(o=>out.push('• '+o.text+(o.stage?` — ${o.stage}`:''))); out.push(''); }
+  const plan = lines(S.daily.plan);
+  if (plan.length){ out.push('*Yarın*'); plan.forEach(x=>out.push('• '+x)); out.push(''); }
+  return out.join('\n').trim();
+}
+
+function renderPreview(){
+  const txt = buildReport();
+  const esc = s => s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  $('preview').innerHTML = esc(txt).replace(/\*([^*\n]+)\*/g,'<b>$1</b>');
+}
+
+function renderStatus(){
+  $('dateLine').textContent = trDate(new Date());
+  const lc = S.lastCopy;
+  $('statusLine').innerHTML = (lc && lc.date === todayKey())
+    ? `Bugün <b>${lc.time}</b>'de kopyalandı.`
+    : 'Bugünkü rapor henüz kopyalanmadı.';
+}
+
+function row(item, kind){
+  const li = document.createElement('li'); if (!item.on) li.classList.add('off');
+  const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=item.on;
+  cb.onchange = () => { item.on = cb.checked; li.classList.toggle('off', !item.on); save(); renderPreview(); };
+  const txt = document.createElement('div'); txt.className='txt';
+  if (kind==='recurring'){
+    const v = variantOf(item.text);
+    txt.textContent = v;
+    if (item.text.includes('|')) { const a=document.createElement('span'); a.className='alt'; a.textContent='bugünkü ifade · dönüşümlü'; txt.appendChild(a); }
+  } else {
+    txt.textContent = item.text;
+    if (item.stage){ txt.appendChild(document.createTextNode(' ')); const s=document.createElement('span'); s.className='stage'; s.textContent='— '+item.stage; txt.appendChild(s); }
+  }
+  txt.onclick = () => cb.click();
+  const tools = document.createElement('div'); tools.className='tools';
+  const mk = (label, title, fn, cls) => { const b=document.createElement('button'); b.textContent=label; b.title=title; b.onclick=fn; if(cls) b.className=cls; tools.appendChild(b); };
+  if (kind==='ongoing'){
+    mk('✓','Bitti — bugünün yapılanlarına geç', () => {
+      S.daily.done = (S.daily.done ? S.daily.done+'\n' : '') + item.text + ' tamamlandı';
+      S.ongoing = S.ongoing.filter(o=>o!==item); save(); render();
+    });
+    mk('✎','Aşamayı güncelle', () => { const s = prompt('Aşama:', item.stage||''); if (s!==null){ item.stage=s.trim(); save(); render(); } });
+  } else {
+    mk('✎','Metni düzenle', () => { const s = prompt('Metin ( | ile dönüşümlü ifadeler):', item.text); if (s && s.trim()){ item.text=s.trim(); save(); render(); } });
+  }
+  mk('×','Sil', () => { if (confirm('Silinsin mi?')) { if(kind==='recurring') S.recurring=S.recurring.filter(r=>r!==item); else S.ongoing=S.ongoing.filter(o=>o!==item); save(); render(); } }, 'del');
+  li.append(cb, txt, tools); return li;
+}
+
+function render(){
+  const rl = $('recurringList'); rl.innerHTML='';
+  if (!S.recurring.length) rl.innerHTML = '<li class="empty">Henüz sürekli iş yok.</li>';
+  S.recurring.forEach(r => rl.appendChild(row(r,'recurring')));
+  const ol = $('ongoingList'); ol.innerHTML='';
+  if (!S.ongoing.length) ol.innerHTML = '<li class="empty">Devam eden iş yok. Örn: MSG Ağustos itirazı — yanıt bekleniyor</li>';
+  S.ongoing.forEach(o => ol.appendChild(row(o,'ongoing')));
+  $('done').value = S.daily.done; $('plan').value = S.daily.plan;
+  $('phone').value = S.settings.phone; $('title').value = S.settings.title;
+  renderStatus(); renderPreview();
+}
+
+function addRecurring(){ const i=$('recurringNew'); const t=i.value.trim(); if(!t) return; S.recurring.push({id:uid(),text:t,on:true}); i.value=''; save(); render(); }
+function addOngoing(){
+  const i=$('ongoingNew'); const t=i.value.trim(); if(!t) return;
+  const [text, ...rest] = t.split('—').map(s=>s.trim()); const stage = rest.join(' — ');
+  S.ongoing.push({id:uid(),text,stage,on:true}); i.value=''; save(); render();
+}
+
+async function copyReport(){
+  const txt = buildReport();
+  try {
+    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(txt);
+    else { const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    S.lastCopy = { date: todayKey(), time: new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}) }; save(); renderStatus();
+    toast('Kopyalandı');
+  } catch { toast('Kopyalanamadı — metni elle seç'); }
+}
+function openWa(){
+  const txt = encodeURIComponent(buildReport());
+  const p = (S.settings.phone||'').replace(/\D/g,'');
+  S.lastCopy = { date: todayKey(), time: new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}) }; save(); renderStatus();
+  window.open(p ? `https://wa.me/${p}?text=${txt}` : `https://wa.me/?text=${txt}`, '_blank');
+}
+
+// --- Bugün bulunanlar (Gmail + MEDUSA) ---
+let FOUND = { tarih:null, items:[] };
+const foundKey = it => `${FOUND.tarih}:${it.id}`;
+const foundState = it => S.found[foundKey(it)] || {};
+const setFoundState = (it, patch) => { S.found[foundKey(it)] = { ...foundState(it), ...patch }; save(); };
+const foundText = it => foundState(it).text || it.metin;
+const foundOn = it => foundState(it).on !== false;
+function foundForReport(){ return FOUND.items.filter(it => !foundState(it).hidden && foundOn(it)).map(foundText); }
+
+function renderFound(){
+  const ul = $('foundList'); ul.innerHTML = '';
+  const visible = FOUND.items.filter(it => !foundState(it).hidden);
+  const hiddenCount = FOUND.items.length - visible.length;
+  $('hiddenInfo').innerHTML = '';
+  if (hiddenCount){
+    const b = document.createElement('button'); b.textContent = `${hiddenCount} gizli · geri al`;
+    b.onclick = () => { FOUND.items.forEach(it => { if (foundState(it).hidden) setFoundState(it, { hidden:false }); }); renderFound(); renderPreview(); };
+    $('hiddenInfo').append(b, document.createTextNode(' · '));
+  }
+  if (FOUND.tarih && !visible.length){ ul.innerHTML = '<li class="empty">Bugün için bulunan madde yok.</li>'; return; }
+  visible.forEach(it => {
+    const li = document.createElement('li'); if (!foundOn(it)) li.classList.add('off');
+    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = foundOn(it);
+    cb.onchange = () => { setFoundState(it, { on: cb.checked }); li.classList.toggle('off', !cb.checked); renderPreview(); };
+    const txt = document.createElement('div'); txt.className='txt'; txt.textContent = foundText(it);
+    const tag = document.createElement('span'); tag.className='src'; tag.textContent = it.kaynak === 'medusa' ? 'MEDUSA' : 'e-posta';
+    txt.appendChild(tag);
+    txt.onclick = () => cb.click();
+    const tools = document.createElement('div'); tools.className='tools';
+    const mk = (label, title, fn, cls) => { const b=document.createElement('button'); b.textContent=label; b.title=title; b.onclick=fn; if(cls) b.className=cls; tools.appendChild(b); };
+    mk('✎','Metni düzenle', () => { const s = prompt('Metin:', foundText(it)); if (s && s.trim()){ setFoundState(it, { text: s.trim() }); renderFound(); renderPreview(); } });
+    mk('×','Gizle', () => { setFoundState(it, { hidden:true }); renderFound(); renderPreview(); }, 'del');
+    li.append(cb, txt, tools); ul.appendChild(li);
+  });
+}
+
+async function loadFound(force){
+  $('foundStatus').textContent = 'Gmail ve MEDUSA taranıyor…'; $('foundStatus').hidden = false;
+  $('foundRefresh').disabled = true;
+  try {
+    const r = await fetch('/api/bugun' + (force ? '?yenile=1' : ''), { credentials:'same-origin' });
+    if (!r.ok) throw new Error(`sunucu ${r.status} döndürdü`);
+    const d = await r.json();
+    FOUND = { tarih: d.tarih, items: [...d.eposta, ...d.medusa] };
+    Object.keys(S.found).forEach(k => { if (!k.startsWith(d.tarih + ':')) delete S.found[k]; });
+    save();
+    const errs = $('foundErrors'); errs.innerHTML = '';
+    (d.hatalar || []).forEach(h => { const p=document.createElement('p'); p.className='warn'; p.textContent=h.mesaj; errs.appendChild(p); });
+    $('foundStatus').hidden = true;
+  } catch (e) {
+    $('foundStatus').textContent = 'Tarama yapılamadı: ' + e.message;
+  } finally {
+    $('foundRefresh').disabled = false;
+    renderFound(); renderPreview();
+  }
+}
+
+load(); render();
+loadFound(false);
+$('foundRefresh').onclick = () => loadFound(true);
+$('done').oninput = e => { S.daily.done=e.target.value; save(); renderPreview(); };
+$('plan').oninput = e => { S.daily.plan=e.target.value; save(); renderPreview(); };
+$('phone').oninput = e => { S.settings.phone=e.target.value; save(); };
+$('title').oninput = e => { S.settings.title=e.target.value; save(); renderPreview(); };
+$('recurringAdd').onclick = addRecurring; $('recurringNew').onkeydown = e => { if(e.key==='Enter') addRecurring(); };
+$('ongoingAdd').onclick = addOngoing; $('ongoingNew').onkeydown = e => { if(e.key==='Enter') addOngoing(); };
+$('allOn').onclick = () => { S.recurring.forEach(r=>r.on=true); save(); render(); };
+$('allOff').onclick = () => { S.recurring.forEach(r=>r.on=false); save(); render(); };
+$('copyBtn').onclick = copyReport; $('waBtn').onclick = openWa;
+</script>
+</body>
+</html>
