@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="tr">
+<head>
+{% include "_stil.html" %}
+<title>Ayarlar · Günlük rapor</title>
+<style>
+section{margin:0 0 30px}
+.form label small{color:var(--ink-2)}
+.kayitli{color:var(--ink-2); font-size:14px; margin:4px 0 0}
+#sozluk{font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:15px; min-height:150px}
+#testSonuc{margin:12px 0 0; font-size:15px; white-space:pre-wrap}
+#testSonuc.ok{color:var(--ink)}
+#testSonuc.hata{color:var(--danger)}
+</style>
+</head>
+<body>
+<main>
+  {% include "_ust.html" %}
+  <h1>Ayarlar</h1>
+  <p class="hint">Bu ayarlar yalnız sizin hesabınız için geçerlidir. Şifre ve token kaydedildikten sonra bir daha gösterilmez.</p>
+  <p class="warn" id="hata" role="alert" hidden></p>
+
+  <form class="form" id="form" autocomplete="off">
+    <section>
+      <h2>Gmail</h2>
+      <label for="gmail_kullanici">Gmail adresi</label>
+      <input type="email" id="gmail_kullanici" name="gmail_kullanici">
+      <label for="gmail_sifre">Uygulama şifresi <small>— Google hesabı › Güvenlik › Uygulama şifreleri</small></label>
+      <input type="password" id="gmail_sifre" name="gmail_sifre" autocomplete="new-password">
+      <p class="kayitli" id="gmail_sifre_durum"></p>
+    </section>
+
+    <section>
+      <h2>GitHub</h2>
+      <label for="github_repo">Repo <small>— kullanici/repo</small></label>
+      <input type="text" id="github_repo" name="github_repo" placeholder="kullanici/repo">
+      <label for="github_token">Token <small>— yalnız okuma yetkili</small></label>
+      <input type="password" id="github_token" name="github_token" autocomplete="new-password">
+      <p class="kayitli" id="github_token_durum"></p>
+      <label for="proje_adi">Proje adı <small>— commit'ler rapora bu adla yazılır</small></label>
+      <input type="text" id="proje_adi" name="proje_adi">
+    </section>
+
+    <section>
+      <h2>Rapor</h2>
+      <label for="patron_telefon">Patronun WhatsApp numarası <small>— ülke koduyla, örn. 905xxxxxxxxx; boşsa WhatsApp kişi seçtirir</small></label>
+      <input type="tel" id="patron_telefon" name="patron_telefon" inputmode="numeric">
+      <label for="rapor_basligi">Rapor başlığı</label>
+      <input type="text" id="rapor_basligi" name="rapor_basligi" placeholder="Günlük Rapor">
+      <label for="sozluk">Alan adı sözlüğü <small>— her satıra bir "alan=Kurum"; e-posta alıcıları bu adlarla yazılır</small></label>
+      <textarea id="sozluk" name="alan_sozlugu" spellcheck="false"></textarea>
+    </section>
+
+    <div class="actions">
+      <button class="primary" type="submit" id="kaydet">Kaydet</button>
+      <button class="secondary" type="button" id="test">Bağlantıyı test et</button>
+    </div>
+    <p id="testSonuc" aria-live="polite"></p>
+  </form>
+
+  <p class="hint" style="margin-top:30px"><a href="/sifre">Şifremi değiştir</a></p>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ALANLAR = ['gmail_kullanici', 'github_repo', 'proje_adi', 'patron_telefon', 'rapor_basligi'];
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
+function hataGoster(msg){ $('hata').textContent = msg || ''; $('hata').hidden = !msg; }
+
+async function istek(yol, secenek = {}){
+  const r = await fetch(yol, { credentials:'same-origin', headers:{ 'Content-Type':'application/json' }, ...secenek });
+  if (r.status === 401) { location.href = '/giris'; throw new Error('oturum yok'); }
+  const govde = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof govde.detail === 'string' ? govde.detail : `Sunucu ${r.status} döndürdü`);
+  return govde;
+}
+
+function doldur(a){
+  ALANLAR.forEach(k => $(k).value = a[k] || '');
+  $('sozluk').value = Object.entries(a.alan_sozlugu || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+  $('gmail_sifre').value = ''; $('github_token').value = '';
+  $('gmail_sifre').placeholder = a.gmail_sifre_kayitli ? 'kayıtlı ••••' : '';
+  $('github_token').placeholder = a.github_token_kayitli ? 'kayıtlı ••••' : '';
+  $('gmail_sifre_durum').textContent = a.gmail_sifre_kayitli ? 'Kayıtlı. Değiştirmek istemiyorsanız boş bırakın.' : 'Henüz girilmedi.';
+  $('github_token_durum').textContent = a.github_token_kayitli ? 'Kayıtlı. Değiştirmek istemiyorsanız boş bırakın.' : 'Henüz girilmedi.';
+}
+
+async function kaydet(){
+  const govde = { alan_sozlugu: $('sozluk').value };
+  ALANLAR.forEach(k => govde[k] = $(k).value);
+  if ($('gmail_sifre').value.trim()) govde.gmail_sifre = $('gmail_sifre').value;
+  if ($('github_token').value.trim()) govde.github_token = $('github_token').value;
+  const a = await istek('/api/ayarlar', { method:'PUT', body: JSON.stringify(govde) });
+  doldur(a); hataGoster('');
+  return a;
+}
+
+$('form').onsubmit = async e => {
+  e.preventDefault(); $('kaydet').disabled = true;
+  try { await kaydet(); toast('Kaydedildi'); }
+  catch (err) { hataGoster(err.message); }
+  finally { $('kaydet').disabled = false; }
+};
+
+$('test').onclick = async () => {
+  $('test').disabled = true; $('testSonuc').className = ''; $('testSonuc').textContent = 'Kaydediliyor ve test ediliyor…';
+  try {
+    await kaydet();
+    const s = await istek('/api/ayarlar/test', { method:'POST' });
+    $('testSonuc').textContent = s.sonuc;
+    $('testSonuc').className = (s.gmail_ok && s.github_ok) ? 'ok' : 'hata';
+  } catch (err) { $('testSonuc').textContent = err.message; $('testSonuc').className = 'hata'; }
+  finally { $('test').disabled = false; }
+};
+
+istek('/api/ayarlar').then(doldur).catch(err => hataGoster(err.message));
+</script>
+</body>
+</html>

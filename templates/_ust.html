@@ -1,0 +1,16 @@
+<nav class="ust">
+  <span class="ad">{{ kullanici.ad }}</span>
+  <a href="/">Rapor</a>
+  <a href="/ayarlar">Ayarlar</a>
+  {% if kullanici.rol == 'admin' %}<a href="/yonetim">Yönetim</a>{% endif %}
+  <button type="button" id="temaBtn" title="Tema: sistem / açık / koyu">Tema</button>
+  <form method="post" action="/cikis"><button type="submit">Çıkış</button></form>
+</nav>
+<script>
+document.getElementById('temaBtn').onclick = () => {
+  const sira = ['', 'light', 'dark'], simdiki = document.documentElement.dataset.theme || '';
+  const yeni = sira[(sira.indexOf(simdiki) + 1) % sira.length];
+  if (yeni) document.documentElement.dataset.theme = yeni; else delete document.documentElement.dataset.theme;
+  try { if (yeni) localStorage.setItem('gunluk-rapor-tema', yeni); else localStorage.removeItem('gunluk-rapor-tema'); } catch {}
+};
+</script>

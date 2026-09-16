@@ -1,46 +1,15 @@
 <!doctype html>
 <html lang="tr">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+{% include "_stil.html" %}
 <title>Günlük rapor</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
-:root{
-  --bg:#f3f5f7; --paper:#ffffff; --ink:#1c2430; --ink-2:#5b6673; --line:#d8dee5;
-  --accent:#1f5fa8; --accent-ink:#ffffff; --bubble:#dcf3d0; --bubble-ink:#16301c;
-  --danger:#a83d3d; --focus:#1f5fa8;
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#151a21; --paper:#1d232c; --ink:#e6eaef; --ink-2:#9aa5b1; --line:#2f3844;
-    --accent:#6ea8ea; --accent-ink:#0d1620; --bubble:#1f3b2a; --bubble-ink:#d6f0dc;
-    --danger:#e08585; --focus:#6ea8ea;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#151a21; --paper:#1d232c; --ink:#e6eaef; --ink-2:#9aa5b1; --line:#2f3844;
-  --accent:#6ea8ea; --accent-ink:#0d1620; --bubble:#1f3b2a; --bubble-ink:#d6f0dc;
-  --danger:#e08585; --focus:#6ea8ea;
-}
-*{box-sizing:border-box}
-html,body{margin:0}
-body{
-  background:var(--bg); color:var(--ink);
-  font-family:"Source Sans 3", "Segoe UI", Roboto, system-ui, sans-serif;
-  font-size:17px; line-height:1.45; font-variant-numeric:tabular-nums;
-}
-main{max-width:640px; margin:0 auto; padding:20px 16px 96px}
-h1{font-size:30px; font-weight:700; letter-spacing:-.01em; margin:0 0 2px}
 .date{color:var(--ink-2); margin:0 0 4px}
 .status{font-size:15px; color:var(--ink-2); margin:0 0 28px}
 .status b{color:var(--ink); font-weight:600}
 section{margin:0 0 30px}
-h2{font-size:20px; font-weight:600; margin:0 0 4px; display:flex; align-items:baseline; gap:12px}
 h2 small{font-size:15px; font-weight:400; color:var(--ink-2); margin-left:auto}
 h2 small button{font-size:15px; padding:0; background:none; border:0; color:var(--accent); cursor:pointer}
-.hint{color:var(--ink-2); font-size:15px; margin:0 0 10px}
 ul{list-style:none; margin:0; padding:0; background:var(--paper); border:1px solid var(--line); border-radius:10px}
 li{display:flex; align-items:flex-start; gap:10px; padding:10px 12px; border-top:1px solid var(--line)}
 li:first-child{border-top:0}
@@ -55,22 +24,7 @@ li input[type=checkbox]{width:22px; height:22px; margin:2px 0 0; accent-color:va
 .tools button.del:hover{color:var(--danger)}
 .empty{padding:14px 12px; color:var(--ink-2)}
 .src{display:inline-block; margin-left:6px; padding:0 6px; border:1px solid var(--line); border-radius:999px; font-size:12px; line-height:18px; color:var(--ink-2); vertical-align:1px; white-space:nowrap}
-.warn{color:var(--danger); font-size:15px; margin:0 0 8px}
 .add{display:flex; gap:8px; margin-top:8px}
-input[type=text], textarea{
-  width:100%; font:inherit; color:var(--ink); background:var(--paper);
-  border:1px solid var(--line); border-radius:10px; padding:10px 12px;
-}
-textarea{min-height:110px; resize:vertical}
-input:focus, textarea:focus, button:focus-visible{outline:2px solid var(--focus); outline-offset:2px}
-button.primary{
-  font:inherit; font-weight:600; background:var(--accent); color:var(--accent-ink);
-  border:0; border-radius:10px; padding:10px 16px; cursor:pointer; white-space:nowrap;
-}
-button.secondary{
-  font:inherit; font-weight:600; background:var(--paper); color:var(--ink);
-  border:1px solid var(--line); border-radius:10px; padding:10px 16px; cursor:pointer; white-space:nowrap;
-}
 .bubble{
   background:var(--bubble); color:var(--bubble-ink); border-radius:14px 14px 14px 4px;
   padding:14px 16px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:16px; line-height:1.5;
@@ -79,23 +33,15 @@ button.secondary{
 .bubble b{font-weight:700}
 .actions{display:flex; gap:10px; margin-top:12px; flex-wrap:wrap}
 .actions button{flex:1}
-.settings{margin-top:34px; border-top:1px solid var(--line); padding-top:16px}
-.settings summary{cursor:pointer; color:var(--ink-2)}
-.settings label{display:block; margin:12px 0 4px; color:var(--ink-2); font-size:15px}
-.toast{
-  position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
-  background:var(--ink); color:var(--bg); padding:10px 18px; border-radius:999px;
-  opacity:0; transition:opacity .2s, transform .2s; pointer-events:none; font-weight:600;
-}
-.toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
-@media (prefers-reduced-motion: reduce){ .toast{transition:none} }
 </style>
 </head>
 <body>
 <main>
+  {% include "_ust.html" %}
   <h1>Günlük rapor</h1>
   <p class="date" id="dateLine"></p>
   <p class="status" id="statusLine"></p>
+  <p class="warn" id="loadError" role="alert" hidden></p>
 
   <section>
     <h2>Bugün yapılanlar</h2>
@@ -106,7 +52,7 @@ button.secondary{
   <section>
     <h2>Bugün bulunanlar <small><span id="hiddenInfo"></span><button id="foundRefresh">Yenile</button></small></h2>
     <div id="foundErrors"></div>
-    <p class="hint" id="foundStatus">Gmail ve MEDUSA taranıyor…</p>
+    <p class="hint" id="foundStatus">Taranıyor…</p>
     <ul id="foundList"></ul>
   </section>
 
@@ -136,56 +82,46 @@ button.secondary{
       <button class="primary" id="copyBtn">Kopyala</button>
       <button class="secondary" id="waBtn">WhatsApp'ta aç</button>
     </div>
+    <p class="hint" style="margin-top:10px">Rapor başlığı ve WhatsApp numarası <a href="/ayarlar">Ayarlar</a>'da.</p>
   </section>
-
-  <details class="settings">
-    <summary>Ayarlar</summary>
-    <label for="phone">Patronun WhatsApp numarası (ülke koduyla, örn. 905xxxxxxxxx) — boşsa WhatsApp kişi seçtirir</label>
-    <input type="text" id="phone" inputmode="numeric">
-    <label for="title">Rapor başlığı</label>
-    <input type="text" id="title">
-  </details>
 </main>
 <div class="toast" id="toast"></div>
 
 <script>
-const KEY = 'gunluk-rapor-v2';
-const OLD_KEY = 'gunluk-rapor-v1';
-const uid = () => Math.random().toString(36).slice(2, 9);
+const ESKI_ANAHTARLAR = ['gunluk-rapor-v2', 'gunluk-rapor-v1'];
+const SON_KOPYA = 'gunluk-rapor-son-kopya';
 const todayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const trDate = d => d.toLocaleDateString('tr-TR', { day:'numeric', month:'long', year:'numeric', weekday:'long' });
 const shortDate = d => d.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric' });
 
-const seed = () => ({
-  recurring: [
-    ['MESAM / MSG / IMRO yazışmaları takip edildi | Meslek birlikleriyle (MESAM, MSG, IMRO) günlük yazışma ve takip yapıldı', true],
-    ['CRD raporları kontrol edildi | CRD rapor akışı izlendi, tutarsızlık kontrolü yapıldı', true],
-    ['Coverz iş listeleri güncellendi | Coverz iş listelerinde ilerleme kaydedildi', true],
-    ['Coverz ekibine teknik destek verildi', false],
-    ['Telif takibi ve eşleşme kontrolleri yapıldı', true],
-    ['MEDUSA geliştirme çalışmaları sürdü', true],
-  ].map(([text,on]) => ({ id:uid(), text, on })),
-  ongoing: [],
-  daily: { date: todayKey(), done:'', plan:'' },
-  settings: { phone:'', title:'Günlük Rapor' },
-  lastCopy: null,
-  found: {},
-});
-
-let S;
-function load(){
-  try {
-    const raw = localStorage.getItem(KEY) || localStorage.getItem(OLD_KEY);
-    S = raw ? JSON.parse(raw) : seed();
-  } catch { S = seed(); }
-  if (!S.daily || S.daily.date !== todayKey()) S.daily = { date: todayKey(), done:'', plan:'' };
-  S.settings = S.settings || { phone:'', title:'Günlük Rapor' };
-  S.found = S.found || {};
-}
-function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
+// Sunucudaki durumun sayfadaki kopyası. Her değişiklik önce burada yapılır, sonra ilgili uca yazılır.
+const S = { tarih:null, surekli:[], devam:[], bugun:{ yapilanlar:null, yarin:null }, metin:{ yapilanlar:'', yarin:'' }, bulunan:[], ayarlar:{} };
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
+
+async function api(yol, yontem = 'GET', govde, ek = {}){
+  const r = await fetch(yol, {
+    method: yontem, credentials: 'same-origin', ...ek,
+    headers: govde === undefined ? {} : { 'Content-Type': 'application/json' },
+    body: govde === undefined ? undefined : JSON.stringify(govde),
+  });
+  if (r.status === 401) { location.href = '/giris'; throw new Error('Oturum kapandı'); }
+  const veri = await r.json().catch(() => ({}));
+  if (r.status === 403 && /şifre/i.test(veri.detail || '')) { location.href = '/sifre'; }
+  if (!r.ok) { const e = new Error(typeof veri.detail === 'string' ? veri.detail : `sunucu ${r.status} döndürdü`); e.status = r.status; throw e; }
+  return veri;
+}
+function kaydetHata(e){ toast('Kaydedilemedi: ' + e.message); durumuYukle(); }
+function guncelle(m, degisim){ Object.assign(m, degisim); return api(`/api/maddeler/${m.id}`, 'PATCH', degisim).catch(kaydetHata); }
+function sil(m){ return api(`/api/maddeler/${m.id}`, 'DELETE').catch(kaydetHata); }
+
+// --- son kopyalama bilgisi (yalnız bu tarayıcıda) ---
+function sonKopya(){ try { return JSON.parse(localStorage.getItem(SON_KOPYA) || 'null'); } catch { return null; } }
+function sonKopyaYaz(){
+  const v = { date: todayKey(), time: new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}) };
+  try { localStorage.setItem(SON_KOPYA, JSON.stringify(v)); } catch {}
+}
 
 function variantOf(text){
   const parts = text.split('|').map(s=>s.trim()).filter(Boolean);
@@ -194,14 +130,15 @@ function variantOf(text){
   return parts[day % parts.length];
 }
 const lines = s => s.split('\n').map(x=>x.trim().replace(/^[-•*]\s*/,'')).filter(Boolean);
+const projeEtiketi = () => S.ayarlar.proje_adi || 'GitHub';
 
 function buildReport(){
-  const out = [`*${S.settings.title || 'Günlük Rapor'} – ${shortDate(new Date())}*`, ''];
-  const done = [...lines(S.daily.done), ...foundForReport(), ...S.recurring.filter(r=>r.on).map(r=>variantOf(r.text))];
+  const out = [`*${S.ayarlar.rapor_basligi || 'Günlük Rapor'} – ${shortDate(new Date())}*`, ''];
+  const done = [...lines(S.metin.yapilanlar), ...foundForReport(), ...S.surekli.filter(r=>r.tikli).map(r=>variantOf(r.metin))];
   if (done.length){ out.push('*Yapılanlar*'); done.forEach(x=>out.push('• '+x)); out.push(''); }
-  const ong = S.ongoing.filter(o=>o.on);
-  if (ong.length){ out.push('*Devam eden*'); ong.forEach(o=>out.push('• '+o.text+(o.stage?` — ${o.stage}`:''))); out.push(''); }
-  const plan = lines(S.daily.plan);
+  const ong = S.devam.filter(o=>o.tikli);
+  if (ong.length){ out.push('*Devam eden*'); ong.forEach(o=>out.push('• '+o.metin+(o.asama?` — ${o.asama}`:''))); out.push(''); }
+  const plan = lines(S.metin.yarin);
   if (plan.length){ out.push('*Yarın*'); plan.forEach(x=>out.push('• '+x)); out.push(''); }
   return out.join('\n').trim();
 }
@@ -214,124 +151,150 @@ function renderPreview(){
 
 function renderStatus(){
   $('dateLine').textContent = trDate(new Date());
-  const lc = S.lastCopy;
+  const lc = sonKopya();
   $('statusLine').innerHTML = (lc && lc.date === todayKey())
     ? `Bugün <b>${lc.time}</b>'de kopyalandı.`
     : 'Bugünkü rapor henüz kopyalanmadı.';
 }
 
+const tool = (tools, label, title, fn, cls) => { const b=document.createElement('button'); b.textContent=label; b.title=title; b.onclick=fn; if(cls) b.className=cls; tools.appendChild(b); };
+
 function row(item, kind){
-  const li = document.createElement('li'); if (!item.on) li.classList.add('off');
-  const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=item.on;
-  cb.onchange = () => { item.on = cb.checked; li.classList.toggle('off', !item.on); save(); renderPreview(); };
+  const li = document.createElement('li'); if (!item.tikli) li.classList.add('off');
+  const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=item.tikli;
+  cb.onchange = () => { li.classList.toggle('off', !cb.checked); guncelle(item, { tikli: cb.checked }); renderPreview(); };
   const txt = document.createElement('div'); txt.className='txt';
-  if (kind==='recurring'){
-    const v = variantOf(item.text);
-    txt.textContent = v;
-    if (item.text.includes('|')) { const a=document.createElement('span'); a.className='alt'; a.textContent='bugünkü ifade · dönüşümlü'; txt.appendChild(a); }
+  if (kind==='surekli'){
+    txt.textContent = variantOf(item.metin);
+    if (item.metin.includes('|')) { const a=document.createElement('span'); a.className='alt'; a.textContent='bugünkü ifade · dönüşümlü'; txt.appendChild(a); }
   } else {
-    txt.textContent = item.text;
-    if (item.stage){ txt.appendChild(document.createTextNode(' ')); const s=document.createElement('span'); s.className='stage'; s.textContent='— '+item.stage; txt.appendChild(s); }
+    txt.textContent = item.metin;
+    if (item.asama){ txt.appendChild(document.createTextNode(' ')); const s=document.createElement('span'); s.className='stage'; s.textContent='— '+item.asama; txt.appendChild(s); }
   }
   txt.onclick = () => cb.click();
   const tools = document.createElement('div'); tools.className='tools';
-  const mk = (label, title, fn, cls) => { const b=document.createElement('button'); b.textContent=label; b.title=title; b.onclick=fn; if(cls) b.className=cls; tools.appendChild(b); };
-  if (kind==='ongoing'){
-    mk('✓','Bitti — bugünün yapılanlarına geç', () => {
-      S.daily.done = (S.daily.done ? S.daily.done+'\n' : '') + item.text + ' tamamlandı';
-      S.ongoing = S.ongoing.filter(o=>o!==item); save(); render();
+  if (kind==='devam'){
+    tool(tools, '✓','Bitti — bugünün yapılanlarına geç', () => {
+      gunlukDegisti('yapilanlar', (S.metin.yapilanlar ? S.metin.yapilanlar+'\n' : '') + item.metin + ' tamamlandı', true);
+      S.devam = S.devam.filter(o=>o!==item); sil(item); render();
     });
-    mk('✎','Aşamayı güncelle', () => { const s = prompt('Aşama:', item.stage||''); if (s!==null){ item.stage=s.trim(); save(); render(); } });
+    tool(tools, '✎','Aşamayı güncelle', () => { const s = prompt('Aşama:', item.asama||''); if (s!==null){ guncelle(item, { asama: s.trim() }); render(); } });
   } else {
-    mk('✎','Metni düzenle', () => { const s = prompt('Metin ( | ile dönüşümlü ifadeler):', item.text); if (s && s.trim()){ item.text=s.trim(); save(); render(); } });
+    tool(tools, '✎','Metni düzenle', () => { const s = prompt('Metin ( | ile dönüşümlü ifadeler):', item.metin); if (s && s.trim()){ guncelle(item, { metin: s.trim() }); render(); } });
   }
-  mk('×','Sil', () => { if (confirm('Silinsin mi?')) { if(kind==='recurring') S.recurring=S.recurring.filter(r=>r!==item); else S.ongoing=S.ongoing.filter(o=>o!==item); save(); render(); } }, 'del');
+  tool(tools, '×','Sil', () => {
+    if (!confirm('Silinsin mi?')) return;
+    S[kind] = S[kind].filter(x=>x!==item); sil(item); render();
+  }, 'del');
   li.append(cb, txt, tools); return li;
 }
 
 function render(){
   const rl = $('recurringList'); rl.innerHTML='';
-  if (!S.recurring.length) rl.innerHTML = '<li class="empty">Henüz sürekli iş yok.</li>';
-  S.recurring.forEach(r => rl.appendChild(row(r,'recurring')));
+  if (!S.surekli.length) rl.innerHTML = '<li class="empty">Henüz sürekli iş yok.</li>';
+  S.surekli.forEach(r => rl.appendChild(row(r,'surekli')));
   const ol = $('ongoingList'); ol.innerHTML='';
-  if (!S.ongoing.length) ol.innerHTML = '<li class="empty">Devam eden iş yok. Örn: MSG Ağustos itirazı — yanıt bekleniyor</li>';
-  S.ongoing.forEach(o => ol.appendChild(row(o,'ongoing')));
-  $('done').value = S.daily.done; $('plan').value = S.daily.plan;
-  $('phone').value = S.settings.phone; $('title').value = S.settings.title;
-  renderStatus(); renderPreview();
+  if (!S.devam.length) ol.innerHTML = '<li class="empty">Devam eden iş yok. Örn: MSG Ağustos itirazı — yanıt bekleniyor</li>';
+  S.devam.forEach(o => ol.appendChild(row(o,'devam')));
+  if (document.activeElement !== $('done')) $('done').value = S.metin.yapilanlar;
+  if (document.activeElement !== $('plan')) $('plan').value = S.metin.yarin;
+  renderStatus(); renderFound(); renderPreview();
 }
 
-function addRecurring(){ const i=$('recurringNew'); const t=i.value.trim(); if(!t) return; S.recurring.push({id:uid(),text:t,on:true}); i.value=''; save(); render(); }
+async function ekle(tur, metin, asama){
+  try {
+    const m = await api('/api/maddeler', 'POST', { tur, metin, asama });
+    S[tur].push(m); render();
+  } catch (e) { toast('Eklenemedi: ' + e.message); }
+}
+function addRecurring(){ const i=$('recurringNew'); const t=i.value.trim(); if(!t) return; i.value=''; ekle('surekli', t); }
 function addOngoing(){
   const i=$('ongoingNew'); const t=i.value.trim(); if(!t) return;
-  const [text, ...rest] = t.split('—').map(s=>s.trim()); const stage = rest.join(' — ');
-  S.ongoing.push({id:uid(),text,stage,on:true}); i.value=''; save(); render();
+  const [text, ...rest] = t.split('—').map(s=>s.trim()); i.value='';
+  ekle('devam', text, rest.join(' — '));
 }
+function hepsi(tikli){
+  S.surekli.filter(r => r.tikli !== tikli).forEach(r => guncelle(r, { tikli }));
+  render();
+}
+
+// --- bugünün serbest metinleri: 600 ms sonra yazılır, yazmalar sırayla gider ---
+const gunluk = { yapilanlar:{ t:null, zincir:Promise.resolve() }, yarin:{ t:null, zincir:Promise.resolve() } };
+function gunlukDegisti(kaynak, deger, hemen){
+  S.metin[kaynak] = deger; renderPreview();
+  const g = gunluk[kaynak]; clearTimeout(g.t); g.t = null;
+  if (hemen) gunlukYaz(kaynak); else g.t = setTimeout(() => { g.t = null; gunlukYaz(kaynak); }, 600);
+}
+function gunlukYaz(kaynak, keepalive){
+  const g = gunluk[kaynak];
+  g.zincir = g.zincir.then(async () => {
+    const metin = S.metin[kaynak], satir = S.bugun[kaynak];
+    if (satir) { if (satir.metin !== metin) { await api(`/api/maddeler/${satir.id}`, 'PATCH', { metin }, { keepalive }); satir.metin = metin; } }
+    else if (metin) { S.bugun[kaynak] = await api('/api/maddeler', 'POST', { tur:'bugun', kaynak, metin }, { keepalive }); }
+  }).catch(kaydetHata);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') return;
+  Object.entries(gunluk).forEach(([k, g]) => { if (g.t) { clearTimeout(g.t); g.t = null; gunlukYaz(k, true); } });
+});
 
 async function copyReport(){
   const txt = buildReport();
   try {
     if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(txt);
     else { const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-    S.lastCopy = { date: todayKey(), time: new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}) }; save(); renderStatus();
+    sonKopyaYaz(); renderStatus();
     toast('Kopyalandı');
   } catch { toast('Kopyalanamadı — metni elle seç'); }
 }
 function openWa(){
   const txt = encodeURIComponent(buildReport());
-  const p = (S.settings.phone||'').replace(/\D/g,'');
-  S.lastCopy = { date: todayKey(), time: new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}) }; save(); renderStatus();
+  const p = (S.ayarlar.patron_telefon||'').replace(/\D/g,'');
+  sonKopyaYaz(); renderStatus();
   window.open(p ? `https://wa.me/${p}?text=${txt}` : `https://wa.me/?text=${txt}`, '_blank');
 }
 
-// --- Bugün bulunanlar (Gmail + MEDUSA) ---
-let FOUND = { tarih:null, items:[] };
-const foundKey = it => `${FOUND.tarih}:${it.id}`;
-const foundState = it => S.found[foundKey(it)] || {};
-const setFoundState = (it, patch) => { S.found[foundKey(it)] = { ...foundState(it), ...patch }; save(); };
-const foundText = it => foundState(it).text || it.metin;
-const foundOn = it => foundState(it).on !== false;
-function foundForReport(){ return FOUND.items.filter(it => !foundState(it).hidden && foundOn(it)).map(foundText); }
+// --- Bugün bulunanlar (Gmail + GitHub) ---
+function foundForReport(){ return S.bulunan.filter(it => !it.gizli && it.tikli).map(it => it.metin); }
 
 function renderFound(){
   const ul = $('foundList'); ul.innerHTML = '';
-  const visible = FOUND.items.filter(it => !foundState(it).hidden);
-  const hiddenCount = FOUND.items.length - visible.length;
+  const visible = S.bulunan.filter(it => !it.gizli);
+  const hidden = S.bulunan.filter(it => it.gizli);
   $('hiddenInfo').innerHTML = '';
-  if (hiddenCount){
-    const b = document.createElement('button'); b.textContent = `${hiddenCount} gizli · geri al`;
-    b.onclick = () => { FOUND.items.forEach(it => { if (foundState(it).hidden) setFoundState(it, { hidden:false }); }); renderFound(); renderPreview(); };
+  if (hidden.length){
+    const b = document.createElement('button'); b.textContent = `${hidden.length} gizli · geri al`;
+    b.onclick = () => { hidden.forEach(it => guncelle(it, { gizli:false })); renderFound(); renderPreview(); };
     $('hiddenInfo').append(b, document.createTextNode(' · '));
   }
-  if (FOUND.tarih && !visible.length){ ul.innerHTML = '<li class="empty">Bugün için bulunan madde yok.</li>'; return; }
+  if (S.bulunanYuklendi && !visible.length){ ul.innerHTML = '<li class="empty">Bugün için bulunan madde yok.</li>'; return; }
   visible.forEach(it => {
-    const li = document.createElement('li'); if (!foundOn(it)) li.classList.add('off');
-    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = foundOn(it);
-    cb.onchange = () => { setFoundState(it, { on: cb.checked }); li.classList.toggle('off', !cb.checked); renderPreview(); };
-    const txt = document.createElement('div'); txt.className='txt'; txt.textContent = foundText(it);
-    const tag = document.createElement('span'); tag.className='src'; tag.textContent = it.kaynak === 'medusa' ? 'MEDUSA' : 'e-posta';
+    const li = document.createElement('li'); if (!it.tikli) li.classList.add('off');
+    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = it.tikli;
+    cb.onchange = () => { li.classList.toggle('off', !cb.checked); guncelle(it, { tikli: cb.checked }); renderPreview(); };
+    const txt = document.createElement('div'); txt.className='txt'; txt.textContent = it.metin;
+    const tag = document.createElement('span'); tag.className='src'; tag.textContent = it.kaynak === 'medusa' ? projeEtiketi() : 'e-posta';
     txt.appendChild(tag);
     txt.onclick = () => cb.click();
     const tools = document.createElement('div'); tools.className='tools';
-    const mk = (label, title, fn, cls) => { const b=document.createElement('button'); b.textContent=label; b.title=title; b.onclick=fn; if(cls) b.className=cls; tools.appendChild(b); };
-    mk('✎','Metni düzenle', () => { const s = prompt('Metin:', foundText(it)); if (s && s.trim()){ setFoundState(it, { text: s.trim() }); renderFound(); renderPreview(); } });
-    mk('×','Gizle', () => { setFoundState(it, { hidden:true }); renderFound(); renderPreview(); }, 'del');
+    tool(tools, '✎','Metni düzenle', () => { const s = prompt('Metin:', it.metin); if (s && s.trim()){ guncelle(it, { metin: s.trim() }); renderFound(); renderPreview(); } });
+    tool(tools, '×','Gizle', () => { guncelle(it, { gizli:true }); renderFound(); renderPreview(); }, 'del');
     li.append(cb, txt, tools); ul.appendChild(li);
   });
 }
 
 async function loadFound(force){
-  $('foundStatus').textContent = 'Gmail ve MEDUSA taranıyor…'; $('foundStatus').hidden = false;
+  $('foundStatus').textContent = `Gmail ve ${projeEtiketi()} taranıyor…`; $('foundStatus').hidden = false;
   $('foundRefresh').disabled = true;
   try {
-    const r = await fetch('/api/bugun' + (force ? '?yenile=1' : ''), { credentials:'same-origin' });
-    if (!r.ok) throw new Error(`sunucu ${r.status} döndürdü`);
-    const d = await r.json();
-    FOUND = { tarih: d.tarih, items: [...d.eposta, ...d.medusa] };
-    Object.keys(S.found).forEach(k => { if (!k.startsWith(d.tarih + ':')) delete S.found[k]; });
-    save();
+    const d = await api('/api/bugun' + (force ? '?yenile=1' : ''));
+    S.bulunan = d.bulunan; S.bulunanYuklendi = true;
     const errs = $('foundErrors'); errs.innerHTML = '';
-    (d.hatalar || []).forEach(h => { const p=document.createElement('p'); p.className='warn'; p.textContent=h.mesaj; errs.appendChild(p); });
+    (d.hatalar || []).forEach(h => {
+      const p=document.createElement('p'); p.className='warn'; p.textContent=h.mesaj;
+      if (/\(Ayarlar\)$/.test(h.mesaj)) { p.textContent = h.mesaj.replace(/\(Ayarlar\)$/, '('); const a=document.createElement('a'); a.href='/ayarlar'; a.textContent='Ayarlar'; p.append(a, ')'); }
+      errs.appendChild(p);
+    });
     $('foundStatus').hidden = true;
   } catch (e) {
     $('foundStatus').textContent = 'Tarama yapılamadı: ' + e.message;
@@ -341,18 +304,53 @@ async function loadFound(force){
   }
 }
 
-load(); render();
-loadFound(false);
+async function durumuYukle(){
+  try {
+    const d = await api('/api/durum');
+    S.tarih = d.tarih; S.ayarlar = d.ayarlar;
+    S.surekli = d.maddeler.filter(m => m.tur === 'surekli');
+    S.devam = d.maddeler.filter(m => m.tur === 'devam');
+    S.bulunan = d.maddeler.filter(m => m.tur === 'bulunan');
+    for (const k of ['yapilanlar', 'yarin']) {
+      S.bugun[k] = d.maddeler.find(m => m.tur === 'bugun' && m.kaynak === k) || null;
+      if (!gunluk[k].t) S.metin[k] = S.bugun[k] ? S.bugun[k].metin : '';
+    }
+    $('loadError').hidden = true;
+  } catch (e) {
+    $('loadError').textContent = 'Veriler yüklenemedi: ' + e.message; $('loadError').hidden = false;
+  }
+  render();
+}
+
+// Eski sürüm verileri tarayıcıda duruyorsa bir kez hesaba taşınır.
+async function eskiVeriyiTasi(){
+  let ham = null;
+  try { ham = ESKI_ANAHTARLAR.map(k => localStorage.getItem(k)).find(Boolean); } catch { return; }
+  if (!ham) return;
+  let veri; try { veri = JSON.parse(ham); } catch { return; }
+  try {
+    await api('/api/ice-aktar', 'POST', veri);
+    try {
+      if (veri.lastCopy) localStorage.setItem(SON_KOPYA, JSON.stringify(veri.lastCopy));
+      ESKI_ANAHTARLAR.forEach(k => localStorage.removeItem(k));
+    } catch {}
+    toast('Önceki veriler taşındı');
+  } catch (e) {
+    if (e.status !== 409) console.warn('Eski veriler taşınamadı:', e.message);
+  }
+}
+
 $('foundRefresh').onclick = () => loadFound(true);
-$('done').oninput = e => { S.daily.done=e.target.value; save(); renderPreview(); };
-$('plan').oninput = e => { S.daily.plan=e.target.value; save(); renderPreview(); };
-$('phone').oninput = e => { S.settings.phone=e.target.value; save(); };
-$('title').oninput = e => { S.settings.title=e.target.value; save(); renderPreview(); };
+$('done').oninput = e => gunlukDegisti('yapilanlar', e.target.value);
+$('plan').oninput = e => gunlukDegisti('yarin', e.target.value);
 $('recurringAdd').onclick = addRecurring; $('recurringNew').onkeydown = e => { if(e.key==='Enter') addRecurring(); };
 $('ongoingAdd').onclick = addOngoing; $('ongoingNew').onkeydown = e => { if(e.key==='Enter') addOngoing(); };
-$('allOn').onclick = () => { S.recurring.forEach(r=>r.on=true); save(); render(); };
-$('allOff').onclick = () => { S.recurring.forEach(r=>r.on=false); save(); render(); };
+$('allOn').onclick = () => hepsi(true);
+$('allOff').onclick = () => hepsi(false);
 $('copyBtn').onclick = copyReport; $('waBtn').onclick = openWa;
+
+render();
+(async () => { await eskiVeriyiTasi(); await durumuYukle(); loadFound(false); })();
 </script>
 </body>
 </html>

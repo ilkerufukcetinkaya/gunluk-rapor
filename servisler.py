@@ -1,4 +1,4 @@
-"""Günlük rapor için veri kaynakları: Gmail (gönderilenler), GitHub (MEDUSA commit'leri), Claude (iş diline çeviri)."""
+"""Günlük rapor için veri kaynakları: Gmail (gönderilenler), GitHub (proje commit'leri), Claude (iş diline çeviri)."""
 from __future__ import annotations
 
 import base64
@@ -26,12 +26,17 @@ KURUMLAR = {
 SIRKET_ICI = "şirket içi"
 
 CLAUDE_MODEL = "claude-sonnet-5"
-CLAUDE_SISTEM = (
-    "Bir müzik edisyon şirketinde çalışan bir danışmanın günlük raporu için maddeler yazıyorsun. "
-    "Teknik terimleri (trigram, indeks, rollup, N+1, commit, endpoint vb.) yöneticinin anlayacağı iş diline çevir; "
-    "her girdi için TEK cümle, geçmiş zaman, abartı yok, uydurma yok; ürün adı her zaman MEDUSA. "
-    "Yalnız JSON dizi döndür: [{\"id\":..., \"metin\":...}]"
-)
+
+
+def claude_sistem(proje_adi: str = "") -> str:
+    urun = f"ürün adı her zaman {proje_adi}. " if proje_adi else ""
+    return (
+        "Bir müzik edisyon şirketinde çalışan bir danışmanın günlük raporu için maddeler yazıyorsun. "
+        "Teknik terimleri (trigram, indeks, rollup, N+1, commit, endpoint vb.) yöneticinin anlayacağı iş diline çevir; "
+        "her girdi için TEK cümle, geçmiş zaman, abartı yok, uydurma yok. "
+        + urun
+        + "Yalnız JSON dizi döndür: [{\"id\":..., \"metin\":...}]"
+    )
 
 
 def istanbul_bugun() -> date:
@@ -117,9 +122,9 @@ def _alan_eslesir(alan: str, anahtar: str) -> bool:
     return anahtar in alan.split(".")
 
 
-def kurum_adi(gorunen_ad: str, adres: str) -> str:
+def kurum_adi(gorunen_ad: str, adres: str, sozluk: dict[str, str] | None = None) -> str:
     alan = adres.rpartition("@")[2].lower()
-    for anahtar, kurum in KURUMLAR.items():
+    for anahtar, kurum in (KURUMLAR if sozluk is None else sozluk).items():
         if _alan_eslesir(alan, anahtar):
             return kurum
     return gorunen_ad.strip().strip('"') or alan or adres
@@ -137,13 +142,13 @@ def bugun_mu(date_basligi: str | None, bugun: date) -> bool:
     return zaman.astimezone(ISTANBUL).date() == bugun
 
 
-def _alicilar(ham: str | None, kendi_adres: str) -> list[str]:
+def _alicilar(ham: str | None, kendi_adres: str, sozluk: dict[str, str] | None = None) -> list[str]:
     kurumlar = []
     for ad, adres in getaddresses([ham or ""]):
         adres = adres.strip()
         if not adres or adres.lower() == kendi_adres.lower() or NOREPLY.search(adres):
             continue
-        kurum = kurum_adi(basligi_coz(ad), adres)
+        kurum = kurum_adi(basligi_coz(ad), adres, sozluk)
         if kurum not in kurumlar:
             kurumlar.append(kurum)
     return kurumlar
@@ -170,7 +175,7 @@ def eposta_metni(kurumlar: tuple[str, ...], konular: list[str]) -> str:
     return f"{hedef} {len(konular)} e-posta gönderildi (konular: {'; '.join(farkli)})"
 
 
-def epostalari_maddele(mailler: list[dict], kendi_adres: str, bugun: date) -> list[dict]:
+def epostalari_maddele(mailler: list[dict], kendi_adres: str, bugun: date, sozluk: dict[str, str] | None = None) -> list[dict]:
     """mailler: {"date","subject","from","to","cc"} ham başlık değerleri."""
     gruplar: dict[tuple[str, ...], list[str]] = {}
     for m in mailler:
@@ -178,7 +183,7 @@ def epostalari_maddele(mailler: list[dict], kendi_adres: str, bugun: date) -> li
             continue
         if NOREPLY.search(m.get("from") or ""):
             continue
-        kurumlar = _alicilar(m.get("to"), kendi_adres) or _alicilar(m.get("cc"), kendi_adres)
+        kurumlar = _alicilar(m.get("to"), kendi_adres, sozluk) or _alicilar(m.get("cc"), kendi_adres, sozluk)
         if len(kurumlar) > 1 and SIRKET_ICI in kurumlar:
             kurumlar.remove(SIRKET_ICI)
         if not kurumlar:
@@ -228,40 +233,34 @@ class KaynakHatasi(Exception):
 AYLAR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
-def gmail_tara(kullanici: str, sifre: str, bugun: date) -> list[dict]:
+def _gmail_gonderilmis_ac(M: imaplib.IMAP4_SSL, kullanici: str, sifre: str) -> str:
+    """Giriş yapar, Gönderilmiş klasörünü salt-okunur seçer; klasörün okunur adını döner."""
+    try:
+        M.login(kullanici, sifre)
+    except imaplib.IMAP4.error as e:
+        raise KaynakHatasi("Gmail'e giriş yapılamadı (kullanıcı adı veya uygulama şifresi hatalı)") from e
+
+    _, liste = M.list()
+    klasorler = klasorleri_ayristir(liste)
+    gonderilmis = next((ad for bayrak, ad in klasorler if "\\sent" in bayrak.lower()), None)
+    if gonderilmis is None:
+        adlar = ", ".join(_mutf7_coz(ad) for _, ad in klasorler)
+        raise KaynakHatasi(f"Gmail'de Gönderilmiş klasörü bulunamadı. Klasörler: {adlar}")
+
+    tur, _ = M.select('"' + gonderilmis.replace("\\", "\\\\").replace('"', '\\"') + '"', readonly=True)
+    if tur != "OK":
+        raise KaynakHatasi(f"Gmail klasörü açılamadı: {_mutf7_coz(gonderilmis)}")
+    return _mutf7_coz(gonderilmis)
+
+
+def _gmail_oturumu(kullanici: str, sifre: str, islem):
     try:
         M = imaplib.IMAP4_SSL("imap.gmail.com", timeout=30)
     except OSError as e:
         raise KaynakHatasi(f"Gmail'e bağlanılamadı: {e}") from e
     try:
-        try:
-            M.login(kullanici, sifre)
-        except imaplib.IMAP4.error as e:
-            raise KaynakHatasi("Gmail'e giriş yapılamadı (kullanıcı adı veya uygulama şifresi hatalı)") from e
-
-        _, liste = M.list()
-        klasorler = klasorleri_ayristir(liste)
-        gonderilmis = next((ad for bayrak, ad in klasorler if "\\sent" in bayrak.lower()), None)
-        if gonderilmis is None:
-            adlar = ", ".join(_mutf7_coz(ad) for _, ad in klasorler)
-            raise KaynakHatasi(f"Gmail'de Gönderilmiş klasörü bulunamadı. Klasörler: {adlar}")
-
-        tur, _ = M.select('"' + gonderilmis.replace("\\", "\\\\").replace('"', '\\"') + '"', readonly=True)
-        if tur != "OK":
-            raise KaynakHatasi(f"Gmail klasörü açılamadı: {_mutf7_coz(gonderilmis)}")
-
-        dun = bugun - timedelta(days=1)
-        _, veri = M.search(None, "SINCE", f"{dun.day:02d}-{AYLAR[dun.month - 1]}-{dun.year}")
-        kimlikler = veri[0].split() if veri and veri[0] else []
-        mailler = []
-        if kimlikler:
-            _, parcalar = M.fetch(b",".join(kimlikler).decode(), "(BODY.PEEK[HEADER.FIELDS (DATE SUBJECT FROM TO CC)])")
-            for parca in parcalar:
-                if not isinstance(parca, tuple):
-                    continue
-                msg = email.message_from_bytes(parca[1])
-                mailler.append({k: msg.get(k) for k in ("date", "subject", "from", "to", "cc")})
-        return epostalari_maddele(mailler, kullanici, bugun)
+        _gmail_gonderilmis_ac(M, kullanici, sifre)
+        return islem(M)
     except KaynakHatasi:
         raise
     except (imaplib.IMAP4.error, OSError) as e:
@@ -273,29 +272,67 @@ def gmail_tara(kullanici: str, sifre: str, bugun: date) -> list[dict]:
             pass
 
 
+def gmail_test(kullanici: str, sifre: str) -> str:
+    _gmail_oturumu(kullanici, sifre, lambda M: None)
+    return "Gmail: bağlandı, Gönderilmiş klasörü bulundu"
+
+
+def gmail_tara(kullanici: str, sifre: str, bugun: date, sozluk: dict[str, str] | None = None) -> list[dict]:
+    def oku(M: imaplib.IMAP4_SSL) -> list[dict]:
+        dun = bugun - timedelta(days=1)
+        _, veri = M.search(None, "SINCE", f"{dun.day:02d}-{AYLAR[dun.month - 1]}-{dun.year}")
+        kimlikler = veri[0].split() if veri and veri[0] else []
+        mailler = []
+        if kimlikler:
+            _, parcalar = M.fetch(b",".join(kimlikler).decode(), "(BODY.PEEK[HEADER.FIELDS (DATE SUBJECT FROM TO CC)])")
+            for parca in parcalar:
+                if not isinstance(parca, tuple):
+                    continue
+                msg = email.message_from_bytes(parca[1])
+                mailler.append({k: msg.get(k) for k in ("date", "subject", "from", "to", "cc")})
+        return epostalari_maddele(mailler, kullanici, bugun, sozluk)
+
+    return _gmail_oturumu(kullanici, sifre, oku)
+
+
 # ---------------------------------------------------------------- GitHub
+
+def _github_commitleri(istemci: httpx.Client, token: str, repo: str, params: dict) -> list:
+    yanit = istemci.get(
+        f"https://api.github.com/repos/{repo}/commits",
+        params=params,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    if yanit.status_code == 401:
+        raise KaynakHatasi("GitHub token'ı geçersiz veya süresi dolmuş")
+    if yanit.status_code == 404:
+        raise KaynakHatasi(f"GitHub reposu bulunamadı ya da token'ın erişimi yok: {repo}")
+    if yanit.status_code >= 400:
+        raise KaynakHatasi(f"GitHub hata döndürdü ({yanit.status_code}): {yanit.text[:200]}")
+    return yanit.json()
+
+
+def github_test(token: str, repo: str, istemci: httpx.Client | None = None) -> str:
+    istemci = istemci or httpx.Client(timeout=20)
+    try:
+        commitler = _github_commitleri(istemci, token, repo, {"per_page": 100})
+    except httpx.HTTPError as e:
+        raise KaynakHatasi(f"GitHub'a bağlanılamadı: {e}") from e
+    return f"GitHub: {len(commitler)}{'+' if len(commitler) == 100 else ''} commit görüldü"
+
 
 def github_tara(token: str, repo: str, bugun: date, istemci: httpx.Client | None = None) -> list[dict]:
     baslangic = datetime.combine(bugun, time.min, ISTANBUL).astimezone(timezone.utc)
     istemci = istemci or httpx.Client(timeout=20)
-    url = f"https://api.github.com/repos/{repo}/commits"
     params = {"since": baslangic.strftime("%Y-%m-%dT%H:%M:%SZ"), "per_page": 100}
-    basliklar = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
     commitler = []
     try:
         for sayfa in range(1, 6):
-            yanit = istemci.get(url, params={**params, "page": sayfa}, headers=basliklar)
-            if yanit.status_code == 401:
-                raise KaynakHatasi("GitHub token'ı geçersiz veya süresi dolmuş")
-            if yanit.status_code == 404:
-                raise KaynakHatasi(f"GitHub reposu bulunamadı ya da token'ın erişimi yok: {repo}")
-            if yanit.status_code >= 400:
-                raise KaynakHatasi(f"GitHub hata döndürdü ({yanit.status_code}): {yanit.text[:200]}")
-            parti = yanit.json()
+            parti = _github_commitleri(istemci, token, repo, {**params, "page": sayfa})
             commitler.extend(parti)
             if len(parti) < params["per_page"]:
                 break
@@ -324,7 +361,9 @@ def _json_dizi_ayikla(metin: str) -> list:
     return veri
 
 
-def claude_cevir(maddeler: list[dict], api_anahtari: str, istemci: httpx.Client | None = None) -> tuple[list[dict], str | None]:
+def claude_cevir(
+    maddeler: list[dict], api_anahtari: str, istemci: httpx.Client | None = None, proje_adi: str = ""
+) -> tuple[list[dict], str | None]:
     """Maddeleri tek çağrıda iş diline çevirir. Hata olursa ham maddeler + hata mesajı döner."""
     if not maddeler:
         return maddeler, None
@@ -333,11 +372,12 @@ def claude_cevir(maddeler: list[dict], api_anahtari: str, istemci: httpx.Client 
         "model": CLAUDE_MODEL,
         "max_tokens": 1500,
         "thinking": {"type": "disabled"},
-        "system": CLAUDE_SISTEM,
+        "system": claude_sistem(proje_adi),
         "messages": [{
             "role": "user",
             "content": (
-                "Kaynağı 'medusa' olanlar MEDUSA yazılımında bugün yapılan değişikliklerin commit mesajları, "
+                f"Kaynağı 'medusa' olanlar {proje_adi + ' yazılımında' if proje_adi else 'yazılım projesinde'} "
+                "bugün yapılan değişikliklerin commit mesajları, "
                 "'eposta' olanlar bugün gönderilen e-postaların özetleri. Her birini çevir:\n"
                 + json.dumps(girdiler, ensure_ascii=False)
             ),
@@ -375,34 +415,38 @@ def claude_cevir(maddeler: list[dict], api_anahtari: str, istemci: httpx.Client 
 
 # ---------------------------------------------------------------- birleştirme
 
-def raporu_uret(ortam: dict) -> dict:
+def raporu_uret(ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | frozenset = frozenset()) -> dict:
+    """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu (çözülmüş).
+    haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez."""
     bugun = istanbul_bugun()
     sonuc = {"tarih": bugun.isoformat(), "eposta": [], "medusa": [], "hatalar": []}
 
-    if ortam.get("GMAIL_KULLANICI") and ortam.get("GMAIL_UYGULAMA_SIFRESI"):
+    if ayarlar.get("gmail_kullanici") and ayarlar.get("gmail_sifre"):
         try:
-            sonuc["eposta"] = gmail_tara(ortam["GMAIL_KULLANICI"], ortam["GMAIL_UYGULAMA_SIFRESI"], bugun)
+            sonuc["eposta"] = gmail_tara(ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], bugun, ayarlar.get("alan_sozlugu"))
         except KaynakHatasi as e:
             sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": str(e)})
         except Exception as e:
             sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": f"Gmail taranamadı: {e.__class__.__name__}"})
     else:
-        sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": "Gmail ayarları eksik (GMAIL_KULLANICI, GMAIL_UYGULAMA_SIFRESI)"})
+        sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": "Gmail ayarı girilmemiş (Ayarlar)"})
 
-    if ortam.get("GITHUB_TOKEN") and ortam.get("GITHUB_REPO"):
+    if ayarlar.get("github_token") and ayarlar.get("github_repo"):
         try:
-            sonuc["medusa"] = github_tara(ortam["GITHUB_TOKEN"], ortam["GITHUB_REPO"], bugun)
+            sonuc["medusa"] = github_tara(ayarlar["github_token"], ayarlar["github_repo"], bugun)
         except KaynakHatasi as e:
             sonuc["hatalar"].append({"kaynak": "github", "mesaj": str(e)})
         except Exception as e:
             sonuc["hatalar"].append({"kaynak": "github", "mesaj": f"GitHub taranamadı: {e.__class__.__name__}"})
     else:
-        sonuc["hatalar"].append({"kaynak": "github", "mesaj": "GitHub ayarları eksik (GITHUB_TOKEN, GITHUB_REPO)"})
+        sonuc["hatalar"].append({"kaynak": "github", "mesaj": "GitHub ayarı girilmemiş (Ayarlar)"})
 
-    if ortam.get("ANTHROPIC_API_KEY"):
-        tumu, hata = claude_cevir(sonuc["eposta"] + sonuc["medusa"], ortam["ANTHROPIC_API_KEY"])
-        sonuc["eposta"] = [m for m in tumu if m["kaynak"] == "eposta"]
-        sonuc["medusa"] = [m for m in tumu if m["kaynak"] == "medusa"]
+    yeniler = [m for m in sonuc["eposta"] + sonuc["medusa"] if m["id"] not in haric_idler]
+    if api_anahtari and yeniler:
+        cevrilmis, hata = claude_cevir(yeniler, api_anahtari, proje_adi=ayarlar.get("proje_adi") or "")
+        metinler = {m["id"]: m["metin"] for m in cevrilmis}
+        for anahtar in ("eposta", "medusa"):
+            sonuc[anahtar] = [{**m, "metin": metinler.get(m["id"], m["metin"])} for m in sonuc[anahtar]]
         if hata:
             sonuc["hatalar"].append({"kaynak": "claude", "mesaj": hata})
     return sonuc

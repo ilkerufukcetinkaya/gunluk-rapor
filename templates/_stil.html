@@ -1,0 +1,70 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<script>
+try { const t = localStorage.getItem('gunluk-rapor-tema'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+:root{
+  --bg:#f3f5f7; --paper:#ffffff; --ink:#1c2430; --ink-2:#5b6673; --line:#d8dee5;
+  --accent:#1f5fa8; --accent-ink:#ffffff; --bubble:#dcf3d0; --bubble-ink:#16301c;
+  --danger:#a83d3d; --focus:#1f5fa8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#151a21; --paper:#1d232c; --ink:#e6eaef; --ink-2:#9aa5b1; --line:#2f3844;
+    --accent:#6ea8ea; --accent-ink:#0d1620; --bubble:#1f3b2a; --bubble-ink:#d6f0dc;
+    --danger:#e08585; --focus:#6ea8ea;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#151a21; --paper:#1d232c; --ink:#e6eaef; --ink-2:#9aa5b1; --line:#2f3844;
+  --accent:#6ea8ea; --accent-ink:#0d1620; --bubble:#1f3b2a; --bubble-ink:#d6f0dc;
+  --danger:#e08585; --focus:#6ea8ea;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"Source Sans 3", "Segoe UI", Roboto, system-ui, sans-serif;
+  font-size:17px; line-height:1.45; font-variant-numeric:tabular-nums;
+}
+main{max-width:640px; margin:0 auto; padding:20px 16px 96px}
+h1{font-size:30px; font-weight:700; letter-spacing:-.01em; margin:0 0 2px}
+h2{font-size:20px; font-weight:600; margin:0 0 4px; display:flex; align-items:baseline; gap:12px}
+a{color:var(--accent)}
+.hint{color:var(--ink-2); font-size:15px; margin:0 0 10px}
+.warn{color:var(--danger); font-size:15px; margin:0 0 8px}
+input[type=text], input[type=email], input[type=password], input[type=tel], textarea{
+  width:100%; font:inherit; color:var(--ink); background:var(--paper);
+  border:1px solid var(--line); border-radius:10px; padding:10px 12px;
+}
+textarea{min-height:110px; resize:vertical}
+input:focus, textarea:focus, button:focus-visible, a:focus-visible{outline:2px solid var(--focus); outline-offset:2px}
+button.primary{
+  font:inherit; font-weight:600; background:var(--accent); color:var(--accent-ink);
+  border:0; border-radius:10px; padding:10px 16px; cursor:pointer; white-space:nowrap;
+}
+button.secondary{
+  font:inherit; font-weight:600; background:var(--paper); color:var(--ink);
+  border:1px solid var(--line); border-radius:10px; padding:10px 16px; cursor:pointer; white-space:nowrap;
+}
+button:disabled{opacity:.6; cursor:default}
+.form label{display:block; margin:14px 0 4px; color:var(--ink-2); font-size:15px}
+.form .check{display:flex; align-items:center; gap:8px; margin:14px 0 0; color:var(--ink)}
+.form .check input{width:20px; height:20px; accent-color:var(--accent)}
+.form .actions{display:flex; gap:10px; margin-top:18px; flex-wrap:wrap}
+.ust{display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:4px 14px; font-size:15px; color:var(--ink-2); margin:0 0 14px}
+.ust form{margin:0}
+.ust a, .ust button{color:var(--accent); background:none; border:0; padding:0; font:inherit; cursor:pointer; text-decoration:none}
+.ust a:hover, .ust button:hover{text-decoration:underline}
+.ust .ad{color:var(--ink); font-weight:600; margin-right:auto}
+.toast{
+  position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(20px);
+  background:var(--ink); color:var(--bg); padding:10px 18px; border-radius:999px;
+  opacity:0; transition:opacity .2s, transform .2s; pointer-events:none; font-weight:600;
+}
+.toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+@media (prefers-reduced-motion: reduce){ .toast{transition:none} }
+</style>

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="tr">
+<head>
+{% include "_stil.html" %}
+<title>Şifre · Günlük rapor</title>
+<style>main{max-width:420px}</style>
+</head>
+<body>
+<main>
+  {% if not kullanici.sifre_degistirmeli %}{% include "_ust.html" %}{% endif %}
+  <h1>Şifre değiştir</h1>
+  {% if kullanici.sifre_degistirmeli %}
+  <p class="hint">Merhaba {{ kullanici.ad }}. Devam etmeden önce size verilen geçici şifreyi kendi şifrenizle değiştirin.</p>
+  {% endif %}
+  {% if hata %}<p class="warn" role="alert">{{ hata }}</p>{% endif %}
+  <form class="form" method="post" action="/sifre">
+    <input type="email" name="eposta" value="{{ kullanici.eposta }}" autocomplete="username" hidden>
+    <label for="mevcut">{% if kullanici.sifre_degistirmeli %}Geçici şifre{% else %}Mevcut şifre{% endif %}</label>
+    <input type="password" id="mevcut" name="mevcut" autocomplete="current-password" required autofocus>
+    <label for="yeni">Yeni şifre (en az 10 karakter)</label>
+    <input type="password" id="yeni" name="yeni" autocomplete="new-password" minlength="10" required>
+    <label for="tekrar">Yeni şifre tekrar</label>
+    <input type="password" id="tekrar" name="tekrar" autocomplete="new-password" minlength="10" required>
+    <div class="actions"><button class="primary" type="submit">Şifreyi kaydet</button></div>
+  </form>
+  {% if kullanici.sifre_degistirmeli %}
+  <form method="post" action="/cikis" style="margin-top:18px"><button class="secondary" type="submit">Çıkış</button></form>
+  {% endif %}
+</main>
+</body>
+</html>

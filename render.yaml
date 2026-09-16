@@ -7,15 +7,13 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: RAPOR_SIFRE
+      - key: DATABASE_URL
         sync: false
-      - key: GMAIL_KULLANICI
+      - key: GIZLI_ANAHTAR
         sync: false
-      - key: GMAIL_UYGULAMA_SIFRESI
+      - key: ADMIN_EPOSTA
         sync: false
-      - key: GITHUB_TOKEN
-        sync: false
-      - key: GITHUB_REPO
+      - key: ADMIN_SIFRE
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
