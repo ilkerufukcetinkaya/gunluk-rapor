@@ -1,0 +1,27 @@
+{#- Satır içi çizgi ikonlar (stroke 2, yuvarlak uç). Renk currentColor'dan gelir. -#}
+{% macro ikon(ad, boyut=18, kalinlik=2) -%}
+<svg width="{{ boyut }}" height="{{ boyut }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ kalinlik }}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" data-ad="{{ ad }}">
+{%- if ad == 'tik' %}<path d="M5 12.5l4.5 4.5L19 7.5"/>
+{%- elif ad == 'arti' %}<path d="M12 5v14M5 12h14"/>
+{%- elif ad == 'yenile' %}<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/>
+{%- elif ad == 'zarf' %}<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>
+{%- elif ad == 'dal' %}<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 4-6 4H8.5"/>
+{%- elif ad == 'saat' %}<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>
+{%- elif ad == 'kopyala' %}<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>
+{%- elif ad == 'wa' %}<path d="M4 20l1.3-3.9A8 8 0 1 1 8 18.8z"/>
+{%- elif ad == 'bugun' %}<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 12.5l2.5 2.5L16 9.5"/>
+{%- elif ad == 'takvim' %}<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/>
+{%- elif ad == 'disli' %}<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14.2 3h-4.4l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2l.4 2.6h4.4l.4-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/>
+{%- elif ad == 'geri' %}<path d="M15 5l-7 7 7 7"/>
+{%- elif ad == 'ileri' %}<path d="M9 5l7 7-7 7"/>
+{%- elif ad == 'ara' %}<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>
+{%- elif ad == 'kivilcim' %}<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>
+{%- elif ad == 'telefon' %}<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/>
+{%- elif ad == 'kalem' %}<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>
+{%- elif ad == 'carpi' %}<path d="M6 6l12 12M18 6L6 18"/>
+{%- elif ad == 'cikis' %}<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 16l-4-4 4-4M6 12h10"/>
+{%- elif ad == 'tema' %}<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>
+{%- elif ad == 'kisiler' %}<circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M17 11v6M14 14h6"/>
+{%- endif -%}
+</svg>
+{%- endmacro %}

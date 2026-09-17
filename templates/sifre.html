@@ -2,29 +2,60 @@
 <html lang="tr">
 <head>
 {% include "_stil.html" %}
+{% import "_ikon.html" as i %}
 <title>Şifre · Günlük rapor</title>
-<style>main{max-width:420px}</style>
+<style>
+{% if kullanici.sifre_degistirmeli %}
+body{min-height:100vh; background:var(--bg) linear-gradient(var(--dark), var(--dark)) top / 100% 300px no-repeat}
+main{max-width:420px; padding:calc(48px + env(safe-area-inset-top)) 16px 40px; gap:26px}
+.marka{justify-content:center; font-size:18px}
+.marka i{width:36px; height:36px; border-radius:10px}
+{% else %}
+main{max-width:520px}
+{% endif %}
+.kutu{padding:22px 20px; display:flex; flex-direction:column; gap:14px}
+.kutu h2{font-size:22px}
+.kutu .form{display:flex; flex-direction:column; gap:8px}
+.kutu .form label.alan{margin-top:6px}
+.kutu button.primary{width:100%; margin-top:10px}
+.cikis{margin:0}
+.cikis button{width:100%}
+</style>
 </head>
 <body>
+{% if kullanici.sifre_degistirmeli %}
 <main>
-  {% if not kullanici.sifre_degistirmeli %}{% include "_ust.html" %}{% endif %}
-  <h1>Şifre değiştir</h1>
+  <div class="marka"><i>{{ i.ikon('tik', 19, 2.6) }}</i>Rapor</div>
+{% else %}
+{% set aktif = 'ayarlar' %}
+{% include "_ust.html" %}
+<div class="bant">
+  <a class="geri" href="/ayarlar" aria-label="Geri">{{ i.ikon('geri', 18, 2.2) }}</a>
+  <h1>Şifre</h1>
+</div>
+<main>
+{% endif %}
+  <section class="card kutu">
+    <div>
+      <h2>Şifre değiştir</h2>
+      {% if kullanici.sifre_degistirmeli %}
+      <p class="hint" style="margin-top:4px">Merhaba {{ kullanici.ad }}. Devam etmeden önce size verilen geçici şifreyi kendi şifrenizle değiştirin.</p>
+      {% endif %}
+    </div>
+    {% if hata %}<p class="uyari" role="alert">{{ hata }}</p>{% endif %}
+    <form class="form" method="post" action="/sifre">
+      <input type="email" name="eposta" value="{{ kullanici.eposta }}" autocomplete="username" hidden>
+      <label class="alan" for="mevcut">{% if kullanici.sifre_degistirmeli %}Geçici şifre{% else %}Mevcut şifre{% endif %}</label>
+      <input type="password" id="mevcut" name="mevcut" autocomplete="current-password" required autofocus>
+      <label class="alan" for="yeni">Yeni şifre (en az 10 karakter)</label>
+      <input type="password" id="yeni" name="yeni" autocomplete="new-password" minlength="10" required>
+      <label class="alan" for="tekrar">Yeni şifre tekrar</label>
+      <input type="password" id="tekrar" name="tekrar" autocomplete="new-password" minlength="10" required>
+      <button class="primary" type="submit">Şifreyi kaydet</button>
+    </form>
+  </section>
   {% if kullanici.sifre_degistirmeli %}
-  <p class="hint">Merhaba {{ kullanici.ad }}. Devam etmeden önce size verilen geçici şifreyi kendi şifrenizle değiştirin.</p>
-  {% endif %}
-  {% if hata %}<p class="warn" role="alert">{{ hata }}</p>{% endif %}
-  <form class="form" method="post" action="/sifre">
-    <input type="email" name="eposta" value="{{ kullanici.eposta }}" autocomplete="username" hidden>
-    <label for="mevcut">{% if kullanici.sifre_degistirmeli %}Geçici şifre{% else %}Mevcut şifre{% endif %}</label>
-    <input type="password" id="mevcut" name="mevcut" autocomplete="current-password" required autofocus>
-    <label for="yeni">Yeni şifre (en az 10 karakter)</label>
-    <input type="password" id="yeni" name="yeni" autocomplete="new-password" minlength="10" required>
-    <label for="tekrar">Yeni şifre tekrar</label>
-    <input type="password" id="tekrar" name="tekrar" autocomplete="new-password" minlength="10" required>
-    <div class="actions"><button class="primary" type="submit">Şifreyi kaydet</button></div>
-  </form>
-  {% if kullanici.sifre_degistirmeli %}
-  <form method="post" action="/cikis" style="margin-top:18px"><button class="secondary" type="submit">Çıkış</button></form>
+  <form class="cikis" method="post" action="/cikis"><button class="secondary" type="submit">Çıkış</button></form>
   {% endif %}
 </main>
 </body>

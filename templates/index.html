@@ -2,108 +2,242 @@
 <html lang="tr">
 <head>
 {% include "_stil.html" %}
+{% import "_ikon.html" as i %}
 <title>Günlük rapor</title>
 <style>
-.date{color:var(--ink-2); margin:0 0 4px}
-.status{font-size:15px; color:var(--ink-2); margin:0 0 28px}
-.status b{color:var(--ink); font-weight:600}
-section{margin:0 0 30px}
-h2 small{font-size:15px; font-weight:400; color:var(--ink-2); margin-left:auto}
-h2 small button{font-size:15px; padding:0; background:none; border:0; color:var(--accent); cursor:pointer}
-ul{list-style:none; margin:0; padding:0; background:var(--paper); border:1px solid var(--line); border-radius:10px}
-li{display:flex; align-items:flex-start; gap:10px; padding:10px 12px; border-top:1px solid var(--line)}
-li:first-child{border-top:0}
-li.off .txt{color:var(--ink-2)}
-li input[type=checkbox]{width:22px; height:22px; margin:2px 0 0; accent-color:var(--accent); flex:none}
-.txt{flex:1; cursor:pointer; min-width:0; overflow-wrap:anywhere}
-.txt .alt{color:var(--ink-2); font-size:14px; display:block}
-.stage{font-style:italic; color:var(--ink-2)}
-.tools{display:flex; gap:4px; flex:none}
-.tools button{background:none; border:0; color:var(--ink-2); font-size:17px; padding:2px 6px; cursor:pointer; border-radius:6px}
-.tools button:hover{color:var(--ink); background:var(--bg)}
-.tools button.del:hover{color:var(--danger)}
-.empty{padding:14px 12px; color:var(--ink-2)}
-.src{display:inline-block; margin-left:6px; padding:0 6px; border:1px solid var(--line); border-radius:999px; font-size:12px; line-height:18px; color:var(--ink-2); vertical-align:1px; white-space:nowrap}
-button.src{background:none; font-family:inherit; cursor:pointer}
-.aiPanel{display:block; margin-top:4px; font-size:14px; color:var(--ink-2); cursor:default}
-.aiPanel button{background:none; border:0; padding:0; margin-right:12px; font:inherit; color:var(--accent); cursor:pointer}
-.add{display:flex; gap:8px; margin-top:8px}
+/* telefon koyu bandı (Bugün) */
+.bant.bugunBant{flex-direction:column; align-items:stretch; gap:16px; padding:calc(22px + env(safe-area-inset-top)) 20px 22px; border-radius:0 0 28px 28px}
+.bantUst{display:flex; align-items:center; justify-content:space-between}
+.gunAdi{font-size:13px; color:var(--dark-ink-2); font-weight:500}
+.cipler{display:flex; gap:8px; flex-wrap:wrap}
+.chip{display:flex; align-items:center; gap:8px; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.14); border-radius:12px; padding:8px 10px; color:#fff; font-size:12.5px; font-weight:500; white-space:nowrap}
+.chip b{font-size:16px; font-weight:700}
+.chip.saat{margin-left:auto; background:var(--warn-dark); border-color:var(--warn-line); color:var(--warn)}
+.chip.saat::before{content:""; width:7px; height:7px; border-radius:50%; background:currentColor}
+.chip.saat.tamam{background:var(--ok-dark); border-color:var(--ok-line); color:#5ee07a}
+
+.tarihSatiri{display:none}
+.bugun{display:flex; flex-direction:column; gap:18px}
+.solKolon{display:flex; flex-direction:column; gap:18px; min-width:0}
+.izgara{display:flex; flex-direction:column; gap:18px}
+.hucre{display:flex; flex-direction:column; gap:18px}
+
+/* satır parçaları */
+.txt.tikla{cursor:pointer}
+.araclar{display:flex; gap:2px; flex:none; margin:-3px -6px 0 0}
+.arac{width:30px; height:30px; border:0; border-radius:8px; background:none; color:var(--ink-3); display:flex; align-items:center; justify-content:center; cursor:pointer}
+.arac:hover{background:var(--field); color:var(--ink)}
+.arac.sil:hover{color:var(--danger)}
+.bitti{width:34px; height:34px; border-radius:10px; border:1px solid var(--count); background:var(--paper); color:var(--accent); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none}
+.bitti:hover{background:var(--accent-bg)}
+label.tile{cursor:pointer; position:relative}
+label.tile input{position:absolute; opacity:0; inset:0; margin:0; cursor:pointer}
+.off label.t-devam{background:var(--field); color:var(--ink-3)}
+label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offset:2px}
+.ai{display:inline-flex; align-items:center; gap:4px; font:inherit; font-size:11.5px; font-weight:600; color:var(--accent); background:none; border:0; padding:0; cursor:pointer}
+.ai .soluk{color:var(--ink-2); font-weight:400}
+.asama{font:inherit; font-size:12px; color:var(--ink-2); background:none; border:0; padding:0; cursor:pointer; text-align:left}
+.asama:hover{color:var(--ink)}
+.aiPanel{display:block; margin-top:8px; padding:10px 12px; border-radius:12px; background:var(--sub); font-size:13px; color:var(--ink-2); cursor:default}
+.aiPanel .secim{display:flex; gap:14px; margin-top:6px}
+.ekle{display:flex; gap:8px; padding:10px 12px 12px}
+.ekle input{flex:1; min-width:0}
+.ekle .arti{width:44px; height:44px; border:0; border-radius:12px; background:var(--btn); color:var(--btn-ink); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none}
+.liste:not(:empty) + .ekle{border-top:1px solid var(--line)}
+.hataKutu{display:flex; flex-direction:column; gap:6px; padding:12px 12px 0}
+.durumSatiri{padding:12px 14px 0}
+
+/* rapor önizleme */
 .bubble{
-  background:var(--bubble); color:var(--bubble-ink); border-radius:14px 14px 14px 4px;
-  padding:14px 16px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:16px; line-height:1.5;
-  min-height:80px;
+  background:var(--bubble); color:var(--bubble-ink); border-radius:16px 16px 16px 4px;
+  padding:14px 16px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:14.5px; line-height:1.5; min-height:80px;
 }
 .bubble b{font-weight:700}
-.actions{display:flex; gap:10px; margin-top:12px; flex-wrap:wrap}
-.actions button{flex:1}
+.raporKart{padding:14px}
+.raporKart .hint{margin:0 2px 10px}
+.dahaFazla{display:block; margin-top:8px; font:inherit; font-size:13.5px; font-weight:600; color:var(--bubble-ink); opacity:.75; background:none; border:0; padding:0; cursor:pointer}
+.raporAlt{display:none}
+.raporBaslik .meta{margin-top:2px}
+.kopyalaKucuk{width:36px; height:36px; border:0; border-radius:10px; background:var(--field); color:var(--ink); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none}
+
+@media (max-width:760px){
+  main{padding-bottom:calc(170px + env(safe-area-inset-bottom))}
+  .raporBaslik .kopyalaKucuk{display:none}
+  .araclar{flex-direction:column; margin:-5px -8px -5px -6px}
+  .arac{width:28px; height:28px}
+  .sadeceMasaustu{display:none !important}
+}
+@media (min-width:761px){
+  main{max-width:1440px; display:block}
+  .sadeceTelefon{display:none !important}
+  .bugun{display:grid; grid-template-columns:minmax(0,1fr) 440px; gap:24px; align-items:start}
+  .tarihSatiri{display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap}
+  .tarihSatiri .gunAdi{color:var(--ink-2)}
+  .tarihSatiri .cipler{align-items:center}
+  .beyazCip{display:flex; align-items:center; gap:8px; background:var(--paper); border-radius:12px; padding:8px 12px; font-size:12.5px; font-weight:500; color:var(--ink-2); white-space:nowrap}
+  .beyazCip b{font-size:16px; color:var(--ink)}
+  .tarihSatiri .link{height:36px; padding:0 14px; border-radius:12px; background:var(--paper); margin-left:6px; font-size:13px}
+  .izgara{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:18px}
+  /* masaüstünde bölüm başlığı kartın içine girer */
+  .blok, .hucre{background:var(--paper); border-radius:20px; box-shadow:var(--shadow)}
+  .hucre{gap:0}
+  .hucre > .blok{box-shadow:none; background:none; border-radius:0}
+  .hucre > .blok + .blok{border-top:1px solid var(--line)}
+  .blok > .card{background:none; box-shadow:none; border-radius:0}
+  .blok > .sec{padding:14px 18px 8px}
+  .blok > .sec h2{font-size:15.5px}
+  #yarinBlok > .sec{padding:12px 18px 6px}
+  #yarinBlok > .sec h2{font-size:13px; font-weight:600; letter-spacing:0}
+  #yarinBlok .row{padding-top:0}
+  .row{padding:11px 18px}
+  .txt{font-size:14px; line-height:1.45}
+  input.ck{width:22px; height:22px; border-radius:7px; background-size:12px}
+  .tile{width:32px; height:32px; border-radius:9px}
+  .ekle{padding:10px 14px 14px}
+  .ekle input{font-size:13.5px; padding:10px 14px}
+  .ekle .arti{width:42px; height:42px}
+  .link{font-size:13px}
+  #plan{font-size:13.5px; min-height:52px}
+  .bitti{width:32px; height:32px; border-radius:9px}
+  .hataKutu{padding:0 18px}
+  /* sağda yapışkan rapor paneli */
+  .raporPanel{position:sticky; top:86px; height:calc(100vh - 86px - 28px); min-height:420px; display:flex; flex-direction:column; overflow:hidden}
+  .raporPanel > .sec{padding:18px 18px 10px; align-items:flex-start}
+  .raporPanel > .sec h2{font-size:15.5px}
+  .raporKart{flex:1; min-height:0; display:flex; flex-direction:column; padding:0}
+  .raporKart .hint{margin:0 18px 8px}
+  .raporKart .bubble{flex:1; min-height:0; overflow:auto; margin:0 14px; font-size:13.5px; line-height:1.55}
+  .raporAlt{display:flex; gap:10px; padding:14px}
+  .raporAlt .secondary{flex:1}
+  .raporAlt .primary{flex:1.4}
+}
 </style>
 </head>
-<body>
+<body class="eylemli">
+{% set aktif = 'bugun' %}
+{% include "_ust.html" %}
+
+<div class="bant bugunBant">
+  <div class="bantUst">
+    <a class="marka" href="/"><i>{{ i.ikon('tik', 16, 2.6) }}</i>Rapor</a>
+    <a class="avatar" href="/ayarlar" aria-label="Ayarlar">{{ kullanici.ad[:1]|upper }}</a>
+  </div>
+  <div><div class="gunAdi" data-gun-adi></div><h1 data-tarih>Günlük rapor</h1></div>
+  <div class="cipler">
+    <div class="chip"><b data-say="yapilan">0</b>yapılan</div>
+    <div class="chip"><b data-say="eposta">0</b>e-posta</div>
+    <div class="chip"><b data-say="commit">0</b>commit</div>
+    <div class="chip saat" id="saatCip">17:00</div>
+  </div>
+</div>
+
 <main>
-  {% include "_ust.html" %}
-  <h1>Günlük rapor</h1>
-  <p class="date" id="dateLine"></p>
-  <p class="status" id="statusLine"></p>
-  <p class="warn" id="loadError" role="alert" hidden></p>
+  <p class="uyari" id="loadError" role="alert" hidden></p>
+  <div class="bugun">
+    <div class="solKolon">
+      <div class="tarihSatiri">
+        <div><div class="gunAdi" data-gun-adi></div><h1 data-tarih>Günlük rapor</h1></div>
+        <div class="cipler">
+          <div class="beyazCip"><b data-say="yapilan">0</b>yapılan</div>
+          <div class="beyazCip"><b data-say="eposta">0</b>e-posta</div>
+          <div class="beyazCip"><b data-say="commit">0</b>commit</div>
+          <button class="link" type="button" data-eylem="yenile">{{ i.ikon('yenile', 14, 2.2) }}Yenile</button>
+        </div>
+      </div>
 
-  <section>
-    <h2>Bugün yapılanlar</h2>
-    <p class="hint">Her madde ayrı satır. Gün değişince temizlenir.</p>
-    <ul id="doneList"></ul>
-    <div class="add"><input type="text" id="doneNew" placeholder="MSG'ye Ağustos itirazı gönderildi"><button class="primary" id="doneAdd">Ekle</button></div>
-  </section>
+      <div class="izgara">
+        <section class="blok">
+          <div class="sec"><div class="baslik"><h2>Bugün yapılanlar</h2><span class="cnt" id="doneCnt">0</span></div><button class="link" type="button" data-eylem="duzelt"><span class="etiket">Claude ile düzelt</span></button></div>
+          <div class="card">
+            <div class="liste" id="doneList"></div>
+            <div class="ekle">
+              <label for="doneNew" class="gizli-etiket">Yeni madde</label>
+              <input type="text" id="doneNew" placeholder="Bugün ne yaptın?">
+              <button class="arti" id="doneAdd" type="button" aria-label="Ekle">{{ i.ikon('arti', 18, 2.4) }}</button>
+            </div>
+          </div>
+        </section>
 
-  <section>
-    <h2>Bugün bulunanlar <small><span id="hiddenInfo"></span><button id="foundRefresh">Yenile</button></small></h2>
-    <div id="foundErrors"></div>
-    <p class="hint" id="foundStatus">Taranıyor…</p>
-    <ul id="foundList"></ul>
-  </section>
+        <section class="blok">
+          <div class="sec"><div class="baslik"><h2>Bulunanlar</h2><span class="cnt" id="foundCnt">0</span></div><div style="display:flex; gap:12px; align-items:center"><span id="hiddenInfo"></span><button class="link sadeceTelefon" type="button" data-eylem="yenile">{{ i.ikon('yenile', 14, 2.2) }}Yenile</button></div></div>
+          <div class="card">
+            <div class="hataKutu" id="foundErrors"></div>
+            <p class="hint durumSatiri" id="foundStatus">Taranıyor…</p>
+            <div class="liste" id="foundList"></div>
+          </div>
+        </section>
 
-  <section>
-    <h2>Sürekli işler <small><button id="allOn">hepsi</button> · <button id="allOff">hiçbiri</button></small></h2>
-    <p class="hint">Tikli olanlar rapora girer. Metinde <b>|</b> ile ayırırsan her gün farklı ifade seçilir.</p>
-    <ul id="recurringList"></ul>
-    <div class="add"><input type="text" id="recurringNew" placeholder="Yeni sürekli iş"><button class="primary" id="recurringAdd">Ekle</button></div>
-  </section>
+        <section class="blok">
+          <div class="sec"><div class="baslik"><h2>Sürekli işler</h2><span class="cnt" id="recurringCnt">0</span></div><div style="display:flex; gap:12px"><button class="link" type="button" id="allOn">hepsi</button><button class="link soluk" type="button" id="allOff">hiçbiri</button></div></div>
+          <div class="card">
+            <div class="liste" id="recurringList"></div>
+            <div class="ekle">
+              <label for="recurringNew" class="gizli-etiket">Yeni sürekli iş</label>
+              <input type="text" id="recurringNew" placeholder="Yeni sürekli iş ( | ile dönüşümlü ifade)">
+              <button class="arti" id="recurringAdd" type="button" aria-label="Sürekli iş ekle">{{ i.ikon('arti', 18, 2.4) }}</button>
+            </div>
+          </div>
+        </section>
 
-  <section>
-    <h2>Devam eden işler</h2>
-    <p class="hint">Bitene kadar her gün görünür. Aşamayı tıklayıp güncelle; bitince ✓ ile bugünün yapılanlarına geçer.</p>
-    <ul id="ongoingList"></ul>
-    <div class="add"><input type="text" id="ongoingNew" placeholder="Yeni iş — aşama"><button class="primary" id="ongoingAdd">Ekle</button></div>
-  </section>
-
-  <section>
-    <h2>Yarın</h2>
-    <textarea id="plan" style="min-height:70px" placeholder="İsteğe bağlı"></textarea>
-  </section>
-
-  <section>
-    <h2>Rapor <small><button id="duzeltBtn">Claude ile düzelt</button></small></h2>
-    <p class="hint" id="duzeltDurum" role="status" hidden></p>
-    <div class="bubble" id="preview"></div>
-    <div class="actions">
-      <button class="primary" id="copyBtn">Kopyala</button>
-      <button class="secondary" id="waBtn">WhatsApp'ta aç</button>
+        <div class="hucre">
+          <section class="blok">
+            <div class="sec"><div class="baslik"><h2>Devam eden</h2><span class="cnt" id="ongoingCnt">0</span></div><button class="link" type="button" id="ongoingFocus">+ Ekle</button></div>
+            <div class="card">
+              <div class="liste" id="ongoingList"></div>
+              <div class="ekle">
+                <label for="ongoingNew" class="gizli-etiket">Yeni devam eden iş</label>
+                <input type="text" id="ongoingNew" placeholder="Yeni iş — aşama">
+                <button class="arti" id="ongoingAdd" type="button" aria-label="Devam eden iş ekle">{{ i.ikon('arti', 18, 2.4) }}</button>
+              </div>
+            </div>
+          </section>
+          <section class="blok" id="yarinBlok">
+            <div class="sec"><div class="baslik"><h2><label for="plan">Yarın</label></h2></div></div>
+            <div class="card"><div class="row dikey"><textarea id="plan" placeholder="İsteğe bağlı" style="min-height:70px"></textarea></div></div>
+          </section>
+        </div>
+      </div>
     </div>
-    <p class="hint" style="margin-top:10px">Rapor başlığı ve WhatsApp numarası <a href="/ayarlar">Ayarlar</a>'da. Kopyalanan raporlar <a href="/gecmis">Geçmiş</a>'te.</p>
-  </section>
+
+    <aside class="blok raporPanel">
+      <div class="sec raporBaslik">
+        <div><h2>Rapor</h2><div class="meta">Tikli maddelerden canlı üretilir</div></div>
+        <button class="kopyalaKucuk" type="button" data-eylem="kopyala" aria-label="Kopyala" title="Kopyala">{{ i.ikon('kopyala', 16) }}</button>
+      </div>
+      <div class="card raporKart">
+        <p class="hint" id="duzeltDurum" role="status" hidden></p>
+        <div class="bubble" id="preview"></div>
+        <div class="raporAlt">
+          <button class="secondary" type="button" data-eylem="duzelt"><span class="etiket">Claude ile düzelt</span></button>
+          <button class="primary" type="button" data-eylem="wa"><span class="wa-ikon">{{ i.ikon('wa', 17) }}</span><span class="etiket">WhatsApp'ta aç</span></button>
+        </div>
+      </div>
+    </aside>
+  </div>
 </main>
 <div class="toast" id="toast"></div>
+
+<template id="ikonlar">
+  {{ i.ikon('tik', 15, 2.4) }}{{ i.ikon('zarf', 17) }}{{ i.ikon('dal', 17) }}{{ i.ikon('saat', 17) }}
+  {{ i.ikon('kalem', 15) }}{{ i.ikon('carpi', 15) }}{{ i.ikon('kivilcim', 11, 2.4) }}
+</template>
 
 <script>
 // Service worker yalnız bildirimler için; sayfa önbelleği yok.
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 const ESKI_ANAHTARLAR = ['gunluk-rapor-v2', 'gunluk-rapor-v1'];
-const trDate = d => d.toLocaleDateString('tr-TR', { day:'numeric', month:'long', year:'numeric', weekday:'long' });
 const shortDate = d => d.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric' });
+const saatBicimi = z => new Date(z).toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' });
 
 // Sunucudaki durumun sayfadaki kopyası. Her değişiklik önce burada yapılır, sonra ilgili uca yazılır.
 const S = { tarih:null, elle:[], surekli:[], devam:[], bugun:{ yarin:null }, metin:{ yarin:'' }, bulunan:[], ayarlar:{}, aiAnahtari:false, sonKopya:null };
 
 const $ = id => document.getElementById(id);
+const hepsiniBul = eylem => [...document.querySelectorAll(`[data-eylem="${eylem}"]`)];
+const telefon = matchMedia('(max-width:760px)');
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
+function ikon(ad){ return $('ikonlar').content.querySelector(`[data-ad="${ad}"]`).cloneNode(true); }
+function el(etiket, sinif, metin){ const e=document.createElement(etiket); if(sinif) e.className=sinif; if(metin!==undefined) e.textContent=metin; return e; }
 
 async function api(yol, yontem = 'GET', govde, ek = {}){
   const r = await fetch(yol, {
@@ -148,20 +282,50 @@ function buildReport(){
   return out.join('\n').trim();
 }
 
+// Telefonda önizleme kırpılır; "N madde daha" ile tamamı açılır.
+const ONIZLEME_SATIR = 9;
+let onizlemeAcik = false;
 function renderPreview(){
   const txt = buildReport();
   const esc = s => s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-  $('preview').innerHTML = esc(txt).replace(/\*([^*\n]+)\*/g,'<b>$1</b>');
+  const bic = s => esc(s).replace(/\*([^*\n]+)\*/g,'<b>$1</b>');
+  const satirlar = txt.split('\n');
+  const kalan = satirlar.slice(ONIZLEME_SATIR).filter(x => x.startsWith('• ')).length;
+  if (telefon.matches && !onizlemeAcik && kalan){
+    $('preview').innerHTML = bic(satirlar.slice(0, ONIZLEME_SATIR).join('\n').trimEnd());
+    const b = el('button', 'dahaFazla', `${kalan} madde daha`); b.type = 'button';
+    b.onclick = () => { onizlemeAcik = true; renderPreview(); };
+    $('preview').appendChild(b);
+  } else {
+    $('preview').innerHTML = bic(txt);
+  }
 }
+telefon.addEventListener('change', renderPreview);
 
+const TR_GUN = { weekday:'long' }, TR_TARIH = { day:'numeric', month:'long' };
 function renderStatus(){
-  $('dateLine').textContent = trDate(new Date());
-  $('statusLine').innerHTML = S.sonKopya
-    ? `Bugün <b>${new Date(S.sonKopya).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})}</b>'de kopyalandı.`
-    : 'Bugünkü rapor henüz kopyalanmadı.';
+  const d = new Date();
+  document.querySelectorAll('[data-gun-adi]').forEach(e => e.textContent = d.toLocaleDateString('tr-TR', TR_GUN));
+  document.querySelectorAll('[data-tarih]').forEach(e => e.textContent = d.toLocaleDateString('tr-TR', TR_TARIH));
+  const gorunen = S.bulunan.filter(it => !it.gizli);
+  const sayilar = {
+    yapilan: S.elle.filter(m => m.tikli).length,
+    eposta: gorunen.filter(it => it.kaynak !== 'medusa').length,
+    commit: gorunen.filter(it => it.kaynak === 'medusa').length,
+  };
+  document.querySelectorAll('[data-say]').forEach(e => e.textContent = sayilar[e.dataset.say]);
+  const saat = S.ayarlar.hatirlatma_saat || '17:00';
+  const cip = $('saatCip');
+  cip.classList.toggle('tamam', !!S.sonKopya);
+  cip.textContent = S.sonKopya ? `Gönderildi ${saatBicimi(S.sonKopya)}` : saat;
+  window.durumRozeti(S.sonKopya, saat);
 }
 
-const tool = (tools, label, title, fn, cls) => { const b=document.createElement('button'); b.textContent=label; b.title=title; b.onclick=fn; if(cls) b.className=cls; tools.appendChild(b); };
+const tool = (tools, ad, title, fn, cls) => {
+  const b = el('button', 'arac' + (cls ? ' ' + cls : '')); b.type = 'button';
+  b.title = title; b.setAttribute('aria-label', title); b.appendChild(ikon(ad));
+  b.onclick = e => { e.stopPropagation(); fn(); }; tools.appendChild(b);
+};
 
 // --- Claude düzeltmesi: "düzeltildi" etiketi ve orijinal/AI seçimi ---
 const acikPaneller = new Set();
@@ -171,78 +335,109 @@ function aiSec(m, govde){
     if (y.hatalar && y.hatalar.length) toast(y.hatalar[0]);
   }).catch(e => toast('Olmadı: ' + e.message));
 }
-function aiPaneli(m, txt){
+// meta: etiketin ekleneceği meta satırı; txt: panelin açılacağı metin kutusu.
+function aiPaneli(m, meta, txt){
   const surekli = m.tur === 'surekli';
   if (surekli ? !m.gunun_ifadesi : (!m.metin_ai || m.kullanici_duzenledi)) return;
   const acik = m.ai_kullan !== false;
-  if (surekli){
-    const a = document.createElement('span'); a.className = 'alt';
-    a.textContent = (acik ? 'bugün: ' : 'bugün (kullanılmıyor): ') + m.gunun_ifadesi;
-    txt.appendChild(a);
-  }
-  const etiket = document.createElement('button'); etiket.type = 'button'; etiket.className = 'src';
-  etiket.textContent = acik ? 'düzeltildi' : 'orijinal';
+  if (surekli) meta.appendChild(el('span', '', (acik ? 'Bugün: ' : 'Bugün (kullanılmıyor): ') + m.gunun_ifadesi));
+  const etiket = el('button', 'ai'); etiket.type = 'button';
+  etiket.appendChild(ikon('kivilcim'));
+  etiket.append(acik ? 'düzeltildi' : 'orijinal');
+  etiket.appendChild(el('span', 'soluk', acikPaneller.has(m.id) ? ' · gizle' : (acik ? ' · orijinali gör' : ' · Claude metnini gör')));
   etiket.title = 'Orijinali göster';
   etiket.onclick = e => { e.stopPropagation(); acikPaneller.has(m.id) ? acikPaneller.delete(m.id) : acikPaneller.add(m.id); render(); };
-  txt.appendChild(etiket);
+  meta.appendChild(etiket);
   if (!acikPaneller.has(m.id)) return;
-  const p = document.createElement('span'); p.className = 'aiPanel';
+  const p = el('span', 'aiPanel');
   p.onclick = e => e.stopPropagation();
   p.appendChild(document.createTextNode(acik
     ? `Orijinal: ${surekli ? variantOf(m.metin) : hamMetin(m)}`
     : `Claude: ${surekli ? m.gunun_ifadesi : m.metin_ai}`));
-  const satir = document.createElement('span'); satir.style.display = 'block';
-  const b = (label, fn) => { const x=document.createElement('button'); x.type='button'; x.textContent=label; x.onclick=fn; satir.appendChild(x); };
+  const satir = el('span', 'secim');
+  const b = (label, fn) => { const x = el('button', 'link', label); x.type='button'; x.onclick=fn; satir.appendChild(x); };
   b(acik ? 'Orijinali kullan' : 'AI metnini kullan', () => aiSec(m, { kullan: !acik }));
   if (S.aiAnahtari) b('Yeniden düzelt', () => aiSec(m, { yenile: true }));
   p.appendChild(satir); txt.appendChild(p);
 }
 
+function onayKutusu(item, satir, etiket){
+  const cb = el('input', 'ck'); cb.type='checkbox'; cb.checked=item.tikli; cb.setAttribute('aria-label', etiket);
+  cb.onchange = () => { satir.classList.toggle('off', !cb.checked); guncelle(item, { tikli: cb.checked }); renderPreview(); renderStatus(); };
+  return cb;
+}
+
 function row(item, kind){
-  const li = document.createElement('li'); if (!item.tikli) li.classList.add('off');
-  const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=item.tikli;
-  cb.onchange = () => { li.classList.toggle('off', !cb.checked); guncelle(item, { tikli: cb.checked }); renderPreview(); };
-  const txt = document.createElement('div'); txt.className='txt';
+  const li = el('div', 'row'); if (!item.tikli) li.classList.add('off');
+  const txt = el('div', 'txt tikla');
+  const meta = el('div', 'meta');
+  let sol;
+  const cb = onayKutusu(item, li, 'Rapora ekle');
+  if (kind === 'devam'){
+    sol = el('label', 'tile t-devam'); sol.title = 'Rapora ekle';
+    sol.append(cb, ikon('saat'));
+  } else sol = cb;
+
   if (kind==='surekli'){
     txt.textContent = variantOf(item.metin);
-    if (item.metin.includes('|')) { const a=document.createElement('span'); a.className='alt'; a.textContent='bugünkü ifade · dönüşümlü'; txt.appendChild(a); }
+    if (item.metin.includes('|') && !item.gunun_ifadesi) meta.appendChild(el('span', '', 'bugünkü ifade · dönüşümlü'));
   } else if (aiKullaniliyor(item)) {
     txt.textContent = item.metin_ai;
   } else {
     txt.textContent = item.metin;
-    if (item.asama){ txt.appendChild(document.createTextNode(' ')); const s=document.createElement('span'); s.className='stage'; s.textContent='— '+item.asama; txt.appendChild(s); }
   }
-  aiPaneli(item, txt);
+  const asamaDuzenle = () => { const s = prompt('Aşama:', item.asama||''); if (s!==null){ guncelle(item, { asama: s.trim() }); render(); } };
+  if (kind === 'devam' && !aiKullaniliyor(item)){
+    const a = el('button', 'asama', item.asama || 'aşama ekle'); a.type = 'button'; a.title = 'Aşamayı güncelle';
+    a.onclick = e => { e.stopPropagation(); asamaDuzenle(); };
+    meta.appendChild(a);
+  }
+  txt.appendChild(meta);
+  aiPaneli(item, meta, txt);
+  if (!meta.childNodes.length) meta.remove();
   txt.onclick = () => cb.click();
-  const tools = document.createElement('div'); tools.className='tools';
+
+  const tools = el('div', 'araclar');
   if (kind==='devam'){
-    tool(tools, '✓','Bitti — bugünün yapılanlarına geç', async () => {
-      S.devam = S.devam.filter(o=>o!==item); render();
-      await ekleElle(item.metin + ' tamamlandı'); sil(item);
-    });
-    tool(tools, '✎','Aşamayı güncelle', () => { const s = prompt('Aşama:', item.asama||''); if (s!==null){ guncelle(item, { asama: s.trim() }); render(); } });
+    tool(tools, 'kalem','Aşamayı güncelle', asamaDuzenle);
   } else if (kind==='surekli') {
-    tool(tools, '✎','Metni düzenle', () => { const s = prompt('Metin ( | ile dönüşümlü ifadeler):', item.metin); if (s && s.trim() && s.trim() !== item.metin){ guncelle(item, { metin: s.trim() }); render(); } });
+    tool(tools, 'kalem','Metni düzenle', () => { const s = prompt('Metin ( | ile dönüşümlü ifadeler):', item.metin); if (s && s.trim() && s.trim() !== item.metin){ guncelle(item, { metin: s.trim() }); render(); } });
   } else {
-    tool(tools, '✎','Metni düzenle', () => { const eski = raporMetni(item); const s = prompt('Metin:', eski); if (s && s.trim() && s.trim() !== eski){ guncelle(item, { metin: s.trim() }); render(); } });
+    tool(tools, 'kalem','Metni düzenle', () => { const eski = raporMetni(item); const s = prompt('Metin:', eski); if (s && s.trim() && s.trim() !== eski){ guncelle(item, { metin: s.trim() }); render(); } });
   }
-  tool(tools, '×','Sil', () => {
+  tool(tools, 'carpi','Sil', () => {
     if (!confirm('Silinsin mi?')) return;
     S[kind] = S[kind].filter(x=>x!==item); sil(item); render();
-  }, 'del');
-  li.append(cb, txt, tools); return li;
+  }, 'sil');
+  li.append(sol, txt, tools);
+  if (kind==='devam'){
+    const bitti = el('button', 'bitti'); bitti.type = 'button';
+    bitti.title = 'Bitti — bugünün yapılanlarına geç'; bitti.setAttribute('aria-label', bitti.title);
+    bitti.appendChild(ikon('tik'));
+    bitti.onclick = async () => {
+      S.devam = S.devam.filter(o=>o!==item); render();
+      await ekleElle(item.metin + ' tamamlandı'); sil(item);
+    };
+    li.appendChild(bitti);
+  }
+  return li;
 }
+
+function bosSatir(metin){ return el('div', 'bos', metin); }
 
 function render(){
   const dl = $('doneList'); dl.innerHTML='';
-  if (!S.elle.length) dl.innerHTML = '<li class="empty">Henüz madde yok.</li>';
+  if (!S.elle.length) dl.appendChild(bosSatir('Henüz madde yok.'));
   S.elle.forEach(m => dl.appendChild(row(m,'elle')));
+  $('doneCnt').textContent = S.elle.length;
   const rl = $('recurringList'); rl.innerHTML='';
-  if (!S.surekli.length) rl.innerHTML = '<li class="empty">Henüz sürekli iş yok.</li>';
+  if (!S.surekli.length) rl.appendChild(bosSatir('Henüz sürekli iş yok.'));
   S.surekli.forEach(r => rl.appendChild(row(r,'surekli')));
+  $('recurringCnt').textContent = `${S.surekli.filter(r => r.tikli).length} / ${S.surekli.length}`;
   const ol = $('ongoingList'); ol.innerHTML='';
-  if (!S.devam.length) ol.innerHTML = '<li class="empty">Devam eden iş yok. Örn: MSG Ağustos itirazı — yanıt bekleniyor</li>';
+  if (!S.devam.length) ol.appendChild(bosSatir('Devam eden iş yok. Örn: MSG Ağustos itirazı — yanıt bekleniyor'));
   S.devam.forEach(o => ol.appendChild(row(o,'devam')));
+  $('ongoingCnt').textContent = S.devam.length;
   if (document.activeElement !== $('plan')) $('plan').value = S.metin.yarin;
   renderStatus(); renderFound(); renderPreview();
 }
@@ -298,11 +493,12 @@ function duzeltilmemisVar(){
     || S.bulunan.some(m => !m.gizli && bekleyen(m))
     || S.surekli.some(m => m.tikli && !m.gunun_ifadesi);
 }
-function duzeltDurum(metin){ $('duzeltDurum').textContent = metin; $('duzeltDurum').hidden = !metin; }
+function duzeltDurum(metin){ $('duzeltDurum').textContent = metin; $('duzeltDurum').hidden = !metin; if (metin && telefon.matches) toast(metin); }
+const dugmeleriKilitle = (eylem, kilitli) => hepsiniBul(eylem).forEach(b => b.disabled = kilitli);
 let duzeltSurmekte = null;
 function duzeltCalistir(){
   if (duzeltSurmekte) return duzeltSurmekte;
-  $('duzeltBtn').disabled = true; duzeltDurum('Düzeltiliyor…');
+  dugmeleriKilitle('duzelt', true); duzeltDurum('Düzeltiliyor…');
   duzeltSurmekte = (async () => {
     try {
       const d = await api('/api/duzelt', 'POST');
@@ -313,7 +509,7 @@ function duzeltCalistir(){
     } catch (e) {
       duzeltDurum('Düzeltilemedi: ' + e.message);
     } finally {
-      $('duzeltBtn').disabled = false; duzeltSurmekte = null;
+      dugmeleriKilitle('duzelt', false); duzeltSurmekte = null;
     }
   })();
   return duzeltSurmekte;
@@ -321,8 +517,9 @@ function duzeltCalistir(){
 // Kopyalamadan önce: anahtar varsa ve düzeltilmemiş madde varsa önce düzelt; hata olursa ham metinle devam.
 async function hazirRapor(dugme){
   if (S.aiAnahtari && duzeltilmemisVar()){
-    const eski = dugme.textContent; dugme.textContent = 'Düzeltiliyor…';
-    try { await duzeltCalistir(); } finally { dugme.textContent = eski; }
+    const etiket = dugme.querySelector('.etiket');
+    const eski = etiket && etiket.textContent; if (etiket) etiket.textContent = 'Düzeltiliyor…';
+    try { await duzeltCalistir(); } finally { if (etiket) etiket.textContent = eski; }
   }
   return buildReport();
 }
@@ -338,8 +535,8 @@ function eskiYontemleKopyala(txt){
   const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
   const ok = document.execCommand('copy'); ta.remove(); return ok;
 }
-async function copyReport(){
-  const btn = $('copyBtn'); btn.disabled = true;
+async function copyReport(btn){
+  dugmeleriKilitle('kopyala', true);
   // Pano yazımı tıklama anında başlar (Safari, beklemeden sonra izni düşürür); metin düzeltme bitince gelir.
   const metinSozu = hazirRapor(btn);
   let txt = null;
@@ -359,10 +556,10 @@ async function copyReport(){
     if (txt === null) { toast('Kopyalanamadı — metni elle seç'); return; }
     toast('Kopyalandı');
     await raporuKaydet(txt);
-  } finally { btn.disabled = false; }
+  } finally { dugmeleriKilitle('kopyala', false); }
 }
-async function openWa(){
-  const btn = $('waBtn'); btn.disabled = true;
+async function openWa(btn){
+  dugmeleriKilitle('wa', true);
   const pencere = window.open('', '_blank');  // tıklama anında açılır; yoksa pop-up engeline takılır
   try {
     const txt = await hazirRapor(btn);
@@ -370,7 +567,7 @@ async function openWa(){
     const url = p ? `https://wa.me/${p}?text=${encodeURIComponent(txt)}` : `https://wa.me/?text=${encodeURIComponent(txt)}`;
     if (pencere) pencere.location.href = url; else location.href = url;
     await raporuKaydet(txt);
-  } finally { btn.disabled = false; }
+  } finally { dugmeleriKilitle('wa', false); }
 }
 
 // --- Bugün bulunanlar (Gmail + GitHub) ---
@@ -380,38 +577,40 @@ function renderFound(){
   const ul = $('foundList'); ul.innerHTML = '';
   const visible = S.bulunan.filter(it => !it.gizli);
   const hidden = S.bulunan.filter(it => it.gizli);
+  $('foundCnt').textContent = visible.length;
   $('hiddenInfo').innerHTML = '';
   if (hidden.length){
-    const b = document.createElement('button'); b.textContent = `${hidden.length} gizli · geri al`;
-    b.onclick = () => { hidden.forEach(it => guncelle(it, { gizli:false })); renderFound(); renderPreview(); };
-    $('hiddenInfo').append(b, document.createTextNode(' · '));
+    const b = el('button', 'link soluk', `${hidden.length} gizli · geri al`); b.type = 'button';
+    b.onclick = () => { hidden.forEach(it => guncelle(it, { gizli:false })); renderFound(); renderPreview(); renderStatus(); };
+    $('hiddenInfo').append(b);
   }
-  if (S.bulunanYuklendi && !visible.length){ ul.innerHTML = '<li class="empty">Bugün için bulunan madde yok.</li>'; return; }
+  if (S.bulunanYuklendi && !visible.length){ ul.appendChild(bosSatir('Bugün için bulunan madde yok.')); return; }
   visible.forEach(it => {
-    const li = document.createElement('li'); if (!it.tikli) li.classList.add('off');
-    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = it.tikli;
-    cb.onchange = () => { li.classList.toggle('off', !cb.checked); guncelle(it, { tikli: cb.checked }); renderPreview(); };
-    const txt = document.createElement('div'); txt.className='txt'; txt.textContent = aiKullaniliyor(it) ? it.metin_ai : it.metin;
-    const tag = document.createElement('span'); tag.className='src'; tag.textContent = it.kaynak === 'medusa' ? projeEtiketi() : 'e-posta';
-    txt.appendChild(tag);
-    aiPaneli(it, txt);
+    const li = el('div', 'row'); if (!it.tikli) li.classList.add('off');
+    const medusa = it.kaynak === 'medusa';
+    const tile = el('div', 'tile ' + (medusa ? 't-git' : 't-gmail')); tile.appendChild(ikon(medusa ? 'dal' : 'zarf'));
+    const cb = onayKutusu(it, li, 'Rapora ekle');
+    const txt = el('div', 'txt tikla'); txt.textContent = aiKullaniliyor(it) ? it.metin_ai : it.metin;
+    const meta = el('div', 'meta'); meta.appendChild(el('span', '', medusa ? projeEtiketi() : 'Gmail'));
+    txt.appendChild(meta);
+    aiPaneli(it, meta, txt);
     txt.onclick = () => cb.click();
-    const tools = document.createElement('div'); tools.className='tools';
-    tool(tools, '✎','Metni düzenle', () => { const eski = raporMetni(it); const s = prompt('Metin:', eski); if (s && s.trim() && s.trim() !== eski){ guncelle(it, { metin: s.trim() }); renderFound(); renderPreview(); } });
-    tool(tools, '×','Gizle', () => { guncelle(it, { gizli:true }); renderFound(); renderPreview(); }, 'del');
-    li.append(cb, txt, tools); ul.appendChild(li);
+    const tools = el('div', 'araclar');
+    tool(tools, 'kalem','Metni düzenle', () => { const eski = raporMetni(it); const s = prompt('Metin:', eski); if (s && s.trim() && s.trim() !== eski){ guncelle(it, { metin: s.trim() }); renderFound(); renderPreview(); } });
+    tool(tools, 'carpi','Gizle', () => { guncelle(it, { gizli:true }); renderFound(); renderPreview(); renderStatus(); }, 'sil');
+    li.append(tile, txt, tools, cb); ul.appendChild(li);
   });
 }
 
 async function loadFound(force){
   $('foundStatus').textContent = `Gmail ve ${projeEtiketi()} taranıyor…`; $('foundStatus').hidden = false;
-  $('foundRefresh').disabled = true;
+  dugmeleriKilitle('yenile', true);
   try {
     const d = await api('/api/bugun' + (force ? '?yenile=1' : ''));
     S.bulunan = d.bulunan; S.bulunanYuklendi = true;
     const errs = $('foundErrors'); errs.innerHTML = '';
     (d.hatalar || []).forEach(h => {
-      const p=document.createElement('p'); p.className='warn'; p.textContent=h.mesaj;
+      const p = el('p', 'uyari', h.mesaj);
       if (/\(Ayarlar\)$/.test(h.mesaj)) { p.textContent = h.mesaj.replace(/\(Ayarlar\)$/, '('); const a=document.createElement('a'); a.href='/ayarlar'; a.textContent='Ayarlar'; p.append(a, ')'); }
       errs.appendChild(p);
     });
@@ -419,8 +618,8 @@ async function loadFound(force){
   } catch (e) {
     $('foundStatus').textContent = 'Tarama yapılamadı: ' + e.message;
   } finally {
-    $('foundRefresh').disabled = false;
-    renderFound(); renderPreview();
+    dugmeleriKilitle('yenile', false);
+    renderFound(); renderPreview(); renderStatus();
   }
 }
 
@@ -456,15 +655,17 @@ async function eskiVeriyiTasi(){
   }
 }
 
-$('foundRefresh').onclick = () => loadFound(true);
+hepsiniBul('yenile').forEach(b => b.onclick = () => loadFound(true));
 $('plan').oninput = e => gunlukDegisti('yarin', e.target.value);
 $('doneAdd').onclick = addDone; $('doneNew').onkeydown = e => { if(e.key==='Enter') addDone(); };
 $('recurringAdd').onclick = addRecurring; $('recurringNew').onkeydown = e => { if(e.key==='Enter') addRecurring(); };
 $('ongoingAdd').onclick = addOngoing; $('ongoingNew').onkeydown = e => { if(e.key==='Enter') addOngoing(); };
+$('ongoingFocus').onclick = () => $('ongoingNew').focus();
 $('allOn').onclick = () => hepsi(true);
 $('allOff').onclick = () => hepsi(false);
-$('duzeltBtn').onclick = duzeltCalistir;
-$('copyBtn').onclick = copyReport; $('waBtn').onclick = openWa;
+hepsiniBul('duzelt').forEach(b => b.onclick = duzeltCalistir);
+hepsiniBul('kopyala').forEach(b => b.onclick = e => copyReport(e.currentTarget));
+hepsiniBul('wa').forEach(b => b.onclick = e => openWa(e.currentTarget));
 
 render();
 (async () => { await eskiVeriyiTasi(); await durumuYukle(); loadFound(false); })();

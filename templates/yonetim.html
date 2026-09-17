@@ -2,79 +2,79 @@
 <html lang="tr">
 <head>
 {% include "_stil.html" %}
+{% import "_ikon.html" as i %}
 <title>Yönetim · Günlük rapor</title>
 <style>
-main{max-width:760px}
-section{margin:0 0 30px}
-.liste{background:var(--paper); border:1px solid var(--line); border-radius:10px}
-.satir{display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; padding:10px 12px; border-top:1px solid var(--line)}
-.satir:first-child{border-top:0}
-.satir .kim{flex:1 1 240px; min-width:0; overflow-wrap:anywhere}
-.satir .kim small{display:block; color:var(--ink-2); font-size:14px}
-.satir .meta{color:var(--ink-2); font-size:14px}
-.satir.pasif .kim{color:var(--ink-2)}
-.satir form{margin:0}
-.satir button{background:none; border:0; padding:0; font:inherit; font-size:15px; color:var(--accent); cursor:pointer}
-.satir button.tehlike{color:var(--danger)}
-.etiket{display:inline-block; padding:0 6px; border:1px solid var(--line); border-radius:999px; font-size:12px; line-height:18px; color:var(--ink-2); vertical-align:1px}
-.bilgi{background:var(--paper); border:1px solid var(--accent); border-radius:10px; padding:14px 16px; margin:0 0 24px}
-.bilgi h2{margin-bottom:8px}
-.sifre{display:flex; gap:8px; align-items:center; margin:8px 0}
-.sifre code{font:600 20px/1.3 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing:.04em; padding:6px 10px; background:var(--bg); border-radius:8px; user-select:all}
-.davet{display:grid; grid-template-columns:1fr 1fr auto; gap:8px; align-items:end}
-.davet label{margin-top:0}
+main{gap:16px}
+.bilgi{padding:16px; display:flex; flex-direction:column; gap:8px; background:var(--accent-bg)}
+.sifre{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+.sifre code{font:600 20px/1.3 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing:.04em; padding:8px 12px; background:var(--paper); border-radius:10px; user-select:all}
+.sifre button{height:44px}
+.davet{display:grid; grid-template-columns:1fr 1fr auto; gap:10px; align-items:end; padding:14px}
+.davet label{display:block; font-size:14.5px; font-weight:600; margin-bottom:8px}
+.davet button{height:46px}
 @media (max-width:560px){ .davet{grid-template-columns:1fr} }
+.satir{flex-wrap:wrap; align-items:center; gap:6px 16px}
+.satir .kim{flex:1 1 240px; min-width:0; overflow-wrap:anywhere}
+.satir .kim .lbl{display:flex; flex-wrap:wrap; align-items:center; gap:6px}
+.satir.pasif .kim .lbl{color:var(--ink-2)}
+.satir form{margin:0}
+.etiket{font-size:11px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:1px 8px}
 </style>
 </head>
 <body>
-<main>
-  {% include "_ust.html" %}
+{% set aktif = 'yonetim' %}
+{% include "_ust.html" %}
+<div class="bant">
+  <a class="geri" href="/ayarlar" aria-label="Geri">{{ i.ikon('geri', 18, 2.2) }}</a>
   <h1>Yönetim</h1>
-  <p class="hint">Yeni kullanıcıyı yalnız siz eklersiniz. Geçici şifreyi kullanıcıya WhatsApp'la iletin; ilk girişte kendi şifresini belirler.</p>
-  {% if hata %}<p class="warn" role="alert">{{ hata }}</p>{% endif %}
+</div>
+<main>
+  <p class="hint" style="padding:0 6px">Yeni kullanıcıyı yalnız siz eklersiniz. Geçici şifreyi kullanıcıya WhatsApp'la iletin; ilk girişte kendi şifresini belirler.</p>
+  {% if hata %}<p class="uyari" role="alert">{{ hata }}</p>{% endif %}
 
   {% if bilgi %}
-  <div class="bilgi" role="status">
+  <section class="card bilgi" role="status">
     <h2>{{ bilgi.baslik }}</h2>
-    <p class="hint" style="margin:0">{{ bilgi.eposta }} için geçici şifre. <b>Bu şifre bir daha gösterilmeyecek.</b></p>
-    <div class="sifre"><code id="gecici">{{ bilgi.sifre }}</code><button class="secondary" type="button" id="kopyala">Kopyala</button></div>
-  </div>
+    <p class="hint">{{ bilgi.eposta }} için geçici şifre. <b>Bu şifre bir daha gösterilmeyecek.</b></p>
+    <div class="sifre"><code id="gecici">{{ bilgi.sifre }}</code><button class="primary" type="button" id="kopyala">Kopyala</button></div>
+  </section>
   {% endif %}
 
-  <section>
-    <h2>Davet et</h2>
-    <form class="form davet" method="post" action="/yonetim/davet">
+  <div>
+    <div class="sec"><h2>Davet et</h2></div>
+    <form class="card davet" method="post" action="/yonetim/davet">
       <div><label for="ad">Ad</label><input type="text" id="ad" name="ad" required></div>
       <div><label for="eposta">E-posta</label><input type="email" id="eposta" name="eposta" required></div>
       <button class="primary" type="submit">Davet et</button>
     </form>
-  </section>
+  </div>
 
-  <section>
-    <h2>Kullanıcılar <small style="font-size:15px; font-weight:400; color:var(--ink-2); margin-left:auto">{{ kullanicilar|length }}</small></h2>
-    <div class="liste">
+  <div>
+    <div class="sec"><div class="baslik"><h2>Kullanıcılar</h2><span class="cnt">{{ kullanicilar|length }}</span></div></div>
+    <section class="card liste">
       {% for k in kullanicilar %}
-      <div class="satir{% if not k.aktif %} pasif{% endif %}">
+      <div class="row satir{% if not k.aktif %} pasif{% endif %}">
+        <span class="avatar" style="background:var(--dark)">{{ k.ad[:1]|upper }}</span>
         <div class="kim">
-          {{ k.ad }}
+          <div class="lbl">{{ k.ad }}
           {% if k.rol == 'admin' %}<span class="etiket">yönetici</span>{% endif %}
           {% if not k.aktif %}<span class="etiket">pasif</span>{% endif %}
-          {% if k.sifre_degistirmeli %}<span class="etiket">şifre bekliyor</span>{% endif %}
-          <small>{{ k.eposta }}</small>
+          {% if k.sifre_degistirmeli %}<span class="etiket">şifre bekliyor</span>{% endif %}</div>
+          <div class="meta">{{ k.eposta }} · Son giriş: {% if k.son_giris %}<time class="zaman" datetime="{{ k.son_giris.isoformat() }}">{{ k.son_giris.strftime('%d.%m.%Y %H:%M') }}</time>{% else %}hiç{% endif %}</div>
         </div>
-        <span class="meta">Son giriş: {% if k.son_giris %}<time class="zaman" datetime="{{ k.son_giris.isoformat() }}">{{ k.son_giris.strftime('%d.%m.%Y %H:%M') }}</time>{% else %}hiç{% endif %}</span>
         <form method="post" action="/yonetim/{{ k.id }}/sifirla" data-ad="{{ k.ad }}" onsubmit="return confirm(this.dataset.ad + ' için yeni geçici şifre üretilsin mi? Eski şifresi geçersiz olur.')">
-          <button type="submit">Şifre sıfırla</button>
+          <button type="submit" class="link">Şifre sıfırla</button>
         </form>
         {% if k.id != kullanici.id %}
         <form method="post" action="/yonetim/{{ k.id }}/aktiflik">
-          <button type="submit" class="{% if k.aktif %}tehlike{% endif %}">{% if k.aktif %}Pasife al{% else %}Aktif et{% endif %}</button>
+          <button type="submit" class="link{% if k.aktif %} tehlike{% endif %}">{% if k.aktif %}Pasife al{% else %}Aktif et{% endif %}</button>
         </form>
         {% endif %}
       </div>
       {% endfor %}
-    </div>
-  </section>
+    </section>
+  </div>
 </main>
 <div class="toast" id="toast"></div>
 <script>

@@ -2,107 +2,194 @@
 <html lang="tr">
 <head>
 {% include "_stil.html" %}
+{% import "_ikon.html" as i %}
 <title>Ayarlar · Günlük rapor</title>
 <style>
-section{margin:0 0 30px}
-.form label small{color:var(--ink-2)}
-.kayitli{color:var(--ink-2); font-size:14px; margin:4px 0 0}
-#sozluk{font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:15px; min-height:150px}
-#testSonuc{margin:12px 0 0; font-size:15px; white-space:pre-wrap}
-#testSonuc.ok{color:var(--ink)}
+main{gap:16px}
+.form{display:flex; flex-direction:column; gap:16px}
+.hesap .avatar{width:42px; height:42px; background:var(--dark); font-size:15px}
+.hesap .alt{display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; padding:11px 14px}
+.hesap .alt form{margin:0}
+.kim{flex:1; min-width:0}
+.kim .meta{overflow-wrap:anywhere}
+.durum{display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:500; margin-top:3px; color:var(--ink-3)}
+.durum::before{content:""; width:7px; height:7px; border-radius:50%; background:currentColor; flex:none}
+.durum.ok{color:var(--ok-ink)}
+.durum.ok::before{background:var(--ok)}
+.durum.hata{color:var(--danger)}
+.ayrinti{background:var(--sub); display:flex; flex-direction:column; gap:8px}
+.kayitli{color:var(--ink-2); font-size:12px; margin:0}
+#sozluk{font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:13.5px; min-height:150px}
+#testSonuc{font-size:13px; white-space:pre-wrap; margin:0}
+#testSonuc.ok{color:var(--ok-ink)}
 #testSonuc.hata{color:var(--danger)}
-input[type=time]{font:inherit; color:var(--ink); background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:10px 12px}
-.gunler{display:flex; flex-wrap:wrap; gap:4px 16px}
-.gunler .check{margin-top:6px}
-.cihazlar{list-style:none; margin:10px 0 0; padding:0}
-.cihazlar li{display:flex; align-items:baseline; gap:10px; padding:8px 0; border-top:1px solid var(--line); font-size:15px}
-.cihazlar li:first-child{border-top:0}
-.cihazlar .bilgi{flex:1; min-width:0}
-.cihazlar .bilgi small{display:block; color:var(--ink-2)}
+#testSonuc:empty{display:none}
+input[type=time]{width:124px; font-weight:600; flex:none}
+.gunler{display:flex; gap:6px}
+.gunler label{flex:1; position:relative}
+.gunler input{position:absolute; opacity:0; inset:0; margin:0; cursor:pointer}
+.gunler span{display:flex; align-items:center; justify-content:center; height:36px; border-radius:10px; font-size:12.5px; font-weight:600; background:var(--field); color:var(--ink-2)}
+.gunler input:checked + span{background:var(--btn); color:var(--btn-ink)}
+.gunler input:focus-visible + span{outline:2px solid var(--focus); outline-offset:2px}
+.cihazlar{list-style:none; margin:0; padding:0}
+.cihazlar li{display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--sub); border-top:1px solid var(--line)}
+.cihazlar .bilgi{flex:1; min-width:0; font-size:13.5px; font-weight:600}
+.cihazlar .bilgi small{display:flex; align-items:center; gap:6px; font-size:12px; font-weight:500; color:var(--ok-ink); margin-top:3px}
+.cihazlar .bilgi small::before{content:""; width:7px; height:7px; border-radius:50%; background:var(--ok); flex:none}
 .cihazlar .bilgi small.hata{color:var(--danger)}
-.cihazlar button{background:none; border:0; padding:0; font:inherit; color:var(--accent); cursor:pointer}
-#pushSonuc{margin:10px 0 0; font-size:15px; white-space:pre-wrap}
+.cihazlar .bilgi small.hata::before{background:var(--danger)}
+.cihazlar .bilgi small.bos{color:var(--ink-2); font-weight:400}
+.cihazlar .bilgi small.bos::before{display:none}
+.cihazlar button{font:inherit; font-size:13.5px; font-weight:600; background:none; border:0; padding:0; color:var(--danger); cursor:pointer}
+.ikiDugme{display:flex; gap:8px}
+.ikiDugme button{flex:1; height:44px; font-size:13.5px; border-radius:12px}
+#pushSonuc{font-size:13px; white-space:pre-wrap; margin:0}
+#pushSonuc:empty{display:none}
+#kaydet{width:100%}
+.row .sw{margin-top:2px}
+.row > .kim + .link{align-self:center}
+@media (min-width:761px){
+  .ikiDugme button{height:42px}
+}
 </style>
 </head>
 <body>
-<main>
-  {% include "_ust.html" %}
+{% set aktif = 'ayarlar' %}
+{% include "_ust.html" %}
+<div class="bant">
+  <a class="geri" href="/" aria-label="Geri">{{ i.ikon('geri', 18, 2.2) }}</a>
   <h1>Ayarlar</h1>
-  <p class="hint">Bu ayarlar yalnız sizin hesabınız için geçerlidir. Şifre ve token kaydedildikten sonra bir daha gösterilmez.</p>
-  <p class="warn" id="hata" role="alert" hidden></p>
+</div>
+
+<main>
+  <p class="uyari" id="hata" role="alert" hidden></p>
+
+  <section class="card hesap">
+    <div class="row orta">
+      <span class="avatar">{{ kullanici.ad[:1]|upper }}</span>
+      <div class="kim"><div class="lbl">{{ kullanici.ad }}</div><div class="meta">{{ kullanici.eposta }} · {% if kullanici.rol == 'admin' %}yönetici{% else %}üye{% endif %}</div></div>
+      <a class="link" href="/sifre">Şifre</a>
+    </div>
+    <div class="alt">
+      <button type="button" class="link soluk" data-tema>{{ i.ikon('tema', 15) }}Tema</button>
+      {% if kullanici.rol == 'admin' %}<a class="link soluk" href="/yonetim">{{ i.ikon('kisiler', 15) }}Yönetim</a>{% endif %}
+      <form method="post" action="/cikis"><button type="submit" class="link soluk">{{ i.ikon('cikis', 15) }}Çıkış</button></form>
+    </div>
+  </section>
 
   <form class="form" id="form" autocomplete="off">
-    <section>
-      <h2>Gmail</h2>
-      <label for="gmail_kullanici">Gmail adresi</label>
-      <input type="email" id="gmail_kullanici" name="gmail_kullanici">
-      <label for="gmail_sifre">Uygulama şifresi <small>— Google hesabı › Güvenlik › Uygulama şifreleri</small></label>
-      <input type="password" id="gmail_sifre" name="gmail_sifre" autocomplete="new-password">
-      <p class="kayitli" id="gmail_sifre_durum"></p>
-    </section>
-
-    <section>
-      <h2>GitHub</h2>
-      <label for="github_repo">Repo <small>— kullanici/repo</small></label>
-      <input type="text" id="github_repo" name="github_repo" placeholder="kullanici/repo">
-      <label for="github_token">Token <small>— yalnız okuma yetkili</small></label>
-      <input type="password" id="github_token" name="github_token" autocomplete="new-password">
-      <p class="kayitli" id="github_token_durum"></p>
-      <label for="proje_adi">Proje adı <small>— commit'ler rapora bu adla yazılır</small></label>
-      <input type="text" id="proje_adi" name="proje_adi">
-    </section>
-
-    <section>
-      <h2>Rapor</h2>
-      <label for="patron_telefon">Patronun WhatsApp numarası <small>— ülke koduyla, örn. 905xxxxxxxxx; boşsa WhatsApp kişi seçtirir</small></label>
-      <input type="tel" id="patron_telefon" name="patron_telefon" inputmode="numeric">
-      <label for="rapor_basligi">Rapor başlığı</label>
-      <input type="text" id="rapor_basligi" name="rapor_basligi" placeholder="Günlük Rapor">
-      <label for="sozluk">Alan adı sözlüğü <small>— her satıra bir "alan=Kurum"; e-posta alıcıları bu adlarla yazılır</small></label>
-      <textarea id="sozluk" name="alan_sozlugu" spellcheck="false"></textarea>
-    </section>
-
-    <section>
-      <h2>Hatırlatma</h2>
-      <p class="hint">Seçili günlerde bu saatten sonra raporu henüz kopyalamadıysanız hatırlatılır.</p>
-      <label for="hatirlatma_saat">Saat</label>
-      <input type="time" id="hatirlatma_saat" name="hatirlatma_saat" value="17:00" required>
-      <label>Günler</label>
-      <div class="gunler" id="gunler">
-        {% for no, ad in [(1,'Pzt'),(2,'Sal'),(3,'Çar'),(4,'Per'),(5,'Cum'),(6,'Cmt'),(7,'Paz')] %}
-        <label class="check"><input type="checkbox" name="gun" value="{{ no }}"> {{ ad }}</label>
-        {% endfor %}
-      </div>
-
-      <label class="check"><input type="checkbox" id="hatirlatma_push"> Telefon bildirimi</label>
-      <ul class="cihazlar" id="cihazlar"></ul>
-      <p class="hint" id="pushBilgi" hidden></p>
-      <div class="actions">
-        <button class="secondary" type="button" id="pushAc">Bu cihazda bildirimleri aç</button>
-        <button class="secondary" type="button" id="pushDene">Test bildirimi gönder</button>
-      </div>
-      <p id="pushSonuc" aria-live="polite"></p>
-
-      <label class="check"><input type="checkbox" id="hatirlatma_eposta"> E-posta hatırlatması</label>
-      <label for="hatirlatma_eposta_adres">Adres <small>— boşsa giriş e-postanız</small></label>
-      <input type="email" id="hatirlatma_eposta_adres" name="hatirlatma_eposta_adres">
-      <p class="kayitli" id="epostaBilgi" hidden>Önce yukarıya Gmail adresi ve uygulama şifresi girin; hatırlatma sizin Gmail'inizden size gönderilir.</p>
-    </section>
-
-    <div class="actions">
-      <button class="primary" type="submit" id="kaydet">Kaydet</button>
-      <button class="secondary" type="button" id="test">Bağlantıyı test et</button>
+    <div>
+      <div class="sec"><h2>Kaynaklar</h2></div>
+      <section class="card">
+        <div class="row orta">
+          <div class="tile t-gmail">{{ i.ikon('zarf', 17) }}</div>
+          <div class="kim"><div class="lbl">Gmail</div><div class="durum" id="gmailDurum">Ayarlanmadı</div></div>
+          <button type="button" class="link" data-ac="gmailAyrinti" aria-expanded="false">Değiştir</button>
+        </div>
+        <div class="row dikey ayrinti" id="gmailAyrinti" hidden>
+          <label class="alan" for="gmail_kullanici">Gmail adresi</label>
+          <input type="email" id="gmail_kullanici" name="gmail_kullanici">
+          <label class="alan" for="gmail_sifre">Uygulama şifresi <small>— Google hesabı › Güvenlik › Uygulama şifreleri</small></label>
+          <input type="password" id="gmail_sifre" name="gmail_sifre" autocomplete="new-password">
+          <p class="kayitli" id="gmail_sifre_durum"></p>
+        </div>
+        <div class="row orta">
+          <div class="tile t-git">{{ i.ikon('dal', 17) }}</div>
+          <div class="kim"><div class="lbl" id="githubAd">GitHub</div><div class="durum" id="githubDurum">Ayarlanmadı</div></div>
+          <button type="button" class="link" data-ac="githubAyrinti" aria-expanded="false">Değiştir</button>
+        </div>
+        <div class="row dikey ayrinti" id="githubAyrinti" hidden>
+          <label class="alan" for="github_repo">Repo <small>— kullanici/repo</small></label>
+          <input type="text" id="github_repo" name="github_repo" placeholder="kullanici/repo">
+          <label class="alan" for="github_token">Token <small>— yalnız okuma yetkili</small></label>
+          <input type="password" id="github_token" name="github_token" autocomplete="new-password">
+          <p class="kayitli" id="github_token_durum"></p>
+        </div>
+        <div class="row dikey">
+          <label class="alan" for="proje_adi">Proje adı</label>
+          <input type="text" id="proje_adi" name="proje_adi">
+          <div class="meta">Raporda commit'lerin ürün adı olarak geçer.</div>
+        </div>
+        <div class="row dikey">
+          <button class="secondary" type="button" id="test">Bağlantıyı test et</button>
+          <p id="testSonuc" aria-live="polite"></p>
+        </div>
+      </section>
     </div>
-    <p id="testSonuc" aria-live="polite"></p>
-  </form>
 
-  <p class="hint" style="margin-top:30px"><a href="/sifre">Şifremi değiştir</a></p>
+    <div>
+      <div class="sec"><h2>Rapor</h2></div>
+      <section class="card">
+        <div class="row dikey">
+          <label class="alan" for="rapor_basligi">Başlık</label>
+          <input type="text" id="rapor_basligi" name="rapor_basligi" placeholder="Günlük Rapor">
+        </div>
+        <div class="row dikey">
+          <label class="alan" for="patron_telefon">Patronun WhatsApp numarası</label>
+          <input type="tel" id="patron_telefon" name="patron_telefon" inputmode="numeric" placeholder="905xxxxxxxxx">
+          <div class="meta">Ülke koduyla. "WhatsApp'ta aç" doğrudan bu sohbeti açar; boşsa WhatsApp kişi seçtirir.</div>
+        </div>
+        <div class="row orta">
+          <div class="kim"><div class="lbl">Alan adı sözlüğü</div><div class="meta">E-posta alıcıları bu kurum adlarıyla yazılır</div></div>
+          <button type="button" class="link" data-ac="sozlukAyrinti" aria-expanded="false">Değiştir</button>
+        </div>
+        <div class="row dikey ayrinti" id="sozlukAyrinti" hidden>
+          <label class="alan" for="sozluk">Her satıra bir "alan=Kurum"</label>
+          <textarea id="sozluk" name="alan_sozlugu" spellcheck="false"></textarea>
+        </div>
+      </section>
+    </div>
+
+    <div>
+      <div class="sec"><h2>Hatırlatma</h2></div>
+      <section class="card">
+        <div class="row orta">
+          <div class="kim"><label class="lbl" for="hatirlatma_saat">Saat</label><div class="meta">Rapor kopyalanmadıysa hatırlatır</div></div>
+          <input type="time" id="hatirlatma_saat" name="hatirlatma_saat" value="17:00" required>
+        </div>
+        <div class="row dikey">
+          <div class="lbl" id="gunlerBaslik">Günler</div>
+          <div class="gunler" id="gunler" role="group" aria-labelledby="gunlerBaslik">
+            {% for no, ad in [(1,'Pzt'),(2,'Sal'),(3,'Çar'),(4,'Per'),(5,'Cum'),(6,'Cmt'),(7,'Paz')] %}
+            <label><input type="checkbox" name="gun" value="{{ no }}"><span>{{ ad }}</span></label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="row orta">
+          <div class="kim"><label class="lbl" for="hatirlatma_push">Telefon bildirimi</label><div class="meta">Ana ekrana eklenmiş cihazlarda</div></div>
+          <input type="checkbox" class="sw" id="hatirlatma_push">
+        </div>
+        <ul class="cihazlar" id="cihazlar"></ul>
+        <div class="row dikey">
+          <p class="hint" id="pushBilgi" hidden></p>
+          <div class="ikiDugme">
+            <button class="secondary" type="button" id="pushAc">Bu cihazda aç</button>
+            <button class="secondary" type="button" id="pushDene">Test gönder</button>
+          </div>
+          <p id="pushSonuc" aria-live="polite"></p>
+        </div>
+        <div class="row orta">
+          <div class="kim"><label class="lbl" for="hatirlatma_eposta">E-posta hatırlatması</label><div class="meta" id="epostaHedef">Giriş e-postanıza</div></div>
+          <input type="checkbox" class="sw" id="hatirlatma_eposta">
+        </div>
+        <div class="row dikey">
+          <label class="alan" for="hatirlatma_eposta_adres">Adres <small>— boşsa giriş e-postanız</small></label>
+          <input type="email" id="hatirlatma_eposta_adres" name="hatirlatma_eposta_adres">
+          <p class="kayitli" id="epostaBilgi" hidden>Önce yukarıya Gmail adresi ve uygulama şifresi girin; hatırlatma sizin Gmail'inizden size gönderilir.</p>
+        </div>
+      </section>
+    </div>
+
+    <p class="hint" style="padding:0 6px">Bu ayarlar yalnız sizin hesabınız için geçerlidir. Şifre ve token kaydedildikten sonra bir daha gösterilmez.</p>
+    <button class="primary" type="submit" id="kaydet">Kaydet</button>
+  </form>
 </main>
 <div class="toast" id="toast"></div>
 
 <script>
 const $ = id => document.getElementById(id);
 const ALANLAR = ['gmail_kullanici', 'github_repo', 'proje_adi', 'patron_telefon', 'rapor_basligi'];
+const TEST_ANAHTARI = 'gunluk-rapor-baglanti-{{ kullanici.id }}';
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
 function hataGoster(msg){ $('hata').textContent = msg || ''; $('hata').hidden = !msg; }
 
@@ -114,7 +201,41 @@ async function istek(yol, secenek = {}){
   return govde;
 }
 
+// --- "Değiştir" ile açılan ayrıntı alanları ---
+function ayrintiAc(id, acik){
+  $(id).hidden = !acik;
+  document.querySelectorAll(`[data-ac="${id}"]`).forEach(b => { b.setAttribute('aria-expanded', acik); b.textContent = acik ? 'Kapat' : 'Değiştir'; });
+}
+document.querySelectorAll('[data-ac]').forEach(b => b.onclick = () => ayrintiAc(b.dataset.ac, $(b.dataset.ac).hidden));
+
+// --- kaynak durumu: bu tarayıcıdaki son bağlantı testinden ---
+function sonTest(){ try { return JSON.parse(localStorage.getItem(TEST_ANAHTARI)) || null; } catch { return null; } }
+function sonTestiYaz(s){ try { if (s) localStorage.setItem(TEST_ANAHTARI, JSON.stringify(s)); else localStorage.removeItem(TEST_ANAHTARI); } catch {} }
+function durumYaz(eleman, sinif, metin){ eleman.className = 'durum' + (sinif ? ' ' + sinif : ''); eleman.textContent = metin; }
+function parca(sonuc, onek){
+  const p = (sonuc || '').split(' · ').find(x => x.startsWith(onek + ':'));
+  return p ? p.slice(onek.length + 1).trim() : '';
+}
+let sonAyar = null;
+function kaynakDurumu(){
+  const a = sonAyar; if (!a) return;
+  const t = sonTest();
+  const gmailVar = !!(a.gmail_kullanici && a.gmail_sifre_kayitli);
+  const githubVar = !!(a.github_repo && a.github_token_kayitli);
+  $('githubAd').textContent = 'GitHub' + ((a.proje_adi || a.github_repo) ? ` · ${a.proje_adi || a.github_repo}` : '');
+  if (!gmailVar) durumYaz($('gmailDurum'), '', 'Ayarlanmadı');
+  else if (!t) durumYaz($('gmailDurum'), '', 'Kayıtlı · test edilmedi');
+  else if (t.gmail_ok) durumYaz($('gmailDurum'), 'ok', 'Bağlı · ' + parca(t.sonuc, 'Gmail').replace(/^bağlandı,\s*/, ''));
+  else durumYaz($('gmailDurum'), 'hata', parca(t.sonuc, 'Gmail') || 'Bağlanamadı');
+  if (!githubVar) durumYaz($('githubDurum'), '', 'Ayarlanmadı');
+  else if (!t) durumYaz($('githubDurum'), '', 'Kayıtlı · test edilmedi');
+  else if (t.github_ok) durumYaz($('githubDurum'), 'ok', 'Bağlı · ' + parca(t.sonuc, 'GitHub'));
+  else durumYaz($('githubDurum'), 'hata', parca(t.sonuc, 'GitHub') || 'Bağlanamadı');
+}
+
+let ilkDoldurma = true;
 function doldur(a){
+  sonAyar = a;
   ALANLAR.forEach(k => $(k).value = a[k] || '');
   $('sozluk').value = Object.entries(a.alan_sozlugu || {}).map(([k, v]) => `${k}=${v}`).join('\n');
   $('gmail_sifre').value = ''; $('github_token').value = '';
@@ -128,10 +249,18 @@ function doldur(a){
   $('hatirlatma_eposta').checked = a.hatirlatma_eposta !== false;
   $('hatirlatma_eposta_adres').value = a.hatirlatma_eposta_adres || '';
   $('hatirlatma_eposta_adres').placeholder = a.giris_eposta || '';
+  $('epostaHedef').textContent = a.hatirlatma_eposta_adres || a.giris_eposta || 'Giriş e-postanıza';
   const gmailYok = !(a.gmail_kullanici && a.gmail_sifre_kayitli);
   $('hatirlatma_eposta').disabled = gmailYok;
   $('hatirlatma_eposta_adres').disabled = gmailYok;
   $('epostaBilgi').hidden = !gmailYok;
+  if (ilkDoldurma){
+    // Ayar eksikse ayrıntılar açık başlar.
+    ilkDoldurma = false;
+    if (gmailYok) ayrintiAc('gmailAyrinti', true);
+    if (!(a.github_repo && a.github_token_kayitli)) ayrintiAc('githubAyrinti', true);
+  }
+  kaynakDurumu();
 }
 
 async function kaydet(){
@@ -146,7 +275,10 @@ async function kaydet(){
     govde.hatirlatma_eposta = $('hatirlatma_eposta').checked;
     govde.hatirlatma_eposta_adres = $('hatirlatma_eposta_adres').value;
   }
+  const kaynakDegisti = !sonAyar || !!govde.gmail_sifre || !!govde.github_token
+    || govde.gmail_kullanici !== sonAyar.gmail_kullanici || govde.github_repo !== sonAyar.github_repo;
   const a = await istek('/api/ayarlar', { method:'PUT', body: JSON.stringify(govde) });
+  if (kaynakDegisti) sonTestiYaz(null);
   doldur(a); hataGoster('');
   return a;
 }
@@ -165,6 +297,8 @@ $('test').onclick = async () => {
     const s = await istek('/api/ayarlar/test', { method:'POST' });
     $('testSonuc').textContent = s.sonuc;
     $('testSonuc').className = (s.gmail_ok && s.github_ok) ? 'ok' : 'hata';
+    sonTestiYaz({ sonuc: s.sonuc, gmail_ok: s.gmail_ok, github_ok: s.github_ok });
+    kaynakDurumu();
   } catch (err) { $('testSonuc').textContent = err.message; $('testSonuc').className = 'hata'; }
   finally { $('test').disabled = false; }
 };
@@ -186,13 +320,19 @@ function b64UrlBaytlar(metin){
   return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 }
 
+const telefonIkonu = () => {
+  const t = document.createElement('span'); t.className = 'tile t-cihaz';
+  t.innerHTML = '{{ i.ikon("telefon", 17)|replace("\n", "") }}';
+  return t;
+};
+
 async function cihazlariYukle(){
   const { cihazlar } = await istek('/api/push/abone');
   const ul = $('cihazlar');
   ul.replaceChildren();
   if (!cihazlar.length) {
     const li = document.createElement('li');
-    li.innerHTML = '<span class="bilgi"><small>Bildirim açılmış cihaz yok.</small></span>';
+    li.innerHTML = '<span class="bilgi"><small class="bos">Bildirim açılmış cihaz yok.</small></span>';
     ul.append(li);
   }
   cihazlar.forEach(c => {
@@ -200,7 +340,8 @@ async function cihazlariYukle(){
     const bilgi = document.createElement('span'); bilgi.className = 'bilgi';
     bilgi.textContent = c.cihaz_adi || 'Cihaz';
     const alt = document.createElement('small');
-    alt.textContent = `Eklendi ${saatBicimi(c.olusturma)}` + (c.son_hata ? ` · ${c.son_hata}` : c.son_basari ? ` · son bildirim ${saatBicimi(c.son_basari)}` : '');
+    alt.textContent = c.son_hata ? c.son_hata : c.son_basari ? `Başarılı · ${saatBicimi(c.son_basari)}` : `Eklendi ${saatBicimi(c.olusturma)}`;
+    alt.title = `Eklendi ${saatBicimi(c.olusturma)}`;
     if (c.son_hata) alt.className = 'hata';
     bilgi.append(alt);
     const kaldir = document.createElement('button'); kaldir.type = 'button'; kaldir.textContent = 'Kaldır';
@@ -209,7 +350,7 @@ async function cihazlariYukle(){
       try { await istek(`/api/push/abone/${c.id}`, { method:'DELETE' }); await cihazlariYukle(); toast('Kaldırıldı'); }
       catch (err) { hataGoster(err.message); kaldir.disabled = false; }
     };
-    li.append(bilgi, kaldir);
+    li.append(telefonIkonu(), bilgi, kaldir);
     ul.append(li);
   });
   $('pushDene').disabled = !cihazlar.length;

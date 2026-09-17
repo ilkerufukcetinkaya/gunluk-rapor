@@ -1,17 +1,64 @@
-<nav class="ust">
-  <span class="ad">{{ kullanici.ad }}</span>
-  <a href="/">Rapor</a>
-  <a href="/gecmis">Geçmiş</a>
-  <a href="/ayarlar">Ayarlar</a>
-  {% if kullanici.rol == 'admin' %}<a href="/yonetim">Yönetim</a>{% endif %}
-  <button type="button" id="temaBtn" title="Tema: sistem / açık / koyu">Tema</button>
-  <form method="post" action="/cikis"><button type="submit">Çıkış</button></form>
-</nav>
+{% import "_ikon.html" as i %}
+{#- Sayfa kabuğu: masaüstü üst bar + telefon alt sekmeleri. `aktif`: bugun | gecmis | ayarlar | yonetim -#}
+<header class="ustbar">
+  <div class="sol">
+    <a class="marka" href="/"><i>{{ i.ikon('tik', 15, 2.6) }}</i>Rapor</a>
+    <nav aria-label="Menü">
+      <a href="/"{% if aktif == 'bugun' %} class="on" aria-current="page"{% endif %}>Bugün</a>
+      <a href="/gecmis"{% if aktif == 'gecmis' %} class="on" aria-current="page"{% endif %}>Geçmiş</a>
+      <a href="/ayarlar"{% if aktif == 'ayarlar' %} class="on" aria-current="page"{% endif %}>Ayarlar</a>
+      {% if kullanici.rol == 'admin' %}<a href="/yonetim"{% if aktif == 'yonetim' %} class="on" aria-current="page"{% endif %}>Yönetim</a>{% endif %}
+    </nav>
+  </div>
+  <div class="sag">
+    <span class="rozet" id="durumRozeti" hidden></span>
+    <a class="kim" href="/ayarlar"><span class="avatar">{{ kullanici.ad[:1]|upper }}</span>{{ kullanici.ad }}</a>
+    <button type="button" class="arac-koyu" data-tema title="Tema: sistem / açık / koyu" aria-label="Tema">{{ i.ikon('tema', 17) }}</button>
+    <form method="post" action="/cikis"><button type="submit" class="arac-koyu" title="Çıkış" aria-label="Çıkış">{{ i.ikon('cikis', 17) }}</button></form>
+  </div>
+</header>
+
+<div class="altAlan">
+  {% if aktif == 'bugun' %}
+  <div class="eylemler">
+    <button type="button" class="secondary ikon" data-eylem="kopyala" aria-label="Kopyala" title="Kopyala">{{ i.ikon('kopyala', 19) }}</button>
+    <button type="button" class="primary" data-eylem="wa"><span class="wa-ikon">{{ i.ikon('wa', 18) }}</span><span class="etiket">WhatsApp'ta aç</span></button>
+  </div>
+  {% endif %}
+  <nav class="sekmeler" aria-label="Sekmeler">
+    <a href="/"{% if aktif == 'bugun' %} class="on" aria-current="page"{% endif %}>{{ i.ikon('bugun', 22) }}Bugün</a>
+    <a href="/gecmis"{% if aktif == 'gecmis' %} class="on" aria-current="page"{% endif %}>{{ i.ikon('takvim', 22) }}Geçmiş</a>
+    <a href="/ayarlar"{% if aktif in ('ayarlar', 'yonetim') %} class="on" aria-current="page"{% endif %}>{{ i.ikon('disli', 22) }}Ayarlar</a>
+  </nav>
+</div>
+
 <script>
-document.getElementById('temaBtn').onclick = () => {
+document.querySelectorAll('[data-tema]').forEach(b => b.onclick = () => {
   const sira = ['', 'light', 'dark'], simdiki = document.documentElement.dataset.theme || '';
   const yeni = sira[(sira.indexOf(simdiki) + 1) % sira.length];
   if (yeni) document.documentElement.dataset.theme = yeni; else delete document.documentElement.dataset.theme;
   try { if (yeni) localStorage.setItem('gunluk-rapor-tema', yeni); else localStorage.removeItem('gunluk-rapor-tema'); } catch {}
+  document.dispatchEvent(new Event('tema-degisti'));
+});
+// Üst bardaki durum rozeti: bugünkü rapor kopyalandıysa yeşil, değilse hatırlatma saatiyle sarı.
+window.durumRozeti = (sonKopya, saat) => {
+  const r = document.getElementById('durumRozeti'); if (!r) return;
+  const tamam = !!sonKopya;
+  r.classList.toggle('tamam', tamam);
+  r.textContent = tamam
+    ? 'Gönderildi ' + new Date(sonKopya).toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' })
+    : 'Henüz gönderilmedi' + (saat ? ' · ' + saat : '');
+  r.hidden = false;
 };
+{% if aktif != 'bugun' %}
+if (matchMedia('(min-width:761px)').matches) (async () => {
+  try {
+    const al = y => fetch(y, { credentials:'same-origin' }).then(r => r.ok ? r.json() : Promise.reject());
+    const [liste, ayar] = await Promise.all([al('/api/raporlar?tur=gunluk&limit=1'), al('/api/ayarlar')]);
+    const bugun = new Date().toLocaleDateString('sv-SE', { timeZone:'Europe/Istanbul' });
+    const son = liste.raporlar[0];
+    window.durumRozeti(son && son.tarih === bugun ? son.olusturma : null, ayar.hatirlatma_saat);
+  } catch {}
+})();
+{% endif %}
 </script>
