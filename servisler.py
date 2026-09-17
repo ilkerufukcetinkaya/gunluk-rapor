@@ -55,8 +55,9 @@ def madde_id(kaynak: str, metin: str) -> str:
     return hashlib.sha1((kaynak + metin).encode("utf-8")).hexdigest()[:10]
 
 
-def madde(kaynak: str, metin: str) -> dict:
-    return {"id": madde_id(kaynak, metin), "metin": metin, "kaynak": kaynak}
+def madde(kaynak: str, metin: str, zaman: datetime | None = None) -> dict:
+    """zaman: kaynağın Istanbul saatiyle zamanı (e-postanın gönderildiği, commit'in yazıldığı an)."""
+    return {"id": madde_id(kaynak, metin), "metin": metin, "kaynak": kaynak, "kaynak_zaman": zaman}
 
 
 def tekille(maddeler: list[dict]) -> list[dict]:
@@ -138,16 +139,22 @@ def kurum_adi(gorunen_ad: str, adres: str, sozluk: dict[str, str] | None = None)
     return gorunen_ad.strip().strip('"') or alan or adres
 
 
-def bugun_mu(date_basligi: str | None, bugun: date) -> bool:
+def istanbul_zamani(date_basligi: str | None) -> datetime | None:
+    """E-posta Date başlığı → Istanbul saatiyle zaman; okunamazsa None."""
     if not date_basligi:
-        return False
+        return None
     try:
         zaman = parsedate_to_datetime(date_basligi)
     except (TypeError, ValueError):
-        return False
+        return None
     if zaman.tzinfo is None:
         zaman = zaman.replace(tzinfo=timezone.utc)
-    return zaman.astimezone(ISTANBUL).date() == bugun
+    return zaman.astimezone(ISTANBUL)
+
+
+def bugun_mu(date_basligi: str | None, bugun: date) -> bool:
+    zaman = istanbul_zamani(date_basligi)
+    return zaman is not None and zaman.date() == bugun
 
 
 def _alicilar(ham: str | None, kendi_adres: str, sozluk: dict[str, str] | None = None) -> list[str]:
@@ -186,8 +193,10 @@ def eposta_metni(kurumlar: tuple[str, ...], konular: list[str]) -> str:
 def epostalari_maddele(mailler: list[dict], kendi_adres: str, bugun: date, sozluk: dict[str, str] | None = None) -> list[dict]:
     """mailler: {"date","subject","from","to","cc"} ham başlık değerleri."""
     gruplar: dict[tuple[str, ...], list[str]] = {}
+    son_zaman: dict[tuple[str, ...], datetime] = {}
     for m in mailler:
-        if not bugun_mu(m.get("date"), bugun):
+        zaman = istanbul_zamani(m.get("date"))
+        if zaman is None or zaman.date() != bugun:
             continue
         if NOREPLY.search(m.get("from") or ""):
             continue
@@ -198,7 +207,8 @@ def epostalari_maddele(mailler: list[dict], kendi_adres: str, bugun: date, sozlu
             continue  # kendine gönderilen veya yalnız noreply adreslerine giden
         anahtar = tuple(kurumlar)
         gruplar.setdefault(anahtar, []).append(konu_temizle(basligi_coz(m.get("subject"))))
-    return tekille([madde("eposta", eposta_metni(k, konular)) for k, konular in gruplar.items()])
+        son_zaman[anahtar] = max(zaman, son_zaman.get(anahtar, zaman))  # grupta en son mailin saati
+    return tekille([madde("eposta", eposta_metni(k, konular), son_zaman[k]) for k, konular in gruplar.items()])
 
 
 def _mutf7_coz(s: str) -> str:
@@ -353,8 +363,22 @@ def github_tara(token: str, repo: str, bugun: date, istemci: httpx.Client | None
         ilk_satir = ilk_satir[0].strip() if ilk_satir else ""
         if not ilk_satir or ilk_satir.startswith("Merge"):
             continue
-        maddeler.append(madde("medusa", ilk_satir))
+        maddeler.append(madde("medusa", ilk_satir, commit_zamani(c)))
     return tekille(maddeler)
+
+
+def commit_zamani(commit: dict) -> datetime | None:
+    """Commit'in author tarihi (ISO 8601) → Istanbul saati; yoksa ya da okunamazsa None."""
+    deger = ((commit.get("commit") or {}).get("author") or {}).get("date")
+    if not isinstance(deger, str):
+        return None
+    try:
+        zaman = datetime.fromisoformat(deger.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if zaman.tzinfo is None:
+        zaman = zaman.replace(tzinfo=timezone.utc)
+    return zaman.astimezone(ISTANBUL)
 
 
 # ---------------------------------------------------------------- Claude

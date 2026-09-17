@@ -1,6 +1,6 @@
 """R2: maddeli bugün, Claude düzeltme, rapor geçmişi, haftalık özet. Claude çağrısı sahte; ağa çıkılmaz."""
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -420,7 +420,7 @@ def test_sema_guncelle_eski_semada_iki_kez(tmp_path):
 
     eklenen = veritabani.sema_guncelle(eski)
     assert eklenen == [
-        "items.metin_ai", "items.ai_tarih", "items.kullanici_duzenledi", "items.ai_kullan",
+        "items.metin_ai", "items.ai_tarih", "items.kullanici_duzenledi", "items.ai_kullan", "items.kaynak_zaman",
         "reports.tur", "reports.hafta_baslangic", "uq_reports_user_tarih_tur",
     ]
     assert veritabani.sema_guncelle(eski) == []
@@ -432,3 +432,65 @@ def test_sema_guncelle_eski_semada_iki_kez(tmp_path):
     # güncel şemada hiçbir şey eklenmez
     assert veritabani.sema_guncelle() == []
     assert veritabani.sema_guncelle() == []
+
+
+# ---------------------------------------------------------------- 9) R5: bekleme süresi, tarama zamanı
+
+@pytest.mark.parametrize("olusturma, beklenen", [
+    (datetime(2026, 9, 16, 6, 0, tzinfo=timezone.utc), 0),
+    (datetime(2026, 9, 15, 21, 30, tzinfo=timezone.utc), 0),  # Istanbul'da 16 Eylül 00:30
+    (datetime(2026, 9, 15, 20, 59, tzinfo=timezone.utc), 1),  # Istanbul'da 15 Eylül 23:59
+    (datetime(2026, 9, 15, 9, 0), 1),  # sqlite'tan gelen naive değer UTC sayılır
+    (datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc), 12),
+    (None, 0),
+])
+def test_bekleme_gunu(olusturma, beklenen):
+    assert api.bekleme_gunu(olusturma, date(2026, 9, 16)) == beklenen
+
+
+def test_devam_olusturma_bekleme_ve_asama_degisince_sifirlanmaz():
+    uid = kullanici_olustur()
+    eski = ekle(user_id=uid, tur="devam", metin="MSG itirazı", asama="yanıt bekleniyor",
+                olusturma=datetime.now(timezone.utc) - timedelta(days=12))
+    with istemci() as c:
+        yeni = c.post("/api/maddeler", json={"tur": "devam", "metin": "IMRO sözleşmesi"}).json()
+        assert yeni["bekleme_gun"] == 0
+        assert datetime.fromisoformat(yeni["olusturma"]).tzinfo is not None
+
+        once = durum_maddeleri(c)[eski]
+        assert once["bekleme_gun"] == 12 and once["olusturma"]
+        sonra = c.patch(f"/api/maddeler/{eski}", json={"asama": "imza aşamasında"}).json()
+        assert (sonra["bekleme_gun"], sonra["olusturma"]) == (12, once["olusturma"])
+        # süre yalnız ekranda; rapor metnine girmez
+        assert sonra["rapor_metni"] == "MSG itirazı — imza aşamasında"
+        # diğer türlerde bekleme alanı yok, olusturma var
+        elle = c.post("/api/maddeler", json={"tur": "bugun", "kaynak": "elle", "metin": "x"}).json()
+        assert "bekleme_gun" not in elle and elle["olusturma"] and elle["kaynak_zaman"] is None
+
+
+def test_tarama_zamani_bugun_ve_durumda():
+    kullanici_olustur()
+    with istemci() as c:
+        assert c.get("/api/durum").json()["tarama_zamani"] is None
+        ilk = c.get("/api/bugun").json()["tarama_zamani"]
+        assert datetime.fromisoformat(ilk) <= datetime.now(timezone.utc)
+        assert c.get("/api/durum").json()["tarama_zamani"] == ilk
+        assert c.get("/api/bugun").json()["tarama_zamani"] == ilk  # önbellekten, yeniden taranmadı
+        yenilenen = c.get("/api/bugun?yenile=1").json()["tarama_zamani"]
+        assert datetime.fromisoformat(yenilenen) >= datetime.fromisoformat(ilk)
+        assert c.get("/api/durum").json()["tarama_zamani"] == yenilenen
+
+
+def test_sema_guncelle_kaynak_zaman_kolonu(tmp_path):
+    eski = create_engine(f"sqlite:///{tmp_path}/eski.db")
+    Temel.metadata.create_all(eski)
+    with eski.begin() as b:
+        b.execute(text("ALTER TABLE items DROP COLUMN kaynak_zaman"))
+        b.execute(text("INSERT INTO items (user_id, tur, metin, tikli, gizli, sira, olusturma, kullanici_duzenledi, ai_kullan) "
+                       "VALUES (1, 'bulunan', 'eski satır', 1, 0, 1, '2026-09-15 09:00:00', 0, 1)"))
+
+    assert veritabani.sema_guncelle(eski) == ["items.kaynak_zaman"]
+    assert veritabani.sema_guncelle(eski) == []
+    with eski.connect() as b:
+        assert b.execute(text("SELECT metin, kaynak_zaman FROM items")).one() == ("eski satır", None)
+    eski.dispose()

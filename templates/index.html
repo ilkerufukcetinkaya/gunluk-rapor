@@ -46,6 +46,8 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
 .liste:not(:empty) + .ekle{border-top:1px solid var(--line)}
 .hataKutu{display:flex; flex-direction:column; gap:6px; padding:12px 12px 0}
 .durumSatiri{padding:12px 14px 0}
+.taramaZamani{font-size:12px; color:var(--ink-2); white-space:nowrap}
+.sec .taramaZamani{margin-top:2px}
 
 /* rapor önizleme */
 .bubble{
@@ -159,7 +161,7 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
         </section>
 
         <section class="blok">
-          <div class="sec"><div class="baslik"><h2>Bulunanlar</h2><span class="cnt" id="foundCnt">0</span></div><div style="display:flex; gap:12px; align-items:center"><span id="hiddenInfo"></span><button class="link sadeceTelefon" type="button" data-eylem="yenile">{{ i.ikon('yenile', 14, 2.2) }}Yenile</button></div></div>
+          <div class="sec"><div><div class="baslik"><h2>Bulunanlar</h2><span class="cnt" id="foundCnt">0</span></div><div class="taramaZamani sadeceTelefon" data-tarama></div></div><div style="display:flex; gap:12px; align-items:center"><span id="hiddenInfo"></span><span class="taramaZamani sadeceMasaustu" data-tarama></span><button class="link sadeceTelefon" type="button" data-eylem="yenile">{{ i.ikon('yenile', 14, 2.2) }}Yenile</button></div></div>
           <div class="card">
             <div class="hataKutu" id="foundErrors"></div>
             <p class="hint durumSatiri" id="foundStatus">Taranıyor…</p>
@@ -228,9 +230,16 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 const ESKI_ANAHTARLAR = ['gunluk-rapor-v2', 'gunluk-rapor-v1'];
 const shortDate = d => d.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric' });
 const saatBicimi = z => new Date(z).toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' });
+const istanbulSaati = z => new Date(z).toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Istanbul' });
+// "09:12" → "09:12'de", "09:30" → "09:30'da", "09:40" → "09:40'ta": ek, saatin okunuşunun son sözcüğüne uyar.
+function saatteEki(saat){
+  const [s, d] = saat.split(':').map(Number), n = d || s;
+  const ek = n % 10 ? ['', 'de', 'de', 'te', 'te', 'te', 'da', 'de', 'de', 'da'][n % 10] : ['da', 'da', 'de', 'da', 'ta', 'de'][n / 10];
+  return `${saat}'${ek}`;
+}
 
 // Sunucudaki durumun sayfadaki kopyası. Her değişiklik önce burada yapılır, sonra ilgili uca yazılır.
-const S = { tarih:null, elle:[], surekli:[], devam:[], bugun:{ yarin:null }, metin:{ yarin:'' }, bulunan:[], ayarlar:{}, aiAnahtari:false, sonKopya:null };
+const S = { tarih:null, elle:[], surekli:[], devam:[], bugun:{ yarin:null }, metin:{ yarin:'' }, bulunan:[], ayarlar:{}, aiAnahtari:false, sonKopya:null, taramaZamani:null };
 
 const $ = id => document.getElementById(id);
 const hepsiniBul = eylem => [...document.querySelectorAll(`[data-eylem="${eylem}"]`)];
@@ -270,6 +279,7 @@ const projeEtiketi = () => S.ayarlar.proje_adi || 'GitHub';
 const hamMetin = m => m.metin + (m.tur === 'devam' && m.asama ? ` — ${m.asama}` : '');
 const raporMetni = m => m.rapor_metni || hamMetin(m);
 const aiKullaniliyor = m => !!(m.metin_ai && !m.kullanici_duzenledi && m.ai_kullan !== false);
+const beklemeEtiketi = n => n > 0 ? `${n} gündür` : 'bugün eklendi';
 
 function buildReport(){
   const out = [`*${S.ayarlar.rapor_basligi || 'Günlük Rapor'} – ${shortDate(new Date())}*`, ''];
@@ -387,10 +397,14 @@ function row(item, kind){
     txt.textContent = item.metin;
   }
   const asamaDuzenle = () => { const s = prompt('Aşama:', item.asama||''); if (s!==null){ guncelle(item, { asama: s.trim() }); render(); } };
-  if (kind === 'devam' && !aiKullaniliyor(item)){
-    const a = el('button', 'asama', item.asama || 'aşama ekle'); a.type = 'button'; a.title = 'Aşamayı güncelle';
-    a.onclick = e => { e.stopPropagation(); asamaDuzenle(); };
-    meta.appendChild(a);
+  if (kind === 'devam'){
+    // "Aşama · N gündür"; aşama boşsa yalnız süre (aşama kalemle eklenir)
+    if (item.asama && !aiKullaniliyor(item)){
+      const a = el('button', 'asama', item.asama); a.type = 'button'; a.title = 'Aşamayı güncelle';
+      a.onclick = e => { e.stopPropagation(); asamaDuzenle(); };
+      meta.append(a, el('span', '', '·'));
+    }
+    meta.appendChild(el('span', '', beklemeEtiketi(item.bekleme_gun || 0)));
   }
   txt.appendChild(meta);
   aiPaneli(item, meta, txt);
@@ -578,6 +592,7 @@ function renderFound(){
   const visible = S.bulunan.filter(it => !it.gizli);
   const hidden = S.bulunan.filter(it => it.gizli);
   $('foundCnt').textContent = visible.length;
+  document.querySelectorAll('[data-tarama]').forEach(e => e.textContent = S.taramaZamani ? `${saatteEki(istanbulSaati(S.taramaZamani))} tarandı` : 'henüz taranmadı');
   $('hiddenInfo').innerHTML = '';
   if (hidden.length){
     const b = el('button', 'link soluk', `${hidden.length} gizli · geri al`); b.type = 'button';
@@ -591,7 +606,8 @@ function renderFound(){
     const tile = el('div', 'tile ' + (medusa ? 't-git' : 't-gmail')); tile.appendChild(ikon(medusa ? 'dal' : 'zarf'));
     const cb = onayKutusu(it, li, 'Rapora ekle');
     const txt = el('div', 'txt tikla'); txt.textContent = aiKullaniliyor(it) ? it.metin_ai : it.metin;
-    const meta = el('div', 'meta'); meta.appendChild(el('span', '', medusa ? projeEtiketi() : 'Gmail'));
+    const kaynak = medusa ? projeEtiketi() : 'Gmail';
+    const meta = el('div', 'meta'); meta.appendChild(el('span', '', it.kaynak_zaman ? `${kaynak} · ${istanbulSaati(it.kaynak_zaman)}` : kaynak));
     txt.appendChild(meta);
     aiPaneli(it, meta, txt);
     txt.onclick = () => cb.click();
@@ -607,7 +623,7 @@ async function loadFound(force){
   dugmeleriKilitle('yenile', true);
   try {
     const d = await api('/api/bugun' + (force ? '?yenile=1' : ''));
-    S.bulunan = d.bulunan; S.bulunanYuklendi = true;
+    S.bulunan = d.bulunan; S.bulunanYuklendi = true; S.taramaZamani = d.tarama_zamani || null;
     const errs = $('foundErrors'); errs.innerHTML = '';
     (d.hatalar || []).forEach(h => {
       const p = el('p', 'uyari', h.mesaj);
@@ -626,7 +642,7 @@ async function loadFound(force){
 async function durumuYukle(){
   try {
     const d = await api('/api/durum');
-    S.tarih = d.tarih; S.ayarlar = d.ayarlar; S.aiAnahtari = d.ai_anahtari; S.sonKopya = d.son_kopya;
+    S.tarih = d.tarih; S.ayarlar = d.ayarlar; S.aiAnahtari = d.ai_anahtari; S.sonKopya = d.son_kopya; S.taramaZamani = d.tarama_zamani || null;
     S.surekli = d.maddeler.filter(m => m.tur === 'surekli');
     S.devam = d.maddeler.filter(m => m.tur === 'devam');
     S.bulunan = d.maddeler.filter(m => m.tur === 'bulunan');

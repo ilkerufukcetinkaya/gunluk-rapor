@@ -141,3 +141,32 @@ def test_gonderilmis_klasoru_turkce_ad():
     klasorler = servisler.klasorleri_ayristir(liste)
     gonderilmis = next(ad for bayrak, ad in klasorler if "\\Sent" in bayrak)
     assert servisler._mutf7_coz(gonderilmis) == "[Gmail]/Gönderilmiş Postalar"
+
+
+# 7) R5: kaynağın saati — e-postada Date başlığı (grupta en son), commit'te author tarihi; Istanbul saati
+def test_eposta_kaynak_zaman_gruplanan_maddede_en_son_saat():
+    mailler = [
+        mail("a@msg.org.tr", "A", "Wed, 16 Sep 2026 09:12:00 +0300"),
+        mail("b@msg.org.tr", "B", "Wed, 16 Sep 2026 11:37:00 +0000"),  # Istanbul 14:37
+        mail("c@msg.org.tr", "C", "Wed, 16 Sep 2026 10:00:00 +0300"),
+        mail("a@imro.ie", "UTC'de dün", "Tue, 15 Sep 2026 21:30:00 +0000"),
+    ]
+    sonuc = {m["metin"].split("'")[0]: m for m in servisler.epostalari_maddele(mailler, BEN, BUGUN)}
+    msg, imro = sonuc["MSG"], sonuc["IMRO"]
+    assert msg["kaynak_zaman"].tzinfo == servisler.ISTANBUL
+    assert msg["kaynak_zaman"].strftime("%Y-%m-%d %H:%M") == "2026-09-16 14:37"
+    assert imro["kaynak_zaman"].strftime("%Y-%m-%d %H:%M") == "2026-09-16 00:30"
+
+
+def test_github_commit_tarihi_kaynak_zaman():
+    def isleyici(istek):
+        return httpx.Response(200, json=[
+            {"commit": {"message": "İkinci", "author": {"date": "2026-09-16T11:37:00Z"}}},
+            {"commit": {"message": "İlk", "author": {"date": "2026-09-16T09:12:00+03:00"}}},
+            {"commit": {"message": "Tarihsiz"}},
+        ])
+
+    sonuc = servisler.github_tara("t", "ufuk/medusa", BUGUN, httpx.Client(transport=httpx.MockTransport(isleyici)))
+    zamanlar = [(m["metin"], m["kaynak_zaman"] and m["kaynak_zaman"].strftime("%H:%M")) for m in sonuc]
+    assert zamanlar == [("Tarihsiz", None), ("İlk", "09:12"), ("İkinci", "14:37")]
+    assert servisler.commit_zamani({"commit": {"author": {"date": "bozuk"}}}) is None

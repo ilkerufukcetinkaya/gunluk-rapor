@@ -102,6 +102,8 @@ class Madde(Temel):
     ai_tarih: Mapped[date | None] = mapped_column(Date, nullable=True)
     kullanici_duzenledi: Mapped[bool] = mapped_column(Boolean, default=False)
     ai_kullan: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Bulunanlarda kaynağın zamanı: e-postanın Date başlığı ya da commit'in author tarihi.
+    kaynak_zaman: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def sozluk(self) -> dict:
         return {
@@ -172,6 +174,7 @@ EK_KOLONLAR = [
     ("items", "ai_tarih", "DATE", "DATE"),
     ("items", "kullanici_duzenledi", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
     ("items", "ai_kullan", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("items", "kaynak_zaman", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
     ("reports", "tur", "VARCHAR(10) NOT NULL DEFAULT 'gunluk'", "VARCHAR(10) NOT NULL DEFAULT 'gunluk'"),
     ("reports", "hafta_baslangic", "DATE", "DATE"),
     ("user_settings", "hatirlatma_saat", "TIME NOT NULL DEFAULT '17:00'", "TIME NOT NULL DEFAULT '17:00:00'"),

@@ -155,13 +155,29 @@ def madde_rapor_metni(m: Madde, ifade: str | None, tarih: date) -> str:
 
 def madde_json(m: Madde, ifadeler: dict[int, str], tarih: date) -> dict:
     ifade = ifadeler.get(m.id) if m.tur == "surekli" else None
-    return {**m.sozluk(), "gunun_ifadesi": ifade, "rapor_metni": madde_rapor_metni(m, ifade, tarih)}
+    veri = {
+        **m.sozluk(), "gunun_ifadesi": ifade, "rapor_metni": madde_rapor_metni(m, ifade, tarih),
+        "olusturma": zaman_iso(m.olusturma), "kaynak_zaman": zaman_iso(m.kaynak_zaman),
+    }
+    if m.tur == "devam":  # yalnız ekranda gösterilir; rapor metnine girmez
+        veri["bekleme_gun"] = bekleme_gunu(m.olusturma, tarih)
+    return veri
+
+
+def utc(z: datetime) -> datetime:
+    """sqlite saat dilimini saklamaz; naive değerler UTC kabul edilir."""
+    return z.astimezone(timezone.utc) if z.tzinfo else z.replace(tzinfo=timezone.utc)
 
 
 def zaman_iso(z: datetime | None) -> str | None:
-    if z is None:
-        return None
-    return (z if z.tzinfo else z.replace(tzinfo=timezone.utc)).isoformat()
+    return None if z is None else utc(z).isoformat()
+
+
+def bekleme_gunu(olusturma: datetime | None, tarih: date) -> int:
+    """Devam eden işin kaç gündür beklediği: bugün − eklendiği gün (Istanbul takvimiyle)."""
+    if olusturma is None:
+        return 0
+    return max(0, (tarih - utc(olusturma).astimezone(servisler.ISTANBUL).date()).days)
 
 
 def yapilanlari_bol(db: Session, kullanici: Kullanici, tarih: date) -> None:
@@ -195,6 +211,7 @@ def durum(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends
     son_kopya = db.scalar(select(Rapor.olusturma).where(
         Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == tarih,
     ))
+    onbellek = _onbellek.get((kullanici.id, tarih.isoformat())) or {}
     return {
         "kullanici": {"ad": kullanici.ad, "rol": kullanici.rol},
         "tarih": tarih.isoformat(),
@@ -202,6 +219,7 @@ def durum(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends
         "ayarlar": ayar_ozeti(ayar_satiri(db, kullanici), kullanici),
         "ai_anahtari": bool(ai_anahtari()),
         "son_kopya": zaman_iso(son_kopya),
+        "tarama_zamani": onbellek.get("tarama_zamani"),
     }
 
 
@@ -368,10 +386,12 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
             for m in sonuc["eposta"] + sonuc["medusa"]:
                 if m["id"] in kayitli:
                     continue
+                zaman = m.get("kaynak_zaman")
                 db.add(Madde(
                     user_id=kullanici.id, tur="bulunan", metin=m["metin"], tarih=tarih,
                     kaynak=m["kaynak"], kaynak_id=m["id"], tikli=True, sira=sira,
                     metin_ai=m.get("metin_ai"), ai_tarih=tarih if m.get("metin_ai") else None,
+                    kaynak_zaman=utc(zaman) if zaman else None,
                 ))
                 kayitli.add(m["id"])
                 sira += 1
@@ -381,6 +401,7 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
             _onbellek[anahtar] = {
                 "hatalar": sonuc["hatalar"],
                 "sayim": {"eposta": len(sonuc["eposta"]), "medusa": len(sonuc["medusa"])},
+                "tarama_zamani": zaman_iso(simdi()),
             }
         return _onbellek[anahtar]
 

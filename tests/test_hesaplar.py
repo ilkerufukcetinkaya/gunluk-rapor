@@ -1,5 +1,7 @@
 import json
 import re
+from datetime import datetime, time, timezone
+from email.utils import format_datetime
 
 import httpx
 import pytest
@@ -13,6 +15,9 @@ import servisler
 from veritabani import Kullanici, KullaniciAyari, Madde, OturumYapici, Temel, motor
 
 SIFRE = "dogru-sifre-123"
+# Fikstür tarayıcıları sahtesiyle değiştirmeden önceki gerçek fonksiyonlar.
+GERCEK_GMAIL_TARA = servisler.gmail_tara
+GERCEK_GITHUB_TARA = servisler.github_tara
 
 
 @pytest.fixture(autouse=True)
@@ -417,3 +422,70 @@ def test_claude_prompt_proje_adi():
     servisler.claude_cevir(m, "k", istemci_(ilesiz))
     assert "ürün adı her zaman ATLAS" in ile["system"] and "ATLAS" in ile["messages"][0]["content"]
     assert "MEDUSA" not in json.dumps(ilesiz, ensure_ascii=False) and "ürün adı" not in ilesiz["system"]
+
+
+# ---------------------------------------------------------------- R5: kaynağın saati
+
+class SahteImap:
+    """imaplib.IMAP4_SSL yerine: Gönderilmiş klasöründe verilen başlıklarla mailler döner."""
+    basliklar: list[bytes] = []
+
+    def __init__(self, host, timeout=None):
+        pass
+
+    def login(self, kullanici, sifre):
+        return "OK", [b"giris"]
+
+    def list(self):
+        return "OK", [b'(\\HasNoChildren \\Sent) "/" "[Gmail]/Sent Mail"']
+
+    def select(self, ad, readonly=False):
+        return "OK", [str(len(self.basliklar)).encode()]
+
+    def search(self, charset, *kriter):
+        return "OK", [" ".join(str(i + 1) for i in range(len(self.basliklar))).encode()]
+
+    def fetch(self, idler, sorgu):
+        parcalar = []
+        for i, b in enumerate(self.basliklar, start=1):
+            parcalar += [(f"{i} (BODY[HEADER.FIELDS (DATE SUBJECT FROM TO CC)] {{{len(b)}}}".encode(), b), b")"]
+        return "OK", parcalar
+
+    def logout(self):
+        return "BYE", []
+
+
+def _baslik(zaman: datetime, kime: str, konu: str) -> bytes:
+    return (f"Date: {format_datetime(zaman)}\r\nSubject: {konu}\r\nFrom: a@ornek.com\r\nTo: {kime}\r\n\r\n").encode()
+
+
+def test_bulunanlara_eposta_ve_commit_saati_yazilir(monkeypatch):
+    uid = kullanici_olustur()
+    bugun = servisler.istanbul_bugun()
+    ist = lambda s, d: datetime.combine(bugun, time(s, d), servisler.ISTANBUL)  # noqa: E731
+    SahteImap.basliklar = [
+        _baslik(ist(9, 12), "ayse@msg.org.tr", "A"),
+        _baslik(ist(14, 37).astimezone(timezone.utc), "crd@msg.org.tr", "B"),  # UTC başlık, grupta en son
+        _baslik(ist(11, 5), "x@imro.ie", "C"),
+    ]
+    monkeypatch.setattr(servisler.imaplib, "IMAP4_SSL", SahteImap)
+    monkeypatch.setattr(servisler, "gmail_tara", GERCEK_GMAIL_TARA)
+
+    def commitler(istek):
+        return httpx.Response(200, json=[
+            {"commit": {"message": "Rapor ekranı hızlandı", "author": {"date": f"{bugun.isoformat()}T07:05:00Z"}}},
+        ])
+    monkeypatch.setattr(servisler, "github_tara", lambda t, r, b: GERCEK_GITHUB_TARA(
+        t, r, b, httpx.Client(transport=httpx.MockTransport(commitler))))
+
+    with istemci() as c:
+        giris(c)
+        c.put("/api/ayarlar", json={"gmail_kullanici": "a@ornek.com", "gmail_sifre": "s", "github_token": "t", "github_repo": "ben/proje"})
+        bulunan = c.get("/api/bugun?yenile=1").json()["bulunan"]
+
+    saat = lambda z: datetime.fromisoformat(z).astimezone(servisler.ISTANBUL).strftime("%H:%M")  # noqa: E731
+    assert [(m["kaynak"], m["metin"][:4], saat(m["kaynak_zaman"])) for m in bulunan] == [
+        ("eposta", "MSG'", "14:37"), ("eposta", "IMRO", "11:05"), ("medusa", "Rapo", "10:05"),
+    ]
+    with OturumYapici() as db:
+        assert all(m.kaynak_zaman is not None for m in db.scalars(select(Madde).where(Madde.user_id == uid)))
