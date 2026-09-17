@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import smtplib
+import threading
 from datetime import date, datetime, time, timedelta, timezone
 from email.header import decode_header, make_header
 from email.message import EmailMessage
@@ -34,6 +35,28 @@ KURUMLAR = {
 SIRKET_ICI = "şirket içi"
 
 CLAUDE_MODEL = "claude-sonnet-5"
+
+# Kurulum sihirbazındaki hazır sürekli iş listeleri; " | " dönüşümlü ifadeleri ayırır.
+SUREKLI_SABLONLAR = [
+    {"ad": "Telif ve meslek birlikleri", "maddeler": [
+        "MESAM / MSG / IMRO yazışmaları takip edildi | Meslek birlikleriyle günlük yazışma ve takip yapıldı",
+        "CRD raporları kontrol edildi",
+        "Telif takibi ve eşleşme kontrolleri yapıldı",
+        "Eser bildirimi talepleri incelenip yanıtlandı",
+    ]},
+    {"ad": "Lisanslama", "maddeler": [
+        "Gelen lisans talepleri değerlendirildi",
+        "Lisans sözleşmeleri ve onaylar takip edildi",
+        "Cue sheet ve kullanım bildirimleri kontrol edildi",
+        "Müşteri/yapımcı yazışmaları yürütüldü",
+    ]},
+    {"ad": "Genel / idari", "maddeler": [
+        "Gelen e-postalar yanıtlandı ve takip edildi",
+        "Ekip içi koordinasyon sağlandı",
+        "Günlük iş listesi güncellendi",
+        "Bekleyen konular takip edildi",
+    ]},
+]
 
 
 def claude_sistem(proje_adi: str = "") -> str:
@@ -211,6 +234,54 @@ def epostalari_maddele(mailler: list[dict], kendi_adres: str, bugun: date, sozlu
     return tekille([madde("eposta", eposta_metni(k, konular), son_zaman[k]) for k, konular in gruplar.items()])
 
 
+NOT_ONEKI = re.compile(r"^\s*(rapor|not)\s*:\s*", re.IGNORECASE)
+NOT_EN_COK_SATIR = 10
+
+
+def _kendine_mi(m: dict, kendi_adres: str) -> bool:
+    """Alıcıların (To + Cc) hepsi kullanıcının kendisi mi."""
+    adresler = [a.strip().lower() for _, a in getaddresses([m.get("to") or "", m.get("cc") or ""]) if a.strip()]
+    return bool(adresler) and all(a == kendi_adres.lower() for a in adresler)
+
+
+def not_konusu(m: dict, kendi_adres: str) -> str | None:
+    """Kendine gönderilen 'rapor:' / 'not:' konulu mailde önekten sonraki kısım (boş olabilir); not değilse None."""
+    if not _kendine_mi(m, kendi_adres):
+        return None
+    eslesme = NOT_ONEKI.match(basligi_coz(m.get("subject")))
+    return basligi_coz(m.get("subject"))[eslesme.end():].strip() if eslesme else None
+
+
+def notlari_maddele(mailler: list[dict], kendi_adres: str, bugun: date) -> list[dict]:
+    """mailler: {"date","subject","to","cc","message-id","govde"}. Konu önekten sonra doluysa tek madde,
+    yalnız önekse gövdenin boş olmayan satırları (ilk 10). id, Message-ID'den türer; ikinci taramada aynı çıkar."""
+    maddeler = []
+    for m in mailler:
+        zaman = istanbul_zamani(m.get("date"))
+        if zaman is None or zaman.date() != bugun:
+            continue
+        konu = not_konusu(m, kendi_adres)
+        if konu is None:
+            continue
+        satirlar = [konu] if konu else [x.strip() for x in (m.get("govde") or "").splitlines() if x.strip()][:NOT_EN_COK_SATIR]
+        kimlik = (m.get("message-id") or "").strip() or f"{m.get('date')}|{m.get('subject')}"
+        for sira, satir in enumerate(satirlar):
+            maddeler.append({
+                "id": "not-" + hashlib.sha1(f"{kimlik}#{sira}".encode("utf-8")).hexdigest()[:20],
+                "metin": satir, "kaynak": "not", "kaynak_zaman": zaman,
+            })
+    return maddeler
+
+
+def duz_metin_govde(msg: email.message.Message) -> str:
+    """İlk text/plain parçası; yoksa boş."""
+    for parca in msg.walk() if msg.is_multipart() else [msg]:
+        if parca.get_content_type() == "text/plain" and not parca.get_filename():
+            veri = parca.get_payload(decode=True) or b""
+            return veri.decode(parca.get_content_charset() or "utf-8", "replace")
+    return ""
+
+
 def _mutf7_coz(s: str) -> str:
     def coz(m: re.Match) -> str:
         parca = m.group(1)
@@ -296,19 +367,30 @@ def gmail_test(kullanici: str, sifre: str) -> str:
 
 
 def gmail_tara(kullanici: str, sifre: str, bugun: date, sozluk: dict[str, str] | None = None) -> list[dict]:
+    """Gönderilen e-posta maddeleri (kaynak 'eposta') + kendine atılan not maddeleri (kaynak 'not')."""
     def oku(M: imaplib.IMAP4_SSL) -> list[dict]:
         dun = bugun - timedelta(days=1)
         _, veri = M.search(None, "SINCE", f"{dun.day:02d}-{AYLAR[dun.month - 1]}-{dun.year}")
         kimlikler = veri[0].split() if veri and veri[0] else []
         mailler = []
         if kimlikler:
-            _, parcalar = M.fetch(b",".join(kimlikler).decode(), "(BODY.PEEK[HEADER.FIELDS (DATE SUBJECT FROM TO CC)])")
+            _, parcalar = M.fetch(b",".join(kimlikler).decode(), "(BODY.PEEK[HEADER.FIELDS (DATE SUBJECT FROM TO CC MESSAGE-ID)])")
             for parca in parcalar:
                 if not isinstance(parca, tuple):
                     continue
                 msg = email.message_from_bytes(parca[1])
-                mailler.append({k: msg.get(k) for k in ("date", "subject", "from", "to", "cc")})
-        return epostalari_maddele(mailler, kullanici, bugun, sozluk)
+                m = {k: msg.get(k) for k in ("date", "subject", "from", "to", "cc", "message-id")}
+                m["imap_id"] = parca[0].split()[0].decode()
+                mailler.append(m)
+        notlar, gonderilen = [], []
+        for m in mailler:
+            konu = not_konusu(m, kullanici)
+            (gonderilen if konu is None else notlar).append(m)
+            if konu == "" and bugun_mu(m.get("date"), bugun):  # yalnız önek: satırlar gövdede
+                _, govde = M.fetch(m["imap_id"], "(BODY.PEEK[])")
+                ham = next((g[1] for g in govde if isinstance(g, tuple)), b"")
+                m["govde"] = duz_metin_govde(email.message_from_bytes(ham))
+        return epostalari_maddele(gonderilen, kullanici, bugun, sozluk) + notlari_maddele(notlar, kullanici, bugun)
 
     return _gmail_oturumu(kullanici, sifre, oku)
 
@@ -397,6 +479,18 @@ class ClaudeHatasi(Exception):
     pass
 
 
+_yerel = threading.local()
+
+
+def son_kullanim() -> dict:
+    """Bu iş parçacığındaki son Claude yanıtının usage alanı: {"girdi": int, "cikti": int}; yoksa sıfır."""
+    return getattr(_yerel, "kullanim", None) or {"girdi": 0, "cikti": 0}
+
+
+def kullanimi_sifirla() -> None:
+    _yerel.kullanim = None
+
+
 def _claude_cagir(istek: dict, api_anahtari: str, istemci: httpx.Client | None = None) -> str:
     """Messages API'ye tek istek; yanıtın metin bloklarını döner. Her hata ClaudeHatasi olur."""
     istemci = istemci or httpx.Client(timeout=90)
@@ -417,6 +511,11 @@ def _claude_cagir(istek: dict, api_anahtari: str, istemci: httpx.Client | None =
         raise ClaudeHatasi(f"bağlanılamadı ({e.__class__.__name__})") from e
     except ValueError as e:
         raise ClaudeHatasi("yanıt okunamadı") from e
+    usage = govde.get("usage") if isinstance(govde.get("usage"), dict) else {}
+    _yerel.kullanim = {
+        "girdi": sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")),
+        "cikti": int(usage.get("output_tokens") or 0),
+    }
     if govde.get("stop_reason") == "refusal":
         raise ClaudeHatasi("istek reddedildi")
     return "".join(b.get("text", "") for b in govde.get("content", []) if b.get("type") == "text")
@@ -580,26 +679,30 @@ def raporu_uret(ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | f
     """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu (çözülmüş).
     haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez."""
     bugun = istanbul_bugun()
-    sonuc = {"tarih": bugun.isoformat(), "eposta": [], "medusa": [], "hatalar": []}
+    sonuc = {"tarih": bugun.isoformat(), "eposta": [], "medusa": [], "not": [], "hatalar": []}
+    # Kapalı kaynak sessizce atlanır; açık ama ayarı eksik olan uyarı yazar.
+    acik = ayarlar.get("kaynaklar") or {"gmail": True, "github": True}
 
-    if ayarlar.get("gmail_kullanici") and ayarlar.get("gmail_sifre"):
+    if acik.get("gmail") and ayarlar.get("gmail_kullanici") and ayarlar.get("gmail_sifre"):
         try:
-            sonuc["eposta"] = gmail_tara(ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], bugun, ayarlar.get("alan_sozlugu"))
+            bulunan = gmail_tara(ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], bugun, ayarlar.get("alan_sozlugu"))
+            sonuc["eposta"] = [m for m in bulunan if m["kaynak"] != "not"]
+            sonuc["not"] = [m for m in bulunan if m["kaynak"] == "not"]
         except KaynakHatasi as e:
             sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": str(e)})
         except Exception as e:
             sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": f"Gmail taranamadı: {e.__class__.__name__}"})
-    else:
+    elif acik.get("gmail"):
         sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": "Gmail ayarı girilmemiş (Ayarlar)"})
 
-    if ayarlar.get("github_token") and ayarlar.get("github_repo"):
+    if acik.get("github") and ayarlar.get("github_token") and ayarlar.get("github_repo"):
         try:
             sonuc["medusa"] = github_tara(ayarlar["github_token"], ayarlar["github_repo"], bugun)
         except KaynakHatasi as e:
             sonuc["hatalar"].append({"kaynak": "github", "mesaj": str(e)})
         except Exception as e:
             sonuc["hatalar"].append({"kaynak": "github", "mesaj": f"GitHub taranamadı: {e.__class__.__name__}"})
-    else:
+    elif acik.get("github"):
         sonuc["hatalar"].append({"kaynak": "github", "mesaj": "GitHub ayarı girilmemiş (Ayarlar)"})
 
     yeniler = [m for m in sonuc["eposta"] + sonuc["medusa"] if m["id"] not in haric_idler]

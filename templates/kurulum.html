@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="tr">
+<head>
+{% include "_stil.html" %}
+{% import "_ikon.html" as i %}
+<title>Kurulum · Günlük rapor</title>
+<style>
+main{max-width:640px; gap:14px}
+.bant .adimNo{margin-left:auto; font-size:13px; font-weight:600; color:var(--dark-ink-2)}
+
+/* ilerleme noktaları */
+.ilerleme{display:flex; align-items:center; gap:10px; padding:4px 6px 0}
+.noktalar{display:flex; gap:6px; align-items:center}
+.nokta{width:8px; height:8px; border-radius:999px; background:var(--check-off); transition:width .2s, background .2s}
+.nokta.gecti{background:var(--ink-3)}
+.nokta.simdi{width:26px; background:var(--accent)}
+.ilerleme .adimYazi{font-size:12.5px; font-weight:600; color:var(--ink-2)}
+.ilerleme .link{margin-left:auto}
+@media (prefers-reduced-motion: reduce){ .nokta{transition:none} }
+
+.adim{display:flex; flex-direction:column}
+.adim > .ust{padding:18px 18px 6px}
+.adim > .ust h2{font-size:21px; letter-spacing:-.02em}
+.adim > .ust .hint{margin-top:6px; font-size:14px; line-height:1.45}
+.adim .alt{display:flex; flex-direction:column; align-items:stretch; gap:10px; padding:14px 14px 16px; border-top:1px solid var(--line)}
+.adim .alt .link{align-self:center; padding:6px 10px}
+.form{display:flex; flex-direction:column}
+
+/* Gmail adımı */
+.gmailIzgara{display:flex; flex-direction:column}
+.rehber{margin:0 14px 12px; background:var(--sub); border-radius:14px; padding:0}
+.rehber summary{cursor:pointer; list-style:none; display:flex; align-items:center; gap:8px; padding:12px 14px; font-size:14px; font-weight:600}
+.rehber summary::-webkit-details-marker{display:none}
+.rehber summary svg{transition:transform .15s; color:var(--ink-3)}
+.rehber[open] summary svg{transform:rotate(90deg)}
+.rehber ol{margin:0; padding:0 14px 4px 36px; font-size:13.5px; line-height:1.5; display:flex; flex-direction:column; gap:6px}
+.rehber ol b{font-weight:600}
+.rehber .not{margin:10px 14px 14px; font-size:12.5px; color:var(--ink-2)}
+.testSatiri{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.testSatiri .secondary{height:44px; font-size:14px}
+#testSonuc{font-size:13px; margin:0}
+#testSonuc.ok{color:var(--ok-ink)}
+#testSonuc.hata{color:var(--danger)}
+.ipucu{background:var(--accent-bg); border-radius:12px; padding:10px 12px; font-size:13px; margin:0; display:flex; gap:8px; align-items:flex-start}
+.ipucu svg{color:var(--accent); margin-top:2px}
+
+/* sürekli işler adımı */
+.grup > .lbl{padding:14px 14px 4px; font-size:13px; font-weight:700; color:var(--ink-2)}
+.sablon{display:flex; align-items:center; gap:10px; padding:6px 14px}
+.sablon{min-height:50px}
+.sablon input[type=text]{padding:9px 12px; font-size:14px}
+.sablon .yazi{flex:1; min-width:0; font-size:14px; color:var(--ink-2); padding:8px 0 8px 4px; overflow-wrap:anywhere; cursor:pointer}
+.sablon.mevcut .yazi{cursor:default}
+.sablon .var{font-size:11px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:1px 8px; white-space:nowrap}
+.ekle{display:flex; gap:8px; padding:12px 14px 4px}
+.ekle input{flex:1; min-width:0}
+.ekle .arti{width:44px; height:44px; border:0; border-radius:12px; background:var(--btn); color:var(--btn-ink); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none}
+.mevcutBilgi{padding:10px 14px 0}
+
+/* hatırlatma adımı */
+input[type=time]{width:124px; font-weight:600; flex:none}
+.gunler{display:flex; gap:6px}
+.gunler label{flex:1; position:relative}
+.gunler input{position:absolute; opacity:0; inset:0; margin:0; cursor:pointer}
+.gunler span{display:flex; align-items:center; justify-content:center; height:36px; border-radius:10px; font-size:12.5px; font-weight:600; background:var(--field); color:var(--ink-2)}
+.gunler input:checked + span{background:var(--btn); color:var(--btn-ink)}
+.gunler input:focus-visible + span{outline:2px solid var(--focus); outline-offset:2px}
+#pushAc{height:44px; font-size:14px}
+#pushSonuc{font-size:13px; margin:0}
+#pushSonuc.ok{color:var(--ok-ink)}
+label.row{cursor:pointer}
+
+@media (min-width:761px){
+  main{max-width:860px}
+  .adim > .ust{padding:22px 24px 8px}
+  .row{padding:12px 24px}
+  .adim .alt{flex-direction:row-reverse; align-items:center; justify-content:flex-start; padding:16px 24px}
+  .adim .alt .primary{min-width:180px}
+  .adim .alt .link{margin-right:auto}
+  .gmailIzgara{display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:0 8px; align-items:start}
+  .rehber{margin:12px 24px 16px 0}
+  .grup > .lbl{padding:16px 24px 4px}
+  .sablon{padding:6px 24px}
+  .ekle{padding:12px 24px 4px}
+  .mevcutBilgi{padding:10px 24px 0}
+}
+</style>
+</head>
+<body>
+{% set aktif = 'kurulum' %}
+{% include "_ust.html" %}
+<div class="bant">
+  <h1>Kurulum</h1>
+  <span class="adimNo" id="bantAdim">1 / 4</span>
+</div>
+
+<main>
+  <p class="uyari" id="hata" role="alert" hidden></p>
+
+  <div class="ilerleme">
+    <div class="noktalar" aria-hidden="true"><span class="nokta"></span><span class="nokta"></span><span class="nokta"></span><span class="nokta"></span></div>
+    <span class="adimYazi" id="adimYazi">Adım 1 / 4</span>
+    <button type="button" class="link soluk" id="geri" hidden>{{ i.ikon('geri', 14, 2.2) }}Geri</button>
+  </div>
+
+  <!-- 1) Hoş geldin -->
+  <section class="card adim" data-adim="0" aria-labelledby="b0">
+    <div class="ust">
+      <h2 id="b0">Hoş geldin{% if kullanici.ad %}, {{ kullanici.ad }}{% endif %}</h2>
+      <p class="hint">Bu araç günün sonunda patronuna atacağın raporu hazırlar; sen sadece maddeleri tikler, WhatsApp'ta gönderirsin.</p>
+    </div>
+    <div class="form">
+      <div class="row dikey">
+        <label class="alan" for="ad">Adın</label>
+        <input type="text" id="ad" value="{{ kullanici.ad }}" autocomplete="name" maxlength="120">
+      </div>
+      <div class="row dikey">
+        <label class="alan" for="rapor_basligi">Rapor başlığı</label>
+        <input type="text" id="rapor_basligi" value="Günlük Rapor" maxlength="120">
+      </div>
+      <div class="row dikey">
+        <label class="alan" for="patron_telefon">Patronun WhatsApp numarası</label>
+        <input type="tel" id="patron_telefon" inputmode="numeric" placeholder="905xxxxxxxxx">
+        <div class="meta">Ülke koduyla. Boş bırakırsan WhatsApp kişi seçtirir.</div>
+      </div>
+    </div>
+    <div class="alt">
+      <button type="button" class="primary" data-devam>Devam</button>
+      <button type="button" class="link soluk" data-sonra>Sonra yaparım</button>
+    </div>
+  </section>
+
+  <!-- 2) Gmail -->
+  <section class="card adim" data-adim="1" aria-labelledby="b1" hidden>
+    <div class="ust">
+      <h2 id="b1">Gmail'i bağla</h2>
+      <p class="hint">Gün içinde gönderdiğin e-postalar rapora kendiliğinden düşer. Yalnız Gönderilmiş klasörü okunur.</p>
+    </div>
+    <div class="gmailIzgara">
+      <div class="form">
+        <div class="row dikey">
+          <label class="alan" for="gmail_kullanici">Gmail adresi</label>
+          <input type="email" id="gmail_kullanici" autocomplete="email" value="{{ kullanici.eposta }}">
+        </div>
+        <div class="row dikey">
+          <label class="alan" for="gmail_sifre">Uygulama şifresi <small>— 16 hane</small></label>
+          <input type="password" id="gmail_sifre" autocomplete="new-password" spellcheck="false">
+          <div class="testSatiri">
+            <button type="button" class="secondary" id="test">Bağlantıyı test et</button>
+            <p id="testSonuc" aria-live="polite"></p>
+          </div>
+        </div>
+        <div class="row dikey">
+          <p class="ipucu">{{ i.ikon('zarf', 15) }}<span>Telefondan hızlı not: kendine 'rapor: ...' konulu e-posta at, akşam listede olur.</span></p>
+        </div>
+      </div>
+      <details class="rehber" id="rehber">
+        <summary>{{ i.ikon('ileri', 14, 2.4) }}Uygulama şifresi nasıl alınır?</summary>
+        <ol>
+          <li>Google hesabında <b>2 Adımlı Doğrulama</b> açık olmalı.</li>
+          <li><b>myaccount.google.com</b> adresine gir.</li>
+          <li>Soldaki menüden <b>Güvenlik</b>'i aç.</li>
+          <li>Üstteki arama kutusuna <b>"Uygulama şifreleri"</b> yaz.</li>
+          <li>Uygulama adına <b>rapor</b> yaz ve <b>Oluştur</b>'a bas.</li>
+          <li>Çıkan 16 haneli şifreyi <b>boşluksuz</b> buraya yapıştır.</li>
+        </ol>
+        <p class="not">Seçenek çıkmıyorsa yöneticine sor.</p>
+      </details>
+    </div>
+    <div class="alt">
+      <button type="button" class="primary" data-devam>Devam</button>
+      <button type="button" class="link soluk" data-sonra>Sonra yaparım</button>
+    </div>
+  </section>
+
+  <!-- 3) Sürekli işler -->
+  <section class="card adim" data-adim="2" aria-labelledby="b2" hidden>
+    <div class="ust">
+      <h2 id="b2">Sürekli işlerin</h2>
+      <p class="hint">Her gün raporda tekrar eden işler. Uyanları tikle, istersen metni düzelt; eklediklerin Bugün sayfasında her gün hazır gelir.</p>
+    </div>
+    <p class="hint mevcutBilgi" id="mevcutBilgi" hidden></p>
+    <div id="sablonlar"></div>
+    <div class="grup" id="kendiGrup">
+      <div class="lbl">Kendi işlerin</div>
+      <div id="kendiListe"></div>
+      <div class="ekle">
+        <label for="kendiYeni" class="gizli-etiket">Kendi sürekli işin</label>
+        <input type="text" id="kendiYeni" placeholder="Kendi satırını ekle">
+        <button class="arti" id="kendiEkle" type="button" aria-label="Ekle">{{ i.ikon('arti', 18, 2.4) }}</button>
+      </div>
+    </div>
+    <div class="alt">
+      <button type="button" class="primary" data-devam>Devam</button>
+      <button type="button" class="link soluk" data-sonra>Sonra yaparım</button>
+    </div>
+  </section>
+
+  <!-- 4) Hatırlatma -->
+  <section class="card adim" data-adim="3" aria-labelledby="b3" hidden>
+    <div class="ust">
+      <h2 id="b3">Hatırlatma</h2>
+      <p class="hint">Rapor o gün gönderilmediyse bu saatte hatırlatırız.</p>
+    </div>
+    <div class="form">
+      <div class="row orta">
+        <div class="kim" style="flex:1"><label class="lbl" for="hatirlatma_saat">Saat</label></div>
+        <input type="time" id="hatirlatma_saat" value="17:00" required>
+      </div>
+      <div class="row dikey">
+        <div class="lbl" id="gunlerBaslik">Günler</div>
+        <div class="gunler" id="gunler" role="group" aria-labelledby="gunlerBaslik">
+          {% for no, ad in [(1,'Pzt'),(2,'Sal'),(3,'Çar'),(4,'Per'),(5,'Cum'),(6,'Cmt'),(7,'Paz')] %}
+          <label><input type="checkbox" value="{{ no }}"{% if no <= 5 %} checked{% endif %}><span>{{ ad }}</span></label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="row dikey">
+        <div class="lbl">Telefon bildirimi</div>
+        <p class="hint" id="pushBilgi" hidden></p>
+        <button type="button" class="secondary" id="pushAc">{{ i.ikon('telefon', 17) }}Bu cihazda bildirimi aç</button>
+        <p id="pushSonuc" aria-live="polite"></p>
+      </div>
+      <label class="row orta" for="hatirlatma_eposta">
+        <input type="checkbox" class="ck" id="hatirlatma_eposta" checked>
+        <span class="kim" style="flex:1"><span class="lbl">E-posta hatırlatması</span><span class="meta" id="epostaMeta">Kendi Gmail'inden sana gönderilir</span></span>
+      </label>
+    </div>
+    <div class="alt">
+      <button type="button" class="primary" id="bitir">Bitir</button>
+      <button type="button" class="link soluk" data-sonra>Sonra yaparım</button>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ADIM_SAYISI = 4;
+const adimlar = [...document.querySelectorAll('.adim')];
+let adim = 0, bilgi = null;
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
+function hataGoster(msg){ $('hata').textContent = msg || ''; $('hata').hidden = !msg; }
+function el(etiket, sinif, metin){ const e=document.createElement(etiket); if(sinif) e.className=sinif; if(metin!==undefined) e.textContent=metin; return e; }
+
+async function istek(yol, secenek = {}){
+  const r = await fetch(yol, { credentials:'same-origin', headers:{ 'Content-Type':'application/json' }, ...secenek });
+  if (r.status === 401) { location.href = '/giris'; throw new Error('oturum yok'); }
+  const govde = await r.json().catch(() => ({}));
+  if (r.status === 403 && /şifre/i.test(govde.detail || '')) { location.href = '/sifre'; }
+  if (!r.ok) throw new Error(typeof govde.detail === 'string' ? govde.detail : `Sunucu ${r.status} döndürdü`);
+  return govde;
+}
+const gonder = (yol, govde, yontem = 'POST') => istek(yol, { method: yontem, body: JSON.stringify(govde) });
+
+// ---------------------------------------------------------------- adım geçişi
+function goster(n){
+  adim = n;
+  adimlar.forEach((a, i) => a.hidden = i !== n);
+  document.querySelectorAll('.nokta').forEach((d, i) => { d.classList.toggle('simdi', i === n); d.classList.toggle('gecti', i < n); });
+  $('adimYazi').textContent = `Adım ${n + 1} / ${ADIM_SAYISI}`;
+  $('bantAdim').textContent = `${n + 1} / ${ADIM_SAYISI}`;
+  $('geri').hidden = n === 0;
+  hataGoster('');
+  window.scrollTo({ top: 0 });
+  const ilk = adimlar[n].querySelector('input:not([type=checkbox]):not(:disabled)');
+  if (ilk && matchMedia('(min-width:761px)').matches) ilk.focus({ preventScroll: true });
+}
+$('geri').onclick = () => goster(Math.max(0, adim - 1));
+
+async function bitir(){
+  await gonder('/api/kurulum/bitir', {});
+  location.href = '/';
+}
+
+const KAYDET = [
+  // 1) profil
+  async () => {
+    await gonder('/api/kurulum/profil', { ad: $('ad').value, rapor_basligi: $('rapor_basligi').value, patron_telefon: $('patron_telefon').value });
+  },
+  // 2) Gmail: adres ya da yeni şifre girildiyse kaydedilir
+  async () => {
+    const govde = gmailGovdesi();
+    if (govde) await gonder('/api/ayarlar', govde, 'PUT');
+  },
+  // 3) sürekli işler
+  async () => {
+    const metinler = [...document.querySelectorAll('#sablonlar .sablon, #kendiListe .sablon')]
+      .filter(s => { const k = s.querySelector('.ck'); return k.checked && !k.disabled; })
+      .map(s => s.querySelector('input[type=text]').value.trim()).filter(Boolean);
+    if (!metinler.length) return;
+    const r = await gonder('/api/kurulum/surekli', { metinler });
+    if (r.eklenen) toast(`${r.eklenen} sürekli iş eklendi`);
+  },
+  // 4) hatırlatma
+  async () => {
+    await gonder('/api/ayarlar', {
+      hatirlatma_saat: $('hatirlatma_saat').value || '17:00',
+      hatirlatma_gunler: [...document.querySelectorAll('#gunler input:checked')].map(k => Number(k.value)),
+      hatirlatma_eposta: $('hatirlatma_eposta').checked,
+    }, 'PUT');
+  },
+];
+
+document.querySelectorAll('[data-devam]').forEach(b => b.onclick = async () => {
+  b.disabled = true;
+  try { await KAYDET[adim](); goster(adim + 1); }
+  catch (err) { hataGoster(err.message); }
+  finally { b.disabled = false; }
+});
+document.querySelectorAll('[data-sonra]').forEach(b => b.onclick = async () => {
+  if (adim < ADIM_SAYISI - 1) return goster(adim + 1);
+  b.disabled = true;
+  try { await bitir(); } catch (err) { hataGoster(err.message); b.disabled = false; }
+});
+$('bitir').onclick = async () => {
+  $('bitir').disabled = true;
+  try { await KAYDET[3](); await bitir(); }
+  catch (err) { hataGoster(err.message); $('bitir').disabled = false; }
+};
+
+// ---------------------------------------------------------------- 2) Gmail
+const rehberAcik = matchMedia('(min-width:761px)');
+$('rehber').open = rehberAcik.matches;
+$('gmail_sifre').addEventListener('input', e => {
+  const temiz = e.target.value.replace(/\s+/g, '');  // Google şifreyi 4'lü gruplar halinde gösterir
+  if (temiz !== e.target.value) e.target.value = temiz;
+});
+function gmailGovdesi(){
+  const adres = $('gmail_kullanici').value.trim(), sifre = $('gmail_sifre').value.trim();
+  const eski = (bilgi && bilgi.ayarlar.gmail_kullanici) || '';
+  if (!sifre && adres.toLowerCase() === eski.toLowerCase()) return null;
+  return sifre ? { gmail_kullanici: adres, gmail_sifre: sifre } : { gmail_kullanici: adres };
+}
+$('test').onclick = async () => {
+  const s = $('testSonuc');
+  $('test').disabled = true; s.className = ''; s.textContent = 'Test ediliyor…';
+  try {
+    const govde = gmailGovdesi();
+    if (govde) bilgi.ayarlar = await gonder('/api/ayarlar', govde, 'PUT');
+    $('gmail_sifre').value = '';
+    $('gmail_sifre').placeholder = bilgi.ayarlar.gmail_sifre_kayitli ? 'kayıtlı ••••' : '';
+    const t = await istek('/api/ayarlar/test?kaynak=gmail', { method:'POST' });
+    if (t.gmail_ok) {
+      bilgi.ayarlar = await gonder('/api/ayarlar', { kaynaklar: { gmail: true } }, 'PUT');
+      s.className = 'ok'; s.textContent = 'Bağlandı. Gmail artık taranacak.';
+    } else {
+      s.className = 'hata'; s.textContent = t.sonuc.replace(/^Gmail:\s*/, '');
+    }
+  } catch (err) { s.className = 'hata'; s.textContent = err.message; }
+  finally { $('test').disabled = false; }
+};
+
+// ---------------------------------------------------------------- 3) sürekli işler
+const anahtar = m => m.replace(/\s+/g, ' ').trim().replace(/I/g, 'ı').replace(/İ/g, 'i').toLowerCase();
+// Tiksiz satır sarılan düz metindir; tiklenince metin düzenlenebilir alana döner.
+function sablonSatiri(metin, mevcut, tikli){
+  const satir = el('div', 'sablon' + (mevcut ? ' mevcut' : ''));
+  const cb = el('input', 'ck'); cb.type = 'checkbox'; cb.setAttribute('aria-label', 'Listeye ekle');
+  const yazi = el('span', 'yazi', metin);
+  if (mevcut) {
+    cb.checked = true; cb.disabled = true;
+    satir.append(cb, yazi, el('span', 'var', 'listende var'));
+    return satir;
+  }
+  const giris = el('input'); giris.type = 'text'; giris.value = metin; giris.setAttribute('aria-label', 'Sürekli iş metni');
+  const goster = odakla => {
+    giris.hidden = !cb.checked; yazi.hidden = cb.checked;
+    if (!cb.checked) yazi.textContent = giris.value.trim() || metin;
+    if (cb.checked && odakla) giris.focus();
+  };
+  cb.checked = !!tikli;
+  cb.onchange = () => goster(true);
+  yazi.onclick = () => { cb.checked = true; goster(true); };
+  satir.append(cb, yazi, giris);
+  goster(false);
+  return satir;
+}
+function sablonlariCiz(){
+  const mevcut = new Set(bilgi.surekli.map(anahtar));
+  const kap = $('sablonlar'); kap.replaceChildren();
+  bilgi.sablonlar.forEach(s => {
+    const grup = el('div', 'grup');
+    grup.append(el('div', 'lbl', s.ad));
+    s.maddeler.forEach(m => grup.append(sablonSatiri(m, mevcut.has(anahtar(m)))));
+    kap.append(grup);
+  });
+  const n = bilgi.surekli.length;
+  $('mevcutBilgi').textContent = n ? `Listende zaten ${n} sürekli iş var; hepsi korunur.` : '';
+  $('mevcutBilgi').hidden = !n;
+}
+function kendiEkle(){
+  const metin = $('kendiYeni').value.trim(); if (!metin) return;
+  $('kendiListe').append(sablonSatiri(metin, false, true));
+  $('kendiYeni').value = ''; $('kendiYeni').focus();
+}
+$('kendiEkle').onclick = kendiEkle;
+$('kendiYeni').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); kendiEkle(); } };
+
+// ---------------------------------------------------------------- 4) telefon bildirimi (Ayarlar'daki akışla aynı)
+const pushDestekli = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const iosCihaz = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const anaEkranda = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+if (pushDestekli) navigator.serviceWorker.register('/sw.js').catch(() => {});
+function pushBilgi(msg){ $('pushBilgi').textContent = msg || ''; $('pushBilgi').hidden = !msg; }
+function b64UrlBaytlar(metin){
+  const b64 = (metin + '='.repeat((4 - metin.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+if (iosCihaz && !anaEkranda) {
+  $('pushAc').disabled = true;
+  pushBilgi("iPhone'da önce Paylaş → Ana Ekrana Ekle, sonra uygulamayı ana ekrandan açıp bildirimi aç. Bunu sonra Ayarlar'dan da yapabilirsin.");
+} else if (!pushDestekli) {
+  $('pushAc').disabled = true;
+  pushBilgi('Bu tarayıcı bildirimleri desteklemiyor; e-posta hatırlatması yeterli olur.');
+} else if (Notification.permission === 'denied') {
+  pushBilgi('Bu cihazda bildirim izni reddedilmiş; tarayıcı ayarlarından izin verin.');
+}
+$('pushAc').onclick = async () => {
+  $('pushAc').disabled = true; $('pushSonuc').className = ''; $('pushSonuc').textContent = '';
+  try {
+    const izin = await Notification.requestPermission();
+    if (izin !== 'granted') { pushBilgi('Bildirim izni verilmedi.'); return; }
+    const { anahtar: vapid } = await istek('/api/push/anahtar');
+    const kayit = await navigator.serviceWorker.ready;
+    let abonelik = await kayit.pushManager.getSubscription();
+    if (abonelik) {
+      const mevcut = abonelik.options && abonelik.options.applicationServerKey;
+      const ayni = mevcut && btoa(String.fromCharCode(...new Uint8Array(mevcut))) === btoa(String.fromCharCode(...b64UrlBaytlar(vapid)));
+      if (!ayni) { await abonelik.unsubscribe(); abonelik = null; }
+    }
+    if (!abonelik) abonelik = await kayit.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64UrlBaytlar(vapid) });
+    await gonder('/api/push/abone', { subscription: abonelik.toJSON() });
+    await gonder('/api/ayarlar', { hatirlatma_push: true }, 'PUT');
+    pushBilgi(''); $('pushSonuc').className = 'ok'; $('pushSonuc').textContent = 'Bu cihazda bildirim açık.';
+  } catch (err) { hataGoster(`Bildirim açılamadı: ${err.message}`); }
+  finally { $('pushAc').disabled = false; }
+};
+
+// ---------------------------------------------------------------- başlangıç
+(async () => {
+  try {
+    bilgi = await istek('/api/kurulum');
+    const a = bilgi.ayarlar;
+    $('ad').value = bilgi.ad || '';
+    $('rapor_basligi').value = a.rapor_basligi || 'Günlük Rapor';
+    $('patron_telefon').value = a.patron_telefon || '';
+    $('gmail_kullanici').value = a.gmail_kullanici || bilgi.eposta || '';
+    $('gmail_sifre').placeholder = a.gmail_sifre_kayitli ? 'kayıtlı ••••' : '';
+    if (a.kaynaklar && a.kaynaklar.gmail && a.gmail_sifre_kayitli) { $('testSonuc').className = 'ok'; $('testSonuc').textContent = 'Gmail bağlı.'; }
+    $('hatirlatma_saat').value = a.hatirlatma_saat || '17:00';
+    document.querySelectorAll('#gunler input').forEach(k => k.checked = (a.hatirlatma_gunler || []).includes(Number(k.value)));
+    $('hatirlatma_eposta').checked = a.hatirlatma_eposta !== false;
+    $('epostaMeta').textContent = `Kendi Gmail'inden ${a.hatirlatma_eposta_adres || bilgi.eposta} adresine gönderilir`;
+    sablonlariCiz();
+  } catch (err) { hataGoster('Bilgiler yüklenemedi: ' + err.message); }
+  goster(0);
+})();
+</script>
+</body>
+</html>

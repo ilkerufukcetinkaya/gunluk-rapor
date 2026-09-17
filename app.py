@@ -24,7 +24,7 @@ from kimlik import (  # noqa: E402
     GirisGerekli, SifreDegistirilmeli, aktif_kullanici, cerez_sil, cerez_yaz, giris_yapmis, oturum_verisi,
     oturumdaki_kullanici, yonetici,
 )
-from veritabani import Kullanici, OturumYapici, oturum, simdi, tablolari_olustur  # noqa: E402
+from veritabani import Kullanici, KullaniciAyari, OturumYapici, oturum, simdi, tablolari_olustur  # noqa: E402
 
 log = logging.getLogger("gunluk-rapor")
 sablonlar = Jinja2Templates(directory=Path(__file__).with_name("templates"))
@@ -74,6 +74,27 @@ def sifre_degistirilmeli(request: Request, _: SifreDegistirilmeli):
     if request.url.path.startswith("/api/"):
         return JSONResponse({"detail": "Önce şifrenizi değiştirin"}, status_code=403)
     return RedirectResponse("/sifre", status_code=303)
+
+
+class KurulumGerekli(Exception):
+    pass
+
+
+@app.exception_handler(KurulumGerekli)
+def kurulum_gerekli(request: Request, _: KurulumGerekli):
+    return RedirectResponse("/kurulum", status_code=303)
+
+
+def kurulmus_kullanici(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> Kullanici:
+    """HTML sayfaları için: ilk kurulum bitmediyse sihirbaza yönlendirir. API uçları, /cikis ve /sifre bunu kullanmaz."""
+    a = db.get(KullaniciAyari, kullanici.id)
+    if not (a and a.kurulum_tamam):
+        raise KurulumGerekli()
+    return kullanici
+
+
+def kurulmus_yonetici(kullanici: Kullanici = Depends(yonetici), _: Kullanici = Depends(kurulmus_kullanici)) -> Kullanici:
+    return kullanici
 
 
 def sayfa(request: Request, ad: str, durum: int = 200, **baglam) -> HTMLResponse:
@@ -160,25 +181,42 @@ def sifre_degistir(
 # ---------------------------------------------------------------- sayfalar
 
 @app.get("/", response_class=HTMLResponse)
-def ana_sayfa(request: Request, kullanici: Kullanici = Depends(aktif_kullanici)):
+def ana_sayfa(request: Request, kullanici: Kullanici = Depends(kurulmus_kullanici)):
     return sayfa(request, "index.html", kullanici=kullanici)
 
 
 @app.get("/gecmis", response_class=HTMLResponse)
-def gecmis_sayfasi(request: Request, kullanici: Kullanici = Depends(aktif_kullanici)):
+def gecmis_sayfasi(request: Request, kullanici: Kullanici = Depends(kurulmus_kullanici)):
     return sayfa(request, "gecmis.html", kullanici=kullanici, bugun=api.bugun().isoformat())
 
 
 @app.get("/ayarlar", response_class=HTMLResponse)
-def ayarlar_sayfasi(request: Request, kullanici: Kullanici = Depends(aktif_kullanici)):
+def ayarlar_sayfasi(request: Request, kullanici: Kullanici = Depends(kurulmus_kullanici)):
     return sayfa(request, "ayarlar.html", kullanici=kullanici)
+
+
+@app.get("/kurulum", response_class=HTMLResponse)
+def kurulum_sayfasi(request: Request, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)):
+    """Her zaman açılır (Ayarlar'daki "Kurulumu yeniden aç" da buraya gelir); Bitir kurulum_tamam'ı true bırakır."""
+    a = db.get(KullaniciAyari, kullanici.id)
+    return sayfa(request, "kurulum.html", kullanici=kullanici, kurulum_tamam=bool(a and a.kurulum_tamam))
 
 
 # ---------------------------------------------------------------- yönetim
 
 def yonetim_sayfasi(request: Request, ben: Kullanici, db: Session, durum: int = 200, hata=None, bilgi=None):
     kullanicilar = db.scalars(select(Kullanici).order_by(Kullanici.olusturma, Kullanici.id)).all()
-    return sayfa(request, "yonetim.html", durum, kullanici=ben, kullanicilar=kullanicilar, hata=hata, bilgi=bilgi)
+    ayarlar = {a.user_id: a for a in db.scalars(select(KullaniciAyari))}
+    cagrilar = api.aylik_claude_cagrilari(db, api.bugun())
+    ozet = {}
+    for k in kullanicilar:
+        a = ayarlar.get(k.id) or KullaniciAyari(user_id=k.id)
+        ozet[k.id] = {
+            "kurulum": bool(a.kurulum_tamam),
+            "kaynaklar": [ad for ad, acik in api.kaynak_durumu(a).items() if acik],
+            "ay_cagri": cagrilar.get(k.id, 0),
+        }
+    return sayfa(request, "yonetim.html", durum, kullanici=ben, kullanicilar=kullanicilar, ozet=ozet, hata=hata, bilgi=bilgi)
 
 
 def hedef_kullanici(db: Session, kullanici_id: int) -> Kullanici | None:
@@ -186,7 +224,7 @@ def hedef_kullanici(db: Session, kullanici_id: int) -> Kullanici | None:
 
 
 @app.get("/yonetim", response_class=HTMLResponse)
-def yonetim(request: Request, ben: Kullanici = Depends(yonetici), db: Session = Depends(oturum)):
+def yonetim(request: Request, ben: Kullanici = Depends(kurulmus_yonetici), db: Session = Depends(oturum)):
     return yonetim_sayfasi(request, ben, db)
 
 

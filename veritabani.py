@@ -75,6 +75,9 @@ class KullaniciAyari(Temel):
     hatirlatma_push: Mapped[bool] = mapped_column(Boolean, default=True)
     hatirlatma_eposta: Mapped[bool] = mapped_column(Boolean, default=True)
     hatirlatma_eposta_adres: Mapped[str | None] = mapped_column(String(254), nullable=True)  # boş → giriş e-postası
+    # {"gmail": bool, "github": bool, "medusa": bool}; boşsa ayarı girilmiş kaynaklar açık sayılır.
+    kaynaklar: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    kurulum_tamam: Mapped[bool] = mapped_column(Boolean, default=False)
     guncelleme: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi, onupdate=simdi)
 
 
@@ -168,6 +171,19 @@ class HatirlatmaGonderimi(Temel):
     olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
 
 
+class ClaudeKullanim(Temel):
+    """Kullanıcı + gün başına Claude çağrı sayısı ve token toplamı; günlük kota buradan okunur."""
+    __tablename__ = "claude_kullanim"
+    __table_args__ = (UniqueConstraint("user_id", "tarih", name="uq_claude_kullanim_user_tarih"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    tarih: Mapped[date] = mapped_column(Date)
+    cagri: Mapped[int] = mapped_column(Integer, default=0)
+    girdi_token: Mapped[int] = mapped_column(Integer, default=0)
+    cikti_token: Mapped[int] = mapped_column(Integer, default=0)
+
+
 # create_all mevcut tabloya kolon eklemez; eklenen kolonlar burada (tablo, kolon, Postgres tipi, sqlite tipi).
 EK_KOLONLAR = [
     ("items", "metin_ai", "TEXT", "TEXT"),
@@ -182,12 +198,45 @@ EK_KOLONLAR = [
     ("user_settings", "hatirlatma_push", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
     ("user_settings", "hatirlatma_eposta", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
     ("user_settings", "hatirlatma_eposta_adres", "VARCHAR(254)", "VARCHAR(254)"),
+    ("user_settings", "kaynaklar", "JSON", "JSON"),
+    ("user_settings", "kurulum_tamam", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
 ]
 # Sonradan eklenen tablolar; users tablosu olan şemada eksikse oluşturulur.
-EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri"]
+EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim"]
 EK_INDEKSLER = [
     ("uq_reports_user_tarih_tur", "reports", "CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_user_tarih_tur ON reports (user_id, tarih, tur)"),
 ]
+
+
+def _kolonlar(b, tablo: str, sqlite: bool) -> set[str]:
+    if sqlite:
+        return {satir[1] for satir in b.execute(text(f"PRAGMA table_info({tablo})"))}
+    return set(b.scalars(text(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = :t"
+    ), {"t": tablo}))
+
+
+def _dolu(kolon: str, mevcut: set[str]) -> str:
+    return f"({kolon} IS NOT NULL AND {kolon} <> '')" if kolon in mevcut else "(1 = 0)"
+
+
+def _kaynaklari_geri_doldur(b, sqlite: bool) -> None:
+    """Kolon yeni eklendiyse: gmail/github, şifresi/token'ı kayıtlı olanlarda açık; medusa kapalı."""
+    mevcut = _kolonlar(b, "user_settings", sqlite)
+    gmail, github = _dolu("gmail_sifre_enc", mevcut), _dolu("github_token_enc", mevcut)
+    if sqlite:
+        dogruluk = lambda k: f"CASE WHEN {k} THEN json('true') ELSE json('false') END"  # noqa: E731
+        b.execute(text(f"UPDATE user_settings SET kaynaklar = json_object('gmail', {dogruluk(gmail)}, "
+                       f"'github', {dogruluk(github)}, 'medusa', json('false'))"))
+    else:
+        b.execute(text(f"UPDATE user_settings SET kaynaklar = json_build_object('gmail', {gmail}, 'github', {github}, 'medusa', false)"))
+
+
+def _kurulumu_geri_doldur(b, sqlite: bool) -> None:
+    """Kolon yeni eklendiyse: Gmail ayarı olan mevcut kullanıcılar sihirbazı görmez."""
+    mevcut = _kolonlar(b, "user_settings", sqlite)
+    if "gmail_sifre_enc" in mevcut:
+        b.execute(text(f"UPDATE user_settings SET kurulum_tamam = {'1' if sqlite else 'true'} WHERE {_dolu('gmail_sifre_enc', mevcut)}"))
 
 
 def sema_guncelle(motor_=None) -> list[str]:
@@ -207,7 +256,7 @@ def sema_guncelle(motor_=None) -> list[str]:
             if tablo not in tablolar:
                 continue
             if sqlite:
-                mevcut = {satir[1] for satir in b.execute(text(f"PRAGMA table_info({tablo})"))}
+                mevcut = _kolonlar(b, tablo, sqlite)
                 if kolon in mevcut:
                     continue
                 b.execute(text(f"ALTER TABLE {tablo} ADD COLUMN {kolon} {sqlite_tipi}"))
@@ -220,6 +269,10 @@ def sema_guncelle(motor_=None) -> list[str]:
                     continue
                 b.execute(text(f"ALTER TABLE {tablo} ADD COLUMN IF NOT EXISTS {kolon} {pg_tipi}"))
             eklenen.append(f"{tablo}.{kolon}")
+            if (tablo, kolon) == ("user_settings", "kaynaklar"):
+                _kaynaklari_geri_doldur(b, sqlite)
+            elif (tablo, kolon) == ("user_settings", "kurulum_tamam"):
+                _kurulumu_geri_doldur(b, sqlite)
         for ad, tablo, ddl in EK_INDEKSLER:
             if tablo not in tablolar:
                 continue
@@ -246,4 +299,4 @@ def oturum():
         yield db
 
 
-__all__ = ["GunlukIfade", "HatirlatmaGonderimi", "Kullanici", "KullaniciAyari", "Madde", "PushAbonelik", "Rapor", "Session", "motor", "oturum", "tablolari_olustur"]
+__all__ = ["ClaudeKullanim", "GunlukIfade", "HatirlatmaGonderimi", "Kullanici", "KullaniciAyari", "Madde", "PushAbonelik", "Rapor", "Session", "motor", "oturum", "tablolari_olustur"]

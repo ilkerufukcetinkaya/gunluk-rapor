@@ -20,6 +20,17 @@ main{gap:16px}
 .satir.pasif .kim .lbl{color:var(--ink-2)}
 .satir form{margin:0}
 .etiket{font-size:11px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:1px 8px}
+.sutunlar{display:flex; gap:14px; align-items:flex-start}
+.sutun{display:flex; flex-direction:column; gap:3px; font-size:13px; min-width:58px}
+@media (min-width:761px){ .satir .kim{flex-basis:150px} }
+.sutun small{font-size:11px; color:var(--ink-3); font-weight:500; white-space:nowrap}
+.sutun .tamam{color:var(--ok-ink); font-weight:600}
+.sutun .bekliyor{color:var(--ongoing); font-weight:600}
+.sutun .ikonlar{display:flex; gap:4px; min-height:22px; align-items:center}
+.sutun .ikonlar .tile{width:22px; height:22px; border-radius:6px}
+.sutun .yok{color:var(--ink-3)}
+.sutun .cagri{font-weight:600}
+@media (max-width:760px){ .sutunlar{flex-basis:100%; padding-left:46px} }
 </style>
 </head>
 <body>
@@ -62,6 +73,16 @@ main{gap:16px}
           {% if not k.aktif %}<span class="etiket">pasif</span>{% endif %}
           {% if k.sifre_degistirmeli %}<span class="etiket">şifre bekliyor</span>{% endif %}</div>
           <div class="meta">{{ k.eposta }} · Son giriş: {% if k.son_giris %}<time class="zaman" datetime="{{ k.son_giris.isoformat() }}">{{ k.son_giris.strftime('%d.%m.%Y %H:%M') }}</time>{% else %}hiç{% endif %}</div>
+        </div>
+        {% set o = ozet[k.id] %}
+        <div class="sutunlar">
+          <div class="sutun"><small>Kurulum</small>{% if o.kurulum %}<span class="tamam">✓</span>{% else %}<span class="bekliyor">bekliyor</span>{% endif %}</div>
+          <div class="sutun"><small>Kaynaklar</small><span class="ikonlar">
+            {%- if 'gmail' in o.kaynaklar %}<span class="tile t-gmail" title="Gmail">{{ i.ikon('zarf', 13) }}</span>{% endif %}
+            {%- if 'github' in o.kaynaklar %}<span class="tile t-git" title="GitHub">{{ i.ikon('dal', 13) }}</span>{% endif %}
+            {%- if not o.kaynaklar %}<span class="yok">—</span>{% endif -%}
+          </span></div>
+          <div class="sutun"><small>Bu ay çağrı</small><b class="cagri">{{ o.ay_cagri }}</b></div>
         </div>
         <form method="post" action="/yonetim/{{ k.id }}/sifirla" data-ad="{{ k.ad }}" onsubmit="return confirm(this.dataset.ad + ' için yeni geçici şifre üretilsin mi? Eski şifresi geçersiz olur.')">
           <button type="submit" class="link">Şifre sıfırla</button>

@@ -19,7 +19,7 @@ import guvenlik
 import servisler
 from kimlik import aktif_kullanici
 from veritabani import (
-    GunlukIfade, HatirlatmaGonderimi, Kullanici, KullaniciAyari, Madde, PushAbonelik, Rapor, oturum, simdi,
+    ClaudeKullanim, GunlukIfade, HatirlatmaGonderimi, Kullanici, KullaniciAyari, Madde, PushAbonelik, Rapor, oturum, simdi,
 )
 
 router = APIRouter(prefix="/api")
@@ -29,6 +29,12 @@ EPOSTA_BICIMI = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SAAT_BICIMI = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 VARSAYILAN_SAAT = time(17, 0)
 VARSAYILAN_GUNLER = "1,2,3,4,5"
+KAYNAKLAR = ("gmail", "github", "medusa")
+YAKINDA = {"medusa"}  # arayüzde "yakında"; açılamaz
+# Bulunan maddenin kaynak alanı → hangi kaynak modülünden geldiği ('medusa' tarihsel olarak GitHub commit'leridir).
+BULUNAN_KAYNAGI = {"eposta": "gmail", "medusa": "github"}
+GUNLUK_CLAUDE_SINIRI = 8
+KOTA_MESAJI = "Bugünkü düzeltme hakkı doldu, yarın devam"
 
 
 def bugun() -> date:
@@ -73,6 +79,18 @@ def hatirlatma_ayari(a: KullaniciAyari) -> dict:
     }
 
 
+def kaynak_durumu(a: KullaniciAyari) -> dict[str, bool]:
+    """Kaydedilmiş seçim; kaynak için seçim yoksa şifresi/token'ı kayıtlıysa açık sayılır."""
+    secim = a.kaynaklar if isinstance(a.kaynaklar, dict) else {}
+    varsayilan = {"gmail": bool(a.gmail_sifre_enc), "github": bool(a.github_token_enc)}
+    return {k: k not in YAKINDA and bool(secim.get(k, varsayilan.get(k, False))) for k in KAYNAKLAR}
+
+
+def acik_bulunan_kaynaklari(a: KullaniciAyari) -> set[str]:
+    acik = kaynak_durumu(a)
+    return {kaynak for kaynak, modul in BULUNAN_KAYNAGI.items() if acik[modul]}
+
+
 def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
     """Şifre ve token hiçbir zaman dönmez; yalnız kayıtlı olup olmadıkları."""
     h = hatirlatma_ayari(a)
@@ -91,11 +109,14 @@ def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
         "patron_telefon": a.patron_telefon or "",
         "rapor_basligi": a.rapor_basligi or "",
         "alan_sozlugu": servisler.KURUMLAR if a.alan_sozlugu is None else a.alan_sozlugu,
+        "kaynaklar": kaynak_durumu(a),
+        "kurulum_tamam": bool(a.kurulum_tamam),
     }
 
 
 def cozulmus_ayarlar(a: KullaniciAyari) -> dict:
     return {
+        "kaynaklar": kaynak_durumu(a),
         "gmail_kullanici": a.gmail_kullanici or "",
         "gmail_sifre": guvenlik.coz(a.gmail_sifre_enc),
         "github_token": guvenlik.coz(a.github_token_enc),
@@ -212,11 +233,13 @@ def durum(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends
         Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == tarih,
     ))
     onbellek = _onbellek.get((kullanici.id, tarih.isoformat())) or {}
+    a = ayar_satiri(db, kullanici)
+    acik = acik_bulunan_kaynaklari(a)
     return {
         "kullanici": {"ad": kullanici.ad, "rol": kullanici.rol},
         "tarih": tarih.isoformat(),
-        "maddeler": [madde_json(m, ifadeler, tarih) for m in maddeler],
-        "ayarlar": ayar_ozeti(ayar_satiri(db, kullanici), kullanici),
+        "maddeler": [madde_json(m, ifadeler, tarih) for m in maddeler if m.tur != "bulunan" or m.kaynak in acik],
+        "ayarlar": ayar_ozeti(a, kullanici),
         "ai_anahtari": bool(ai_anahtari()),
         "son_kopya": zaman_iso(son_kopya),
         "tarama_zamani": onbellek.get("tarama_zamani"),
@@ -335,7 +358,8 @@ def madde_ai(
                 madde.kullanici_duzenledi = False
             madde.ai_kullan = True
             db.commit()
-            hatalar = duzeltmeyi_uygula(db, kullanici, [madde], tarih, anahtar)["hatalar"]
+            sonuc = duzeltmeyi_uygula(db, kullanici, [madde], tarih, anahtar)
+            hatalar = [KOTA_MESAJI] if sonuc.get("atlandi") else sonuc["hatalar"]
     elif govde.kullan is not None:
         madde.ai_kullan = govde.kullan
         db.commit()
@@ -344,7 +368,11 @@ def madde_ai(
 
 @router.delete("/maddeler/{madde_id}")
 def madde_sil(madde_id: int, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    db.delete(kullanici_maddesi(db, kullanici, madde_id))
+    madde = kullanici_maddesi(db, kullanici, madde_id)
+    if madde.kaynak == "not":  # silinirse sonraki taramada geri gelirdi; gizlenir
+        madde.gizli = True
+    else:
+        db.delete(madde)
     db.commit()
     return {"ok": True}
 
@@ -382,6 +410,20 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
             sonuc = servisler.raporu_uret(
                 cozulmus_ayarlar(ayar_satiri(db, kullanici)), os.environ.get("ANTHROPIC_API_KEY", ""), kayitli,
             )
+            notlar = set(db.scalars(select(Madde.kaynak_id).where(
+                Madde.user_id == kullanici.id, Madde.tur == "bugun", Madde.tarih == tarih, Madde.kaynak == "not",
+            )))
+            not_sirasi = sonraki_sira(db, kullanici, "bugun", tarih)
+            for m in sonuc.get("not", []):  # kendine atılan notlar bugünün yapılanlarına düşer
+                if m["id"] in notlar:
+                    continue
+                zaman = m.get("kaynak_zaman")
+                db.add(Madde(
+                    user_id=kullanici.id, tur="bugun", metin=m["metin"], tarih=tarih, kaynak="not", kaynak_id=m["id"],
+                    tikli=True, sira=not_sirasi, kaynak_zaman=utc(zaman) if zaman else None,
+                ))
+                notlar.add(m["id"])
+                not_sirasi += 1
             sira = sonraki_sira(db, kullanici, "bulunan", tarih)
             for m in sonuc["eposta"] + sonuc["medusa"]:
                 if m["id"] in kayitli:
@@ -414,6 +456,7 @@ def bugun_bulunanlar(
     onbellek = bugun_taramasi(db, kullanici, tarih, bool(yenile))
     bulunanlar = db.scalars(select(Madde).where(
         Madde.user_id == kullanici.id, Madde.tur == "bulunan", Madde.tarih == tarih,
+        Madde.kaynak.in_(acik_bulunan_kaynaklari(ayar_satiri(db, kullanici))),
     ).order_by(Madde.sira, Madde.id)).all()
     return {"tarih": tarih.isoformat(), "bulunan": [madde_json(m, {}, tarih) for m in bulunanlar], **onbellek}
 
@@ -427,14 +470,15 @@ def duzeltme_paketi(db: Session, kullanici: Kullanici, tarih: date) -> list[Madd
         or_(Madde.tur.in_(("surekli", "devam")), Madde.tarih == tarih),
     ).order_by(Madde.tur, Madde.sira, Madde.id)).all()
     ifadeler = bugunku_ifadeler(db, kullanici.id, tarih)
+    acik = acik_bulunan_kaynaklari(ayar_satiri(db, kullanici))
     paket = []
     for m in maddeler:
         if m.tur == "surekli":
             secilir = m.id not in ifadeler
-        elif m.tur == "bugun":
-            secilir = m.kaynak == "elle" and not m.kullanici_duzenledi and not m.metin_ai
+        elif m.tur == "bugun":  # e-postayla gelen notlar elle maddeler gibi düzeltilir
+            secilir = m.kaynak in ("elle", "not") and not m.gizli and not m.kullanici_duzenledi and not m.metin_ai
         elif m.tur == "bulunan":
-            secilir = not m.gizli and not m.kullanici_duzenledi and not m.metin_ai
+            secilir = m.kaynak in acik and not m.gizli and not m.kullanici_duzenledi and not m.metin_ai
         else:  # devam
             secilir = not m.kullanici_duzenledi and not m.metin_ai
         if secilir:
@@ -442,10 +486,52 @@ def duzeltme_paketi(db: Session, kullanici: Kullanici, tarih: date) -> list[Madd
     return paket
 
 
+def claude_hakki_al(db: Session, user_id: int, tarih: date) -> ClaudeKullanim | None:
+    """Çağrıdan önce günün sayacını bir artırır; sınır dolduysa None. Satır yoksa açılır (aynı anda açılırsa yeniden okunur)."""
+    with _kullanici_kilidi(user_id, "kota"):
+        for deneme in range(2):
+            satir = db.scalar(select(ClaudeKullanim).where(ClaudeKullanim.user_id == user_id, ClaudeKullanim.tarih == tarih))
+            if satir is None:
+                satir = ClaudeKullanim(user_id=user_id, tarih=tarih, cagri=0, girdi_token=0, cikti_token=0)
+                db.add(satir)
+            if (satir.cagri or 0) >= GUNLUK_CLAUDE_SINIRI:
+                return None
+            satir.cagri = (satir.cagri or 0) + 1
+            try:
+                db.commit()
+                return satir
+            except IntegrityError:
+                db.rollback()
+                if deneme:
+                    raise
+    return None
+
+
+def claude_kullanimini_yaz(db: Session, satir: ClaudeKullanim) -> None:
+    """Son yanıtın usage alanını günün satırına ekler."""
+    kullanim = servisler.son_kullanim()
+    db.execute(ClaudeKullanim.__table__.update().where(ClaudeKullanim.id == satir.id).values(
+        girdi_token=ClaudeKullanim.girdi_token + kullanim["girdi"],
+        cikti_token=ClaudeKullanim.cikti_token + kullanim["cikti"],
+    ))
+    db.commit()
+
+
+def aylik_claude_cagrilari(db: Session, tarih: date) -> dict[int, int]:
+    """user_id → bu ay yapılan Claude çağrısı."""
+    satirlar = db.execute(select(ClaudeKullanim.user_id, func.sum(ClaudeKullanim.cagri)).where(
+        ClaudeKullanim.tarih >= tarih.replace(day=1), ClaudeKullanim.tarih <= tarih,
+    ).group_by(ClaudeKullanim.user_id))
+    return {uid: int(toplam or 0) for uid, toplam in satirlar}
+
+
 def duzeltmeyi_uygula(db: Session, kullanici: Kullanici, paket: list[Madde], tarih: date, anahtar: str) -> dict:
-    """Tek Claude çağrısı; hata olursa hiçbir maddeye yazılmaz."""
+    """Tek Claude çağrısı; hata olursa hiçbir maddeye yazılmaz. Günlük sınır dolduysa çağrılmaz, ham metin kalır."""
     if not paket:
         return {"duzeltilen": 0, "gonderilen": 0, "hatalar": []}
+    hak = claude_hakki_al(db, kullanici.id, tarih)
+    if hak is None:
+        return {"atlandi": "günlük sınır", "duzeltilen": 0, "gonderilen": len(paket), "hatalar": []}
     girdiler = []
     for m in paket:
         girdi = {"id": m.id, "tur": m.tur, "metin": m.metin}
@@ -455,14 +541,16 @@ def duzeltmeyi_uygula(db: Session, kullanici: Kullanici, paket: list[Madde], tar
     son_raporlar = list(db.scalars(select(Rapor.metin).where(
         Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih < tarih,
     ).order_by(Rapor.tarih.desc()).limit(3)))
+    proje_adi = ayar_satiri(db, kullanici).proje_adi or ""
+    servisler.kullanimi_sifirla()
     try:
-        sonuc = servisler.claude_duzelt(
-            girdiler, son_raporlar, anahtar, ayar_satiri(db, kullanici).proje_adi or "",
-        )
+        sonuc = servisler.claude_duzelt(girdiler, son_raporlar, anahtar, proje_adi)
     except servisler.ClaudeHatasi as e:
         return {"duzeltilen": 0, "gonderilen": len(paket), "hatalar": [f"Claude: {e}; ham metin kullanılıyor"]}
     except Exception as e:
         return {"duzeltilen": 0, "gonderilen": len(paket), "hatalar": [f"Claude: beklenmeyen hata ({e.__class__.__name__}); ham metin kullanılıyor"]}
+    finally:
+        claude_kullanimini_yaz(db, hak)
     duzeltilen = 0
     for m in paket:
         metin = sonuc.get(m.id)
@@ -591,12 +679,18 @@ def haftalik_ozet(govde: HaftalikIstek, kullanici: Kullanici = Depends(aktif_kul
     if not anahtar:
         raise HTTPException(status_code=400, detail="Claude anahtarı tanımlı değil (ANTHROPIC_API_KEY); haftalık özet üretilemez")
     bitis = max(raporlar[-1].tarih, min(pazartesi + timedelta(days=4), bugun()))
+    hak = claude_hakki_al(db, kullanici.id, bugun())
+    if hak is None:
+        raise HTTPException(status_code=429, detail=f"Bugünkü Claude hakkın doldu (günde {GUNLUK_CLAUDE_SINIRI}); yarın yeniden dene")
+    servisler.kullanimi_sifirla()
     try:
         metin = servisler.claude_haftalik(
             [(r.tarih, r.metin) for r in raporlar], servisler.hafta_basligi(pazartesi, bitis), anahtar,
         )
     except servisler.ClaudeHatasi as e:
         raise HTTPException(status_code=502, detail=f"Claude: {e}") from e
+    finally:
+        claude_kullanimini_yaz(db, hak)
     return {"metin": metin, "hafta_baslangic": pazartesi.isoformat(), "rapor_sayisi": len(raporlar)}
 
 
@@ -616,6 +710,7 @@ class AyarGuncelle(BaseModel):
     hatirlatma_push: bool | None = None
     hatirlatma_eposta: bool | None = None
     hatirlatma_eposta_adres: str | None = None
+    kaynaklar: dict[str, bool] | None = None
 
 
 def sozlugu_ayristir(deger: str | dict[str, str]) -> dict[str, str]:
@@ -644,6 +739,13 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
     a = ayar_satiri(db, kullanici)
     db.add(a)
     veri = govde.model_dump(exclude_unset=True)
+    secim = veri.pop("kaynaklar", None)
+    if secim is not None:
+        bilinmeyen = set(secim) - set(KAYNAKLAR)
+        if bilinmeyen:
+            raise HTTPException(status_code=422, detail=f"Bilinmeyen kaynak: {', '.join(sorted(bilinmeyen))}")
+        # yeni sözlük atanır (JSON kolonunda yerinde değişiklik izlenmez); gelmeyen kaynak olduğu gibi kalır
+        a.kaynaklar = {**kaynak_durumu(a), **{k: bool(v) and k not in YAKINDA for k, v in secim.items()}}
     for alan in ("gmail_sifre", "github_token"):
         deger = (veri.pop(alan, None) or "").strip()
         if deger:  # boş bırakılan yazma-yalnız alan kaydı değiştirmez
@@ -681,33 +783,115 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
 
 
 @router.post("/ayarlar/test")
-def baglantiyi_test_et(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+def baglantiyi_test_et(
+    kaynak: Literal["", "gmail", "github"] = "", kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
+) -> dict:
+    """kaynak verilirse yalnız o kaynak denenir (kurulum sihirbazı Gmail adımı)."""
     ayarlar = cozulmus_ayarlar(ayar_satiri(db, kullanici))
     parcalar, gmail_ok, github_ok = [], False, False
 
-    if ayarlar["gmail_kullanici"] and ayarlar["gmail_sifre"]:
-        try:
-            parcalar.append(servisler.gmail_test(ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"]))
-            gmail_ok = True
-        except servisler.KaynakHatasi as e:
-            parcalar.append(f"Gmail: {e}")
-        except Exception as e:
-            parcalar.append(f"Gmail: beklenmeyen hata ({e.__class__.__name__})")
-    else:
-        parcalar.append("Gmail: ayar girilmemiş")
+    if kaynak != "github":
+        if ayarlar["gmail_kullanici"] and ayarlar["gmail_sifre"]:
+            try:
+                parcalar.append(servisler.gmail_test(ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"]))
+                gmail_ok = True
+            except servisler.KaynakHatasi as e:
+                parcalar.append(f"Gmail: {e}")
+            except Exception as e:
+                parcalar.append(f"Gmail: beklenmeyen hata ({e.__class__.__name__})")
+        else:
+            parcalar.append("Gmail: ayar girilmemiş")
 
-    if ayarlar["github_token"] and ayarlar["github_repo"]:
-        try:
-            parcalar.append(servisler.github_test(ayarlar["github_token"], ayarlar["github_repo"]))
-            github_ok = True
-        except servisler.KaynakHatasi as e:
-            parcalar.append(f"GitHub: {e}")
-        except Exception as e:
-            parcalar.append(f"GitHub: beklenmeyen hata ({e.__class__.__name__})")
-    else:
-        parcalar.append("GitHub: ayar girilmemiş")
+    if kaynak != "gmail":
+        if ayarlar["github_token"] and ayarlar["github_repo"]:
+            try:
+                parcalar.append(servisler.github_test(ayarlar["github_token"], ayarlar["github_repo"]))
+                github_ok = True
+            except servisler.KaynakHatasi as e:
+                parcalar.append(f"GitHub: {e}")
+            except Exception as e:
+                parcalar.append(f"GitHub: beklenmeyen hata ({e.__class__.__name__})")
+        else:
+            parcalar.append("GitHub: ayar girilmemiş")
 
     return {"sonuc": " · ".join(parcalar), "gmail_ok": gmail_ok, "github_ok": github_ok}
+
+
+# ---------------------------------------------------------------- ilk kurulum sihirbazı
+
+class KurulumProfil(BaseModel):
+    ad: str | None = None
+    rapor_basligi: str | None = None
+    patron_telefon: str | None = None
+
+
+class KurulumSurekli(BaseModel):
+    metinler: list[str]
+
+
+def _metin_anahtari(metin: str) -> str:
+    return servisler._kucult(re.sub(r"\s+", " ", metin).strip())
+
+
+def surekli_metinleri(db: Session, kullanici: Kullanici) -> list[str]:
+    return list(db.scalars(select(Madde.metin).where(
+        Madde.user_id == kullanici.id, Madde.tur == "surekli",
+    ).order_by(Madde.sira, Madde.id)))
+
+
+@router.get("/kurulum")
+def kurulum_bilgisi(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    return {
+        "ad": kullanici.ad, "eposta": kullanici.eposta,
+        "ayarlar": ayar_ozeti(ayar_satiri(db, kullanici), kullanici),
+        "sablonlar": servisler.SUREKLI_SABLONLAR,
+        "surekli": surekli_metinleri(db, kullanici),
+    }
+
+
+@router.post("/kurulum/profil")
+def kurulum_profili(govde: KurulumProfil, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    veri = govde.model_dump(exclude_unset=True)
+    if "ad" in veri:
+        ad = (veri["ad"] or "").strip()
+        if not ad:
+            raise HTTPException(status_code=422, detail="Ad boş olamaz")
+        kullanici.ad = ad[:120]
+    a = ayar_satiri(db, kullanici)
+    db.add(a)
+    for alan in ("rapor_basligi", "patron_telefon"):
+        if alan in veri:
+            setattr(a, alan, (veri[alan] or "").strip() or None)
+    db.commit()
+    return {"ad": kullanici.ad, **ayar_ozeti(a, kullanici)}
+
+
+@router.post("/kurulum/surekli")
+def kurulum_surekli(govde: KurulumSurekli, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Seçilen satırlar listenin sonuna eklenir; mevcut sürekli işler korunur, aynı metin ikinci kez eklenmez."""
+    with _kullanici_kilidi(kullanici.id, "kurulum"):
+        gorulen = {_metin_anahtari(m) for m in surekli_metinleri(db, kullanici)}
+        sira = sonraki_sira(db, kullanici, "surekli")
+        eklenen = 0
+        for metin in govde.metinler:
+            metin = re.sub(r"\s+", " ", metin or "").strip()
+            if not metin or _metin_anahtari(metin) in gorulen:
+                continue
+            db.add(Madde(user_id=kullanici.id, tur="surekli", metin=metin, tikli=True, sira=sira))
+            gorulen.add(_metin_anahtari(metin))
+            sira += 1
+            eklenen += 1
+        db.commit()
+    return {"eklenen": eklenen, "surekli": surekli_metinleri(db, kullanici)}
+
+
+@router.post("/kurulum/bitir")
+def kurulum_bitir(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    a = ayar_satiri(db, kullanici)
+    db.add(a)
+    a.kurulum_tamam = True
+    db.commit()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- eski localStorage verisini içe aktarma
@@ -989,8 +1173,9 @@ def kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
     except Exception as e:  # tarama düşerse hatırlatma yine gider
         db.rollback()
         nedenler.append(f"tarama yapılamadı ({e.__class__.__name__})")
-    bulunanlar = db.scalars(select(Madde).where(
+    bulunanlar = db.scalars(select(Madde).where(  # kapalı kaynağın satırları özete ve e-postaya girmez
         Madde.user_id == k.id, Madde.tur == "bulunan", Madde.tarih == tarih, Madde.gizli.is_(False),
+        Madde.kaynak.in_(acik_bulunan_kaynaklari(a)),
     ).order_by(Madde.sira, Madde.id)).all()
     ozet = hatirlatma_ozeti(bulunanlar)
 

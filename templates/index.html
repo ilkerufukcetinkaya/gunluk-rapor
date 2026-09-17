@@ -47,6 +47,9 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
 .hataKutu{display:flex; flex-direction:column; gap:6px; padding:12px 12px 0}
 .durumSatiri{padding:12px 14px 0}
 .taramaZamani{font-size:12px; color:var(--ink-2); white-space:nowrap}
+.kaynakEtiketi{font-size:11px; font-weight:500; color:var(--ink-3); background:var(--field); border-radius:999px; padding:0 7px}
+.kaynakIpucu{padding:10px 6px 0}
+.kaynakIpucu a{font-weight:600}
 .sec .taramaZamani{margin-top:2px}
 
 /* rapor önizleme */
@@ -127,8 +130,8 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
   <div><div class="gunAdi" data-gun-adi></div><h1 data-tarih>Günlük rapor</h1></div>
   <div class="cipler">
     <div class="chip"><b data-say="yapilan">0</b>yapılan</div>
-    <div class="chip"><b data-say="eposta">0</b>e-posta</div>
-    <div class="chip"><b data-say="commit">0</b>commit</div>
+    <div class="chip" data-kaynak-cip="gmail" hidden><b data-say="eposta">0</b>e-posta</div>
+    <div class="chip" data-kaynak-cip="github" hidden><b data-say="commit">0</b>commit</div>
     <div class="chip saat" id="saatCip">17:00</div>
   </div>
 </div>
@@ -141,9 +144,9 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
         <div><div class="gunAdi" data-gun-adi></div><h1 data-tarih>Günlük rapor</h1></div>
         <div class="cipler">
           <div class="beyazCip"><b data-say="yapilan">0</b>yapılan</div>
-          <div class="beyazCip"><b data-say="eposta">0</b>e-posta</div>
-          <div class="beyazCip"><b data-say="commit">0</b>commit</div>
-          <button class="link" type="button" data-eylem="yenile">{{ i.ikon('yenile', 14, 2.2) }}Yenile</button>
+          <div class="beyazCip" data-kaynak-cip="gmail" hidden><b data-say="eposta">0</b>e-posta</div>
+          <div class="beyazCip" data-kaynak-cip="github" hidden><b data-say="commit">0</b>commit</div>
+          <button class="link" type="button" data-eylem="yenile" data-kaynak-cip="herhangi" hidden>{{ i.ikon('yenile', 14, 2.2) }}Yenile</button>
         </div>
       </div>
 
@@ -158,9 +161,10 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
               <button class="arti" id="doneAdd" type="button" aria-label="Ekle">{{ i.ikon('arti', 18, 2.4) }}</button>
             </div>
           </div>
+          <p class="hint kaynakIpucu" id="kaynakIpucu" hidden><a href="/ayarlar">Ayarlar</a>'dan bir kaynak bağlarsan e-postaların/işlerin buraya kendiliğinden düşer</p>
         </section>
 
-        <section class="blok">
+        <section class="blok" id="bulunanBlok" hidden>
           <div class="sec"><div><div class="baslik"><h2>Bulunanlar</h2><span class="cnt" id="foundCnt">0</span></div><div class="taramaZamani sadeceTelefon" data-tarama></div></div><div style="display:flex; gap:12px; align-items:center"><span id="hiddenInfo"></span><span class="taramaZamani sadeceMasaustu" data-tarama></span><button class="link sadeceTelefon" type="button" data-eylem="yenile">{{ i.ikon('yenile', 14, 2.2) }}Yenile</button></div></div>
           <div class="card">
             <div class="hataKutu" id="foundErrors"></div>
@@ -280,6 +284,10 @@ const hamMetin = m => m.metin + (m.tur === 'devam' && m.asama ? ` — ${m.asama}
 const raporMetni = m => m.rapor_metni || hamMetin(m);
 const aiKullaniliyor = m => !!(m.metin_ai && !m.kullanici_duzenledi && m.ai_kullan !== false);
 const beklemeEtiketi = n => n > 0 ? `${n} gündür` : 'bugün eklendi';
+// Açık kaynaklar: gmail → 'eposta', github → 'medusa' kaynaklı bulunanlar.
+const kaynakAcik = k => !!(S.ayarlar.kaynaklar || {})[k];
+const herhangiKaynak = () => kaynakAcik('gmail') || kaynakAcik('github');
+const bulunanAcik = m => kaynakAcik(m.kaynak === 'medusa' ? 'github' : 'gmail');
 
 function buildReport(){
   const out = [`*${S.ayarlar.rapor_basligi || 'Günlük Rapor'} – ${shortDate(new Date())}*`, ''];
@@ -324,6 +332,8 @@ function renderStatus(){
     commit: gorunen.filter(it => it.kaynak === 'medusa').length,
   };
   document.querySelectorAll('[data-say]').forEach(e => e.textContent = sayilar[e.dataset.say]);
+  document.querySelectorAll('[data-kaynak-cip]').forEach(e => e.hidden = e.dataset.kaynakCip === 'herhangi' ? !herhangiKaynak() : !kaynakAcik(e.dataset.kaynakCip));
+  if (S.tarih) { $('bulunanBlok').hidden = !herhangiKaynak(); $('kaynakIpucu').hidden = herhangiKaynak(); }
   const saat = S.ayarlar.hatirlatma_saat || '17:00';
   const cip = $('saatCip');
   cip.classList.toggle('tamam', !!S.sonKopya);
@@ -406,6 +416,7 @@ function row(item, kind){
     }
     meta.appendChild(el('span', '', beklemeEtiketi(item.bekleme_gun || 0)));
   }
+  if (item.kaynak === 'not') meta.appendChild(el('span', 'kaynakEtiketi', 'e-postadan'));
   txt.appendChild(meta);
   aiPaneli(item, meta, txt);
   if (!meta.childNodes.length) meta.remove();
@@ -516,7 +527,8 @@ function duzeltCalistir(){
   duzeltSurmekte = (async () => {
     try {
       const d = await api('/api/duzelt', 'POST');
-      if (d.atlandi) duzeltDurum('Claude anahtarı tanımlı değil; ham metin kullanılıyor.');
+      if (d.atlandi === 'günlük sınır') duzeltDurum('Bugünkü düzeltme hakkı doldu, yarın devam');
+      else if (d.atlandi) duzeltDurum('Claude anahtarı tanımlı değil; ham metin kullanılıyor.');
       else if (d.hatalar && d.hatalar.length) duzeltDurum((d.duzeltilen ? `${d.duzeltilen} madde düzeltildi. ` : '') + d.hatalar.join(' · '));
       else duzeltDurum(d.gonderilen ? `${d.duzeltilen} madde düzeltildi` : 'Düzeltilecek yeni madde yok');
       if (d.duzeltilen) await durumuYukle();
@@ -619,11 +631,13 @@ function renderFound(){
 }
 
 async function loadFound(force){
-  $('foundStatus').textContent = `Gmail ve ${projeEtiketi()} taranıyor…`; $('foundStatus').hidden = false;
+  if (!herhangiKaynak()) return;  // hiç kaynak açık değil: taranacak bir şey yok
+  const adlar = [kaynakAcik('gmail') && 'Gmail', kaynakAcik('github') && projeEtiketi()].filter(Boolean);
+  $('foundStatus').textContent = `${adlar.join(' ve ')} taranıyor…`; $('foundStatus').hidden = false;
   dugmeleriKilitle('yenile', true);
   try {
     const d = await api('/api/bugun' + (force ? '?yenile=1' : ''));
-    S.bulunan = d.bulunan; S.bulunanYuklendi = true; S.taramaZamani = d.tarama_zamani || null;
+    S.bulunan = d.bulunan.filter(bulunanAcik); S.bulunanYuklendi = true; S.taramaZamani = d.tarama_zamani || null;
     const errs = $('foundErrors'); errs.innerHTML = '';
     (d.hatalar || []).forEach(h => {
       const p = el('p', 'uyari', h.mesaj);
@@ -631,6 +645,8 @@ async function loadFound(force){
       errs.appendChild(p);
     });
     $('foundStatus').hidden = true;
+    // Tarama kendine atılan 'rapor:' notlarını bugünün yapılanlarına yazmış olabilir.
+    if (kaynakAcik('gmail')) await durumuYukle();
   } catch (e) {
     $('foundStatus').textContent = 'Tarama yapılamadı: ' + e.message;
   } finally {
@@ -645,8 +661,8 @@ async function durumuYukle(){
     S.tarih = d.tarih; S.ayarlar = d.ayarlar; S.aiAnahtari = d.ai_anahtari; S.sonKopya = d.son_kopya; S.taramaZamani = d.tarama_zamani || null;
     S.surekli = d.maddeler.filter(m => m.tur === 'surekli');
     S.devam = d.maddeler.filter(m => m.tur === 'devam');
-    S.bulunan = d.maddeler.filter(m => m.tur === 'bulunan');
-    S.elle = d.maddeler.filter(m => m.tur === 'bugun' && m.kaynak === 'elle');
+    S.bulunan = d.maddeler.filter(m => m.tur === 'bulunan' && bulunanAcik(m));
+    S.elle = d.maddeler.filter(m => m.tur === 'bugun' && (m.kaynak === 'elle' || (m.kaynak === 'not' && !m.gizli)));
     S.bugun.yarin = d.maddeler.find(m => m.tur === 'bugun' && m.kaynak === 'yarin') || null;
     if (!gunluk.yarin.t) S.metin.yarin = S.bugun.yarin ? S.bugun.yarin.metin : '';
     $('loadError').hidden = true;

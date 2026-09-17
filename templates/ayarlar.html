@@ -47,6 +47,12 @@ input[type=time]{width:124px; font-weight:600; flex:none}
 #pushSonuc:empty{display:none}
 #kaydet{width:100%}
 .row .sw{margin-top:2px}
+.kaynak .sw{margin-top:0}
+.kaynak .link{margin-right:4px}
+.t-yakinda{background:var(--field); color:var(--ink-3)}
+.yakinda{font-size:11px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:1px 8px; margin-left:6px; vertical-align:1px}
+.kaynak.soluk .lbl{color:var(--ink-2)}
+.ipucu{background:var(--accent-bg); color:var(--ink); border-radius:10px; padding:8px 12px; font-size:12.5px; margin:2px 0 0}
 .row > .kim + .link{align-self:center}
 @media (min-width:761px){
   .ikiDugme button{height:42px}
@@ -71,6 +77,7 @@ input[type=time]{width:124px; font-weight:600; flex:none}
       <a class="link" href="/sifre">Şifre</a>
     </div>
     <div class="alt">
+      <a class="link soluk" href="/kurulum">{{ i.ikon('ileri', 15) }}Kurulumu yeniden aç</a>
       {% if kullanici.rol == 'admin' %}<a class="link soluk" href="/yonetim">{{ i.ikon('kisiler', 15) }}Yönetim</a>{% endif %}
       <form method="post" action="/cikis"><button type="submit" class="link soluk">{{ i.ikon('cikis', 15) }}Çıkış</button></form>
     </div>
@@ -80,10 +87,11 @@ input[type=time]{width:124px; font-weight:600; flex:none}
     <div>
       <div class="sec"><h2>Kaynaklar</h2></div>
       <section class="card">
-        <div class="row orta">
+        <div class="row orta kaynak">
           <div class="tile t-gmail">{{ i.ikon('zarf', 17) }}</div>
-          <div class="kim"><div class="lbl">Gmail</div><div class="durum" id="gmailDurum">Ayarlanmadı</div></div>
-          <button type="button" class="link" data-ac="gmailAyrinti" aria-expanded="false">Değiştir</button>
+          <div class="kim"><div class="lbl">Gmail</div><div class="durum" id="gmailDurum">Kapalı</div></div>
+          <button type="button" class="link" data-ac="gmailAyrinti" aria-expanded="false" hidden>Değiştir</button>
+          <input type="checkbox" class="sw" id="kaynak_gmail" data-kaynak="gmail" data-ayrinti="gmailAyrinti" aria-label="Gmail'i tara">
         </div>
         <div class="row dikey ayrinti" id="gmailAyrinti" hidden>
           <label class="alan" for="gmail_kullanici">Gmail adresi</label>
@@ -91,11 +99,13 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <label class="alan" for="gmail_sifre">Uygulama şifresi <small>— Google hesabı › Güvenlik › Uygulama şifreleri</small></label>
           <input type="password" id="gmail_sifre" name="gmail_sifre" autocomplete="new-password">
           <p class="kayitli" id="gmail_sifre_durum"></p>
+          <p class="ipucu">Telefondan hızlı not: kendine 'rapor: ...' konulu e-posta at, akşam listede olur.</p>
         </div>
-        <div class="row orta">
+        <div class="row orta kaynak">
           <div class="tile t-git">{{ i.ikon('dal', 17) }}</div>
-          <div class="kim"><div class="lbl" id="githubAd">GitHub</div><div class="durum" id="githubDurum">Ayarlanmadı</div></div>
-          <button type="button" class="link" data-ac="githubAyrinti" aria-expanded="false">Değiştir</button>
+          <div class="kim"><div class="lbl" id="githubAd">GitHub</div><div class="durum" id="githubDurum">Kapalı</div></div>
+          <button type="button" class="link" data-ac="githubAyrinti" aria-expanded="false" hidden>Değiştir</button>
+          <input type="checkbox" class="sw" id="kaynak_github" data-kaynak="github" data-ayrinti="githubAyrinti" aria-label="GitHub'ı tara">
         </div>
         <div class="row dikey ayrinti" id="githubAyrinti" hidden>
           <label class="alan" for="github_repo">Repo <small>— kullanici/repo</small></label>
@@ -103,13 +113,16 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <label class="alan" for="github_token">Token <small>— yalnız okuma yetkili</small></label>
           <input type="password" id="github_token" name="github_token" autocomplete="new-password">
           <p class="kayitli" id="github_token_durum"></p>
-        </div>
-        <div class="row dikey">
           <label class="alan" for="proje_adi">Proje adı</label>
           <input type="text" id="proje_adi" name="proje_adi">
           <div class="meta">Raporda commit'lerin ürün adı olarak geçer.</div>
         </div>
-        <div class="row dikey">
+        <div class="row orta kaynak soluk">
+          <div class="tile t-yakinda">{{ i.ikon('kivilcim', 17) }}</div>
+          <div class="kim"><div class="lbl">MEDUSA<span class="yakinda">yakında</span></div><div class="durum">Henüz bağlanamaz</div></div>
+          <input type="checkbox" class="sw" id="kaynak_medusa" disabled aria-label="MEDUSA (yakında)">
+        </div>
+        <div class="row dikey" id="testSatiri" hidden>
           <button class="secondary" type="button" id="test">Bağlantıyı test et</button>
           <p id="testSonuc" aria-live="polite"></p>
         </div>
@@ -216,17 +229,26 @@ function parca(sonuc, onek){
   return p ? p.slice(onek.length + 1).trim() : '';
 }
 let sonAyar = null;
+const KAYNAK_ANAHTARLARI = [...document.querySelectorAll('input.sw[data-kaynak]')];
+const acikKaynaklar = () => KAYNAK_ANAHTARLARI.filter(k => k.checked).map(k => k.dataset.kaynak);
 function kaynakDurumu(){
   const a = sonAyar; if (!a) return;
   const t = sonTest();
   const gmailVar = !!(a.gmail_kullanici && a.gmail_sifre_kayitli);
   const githubVar = !!(a.github_repo && a.github_token_kayitli);
   $('githubAd').textContent = 'GitHub' + ((a.proje_adi || a.github_repo) ? ` · ${a.proje_adi || a.github_repo}` : '');
-  if (!gmailVar) durumYaz($('gmailDurum'), '', 'Ayarlanmadı');
+  KAYNAK_ANAHTARLARI.forEach(k => {
+    // "Değiştir" yalnız açık kaynakta görünür
+    document.querySelectorAll(`[data-ac="${k.dataset.ayrinti}"]`).forEach(b => b.hidden = !k.checked);
+  });
+  $('testSatiri').hidden = !acikKaynaklar().length;
+  if (!$('kaynak_gmail').checked) durumYaz($('gmailDurum'), '', gmailVar ? 'Kapalı · taranmıyor' : 'Kapalı');
+  else if (!gmailVar) durumYaz($('gmailDurum'), '', 'Ayarlanmadı');
   else if (!t) durumYaz($('gmailDurum'), '', 'Kayıtlı · test edilmedi');
   else if (t.gmail_ok) durumYaz($('gmailDurum'), 'ok', 'Bağlı · ' + parca(t.sonuc, 'Gmail').replace(/^bağlandı,\s*/, ''));
   else durumYaz($('gmailDurum'), 'hata', parca(t.sonuc, 'Gmail') || 'Bağlanamadı');
-  if (!githubVar) durumYaz($('githubDurum'), '', 'Ayarlanmadı');
+  if (!$('kaynak_github').checked) durumYaz($('githubDurum'), '', githubVar ? 'Kapalı · taranmıyor' : 'Kapalı');
+  else if (!githubVar) durumYaz($('githubDurum'), '', 'Ayarlanmadı');
   else if (!t) durumYaz($('githubDurum'), '', 'Kayıtlı · test edilmedi');
   else if (t.github_ok) durumYaz($('githubDurum'), 'ok', 'Bağlı · ' + parca(t.sonuc, 'GitHub'));
   else durumYaz($('githubDurum'), 'hata', parca(t.sonuc, 'GitHub') || 'Bağlanamadı');
@@ -253,17 +275,20 @@ function doldur(a){
   $('hatirlatma_eposta').disabled = gmailYok;
   $('hatirlatma_eposta_adres').disabled = gmailYok;
   $('epostaBilgi').hidden = !gmailYok;
+  const kaynaklar = a.kaynaklar || {};
+  KAYNAK_ANAHTARLARI.forEach(k => k.checked = !!kaynaklar[k.dataset.kaynak]);
   if (ilkDoldurma){
-    // Ayar eksikse ayrıntılar açık başlar.
+    // Açık ama ayarı eksik kaynağın ayrıntıları açık başlar.
     ilkDoldurma = false;
-    if (gmailYok) ayrintiAc('gmailAyrinti', true);
-    if (!(a.github_repo && a.github_token_kayitli)) ayrintiAc('githubAyrinti', true);
+    if (kaynaklar.gmail && gmailYok) ayrintiAc('gmailAyrinti', true);
+    if (kaynaklar.github && !(a.github_repo && a.github_token_kayitli)) ayrintiAc('githubAyrinti', true);
   }
+  KAYNAK_ANAHTARLARI.forEach(k => { if (!k.checked) ayrintiAc(k.dataset.ayrinti, false); });
   kaynakDurumu();
 }
 
 async function kaydet(){
-  const govde = { alan_sozlugu: $('sozluk').value };
+  const govde = { alan_sozlugu: $('sozluk').value, kaynaklar: Object.fromEntries(KAYNAK_ANAHTARLARI.map(k => [k.dataset.kaynak, k.checked])) };
   ALANLAR.forEach(k => govde[k] = $(k).value);
   if ($('gmail_sifre').value.trim()) govde.gmail_sifre = $('gmail_sifre').value;
   if ($('github_token').value.trim()) govde.github_token = $('github_token').value;
@@ -289,14 +314,31 @@ $('form').onsubmit = async e => {
   finally { $('kaydet').disabled = false; }
 };
 
+// Anahtar açılınca ayrıntılar açılır, kapanınca kapanır; seçim hemen kaydedilir.
+KAYNAK_ANAHTARLARI.forEach(k => k.onchange = async () => {
+  ayrintiAc(k.dataset.ayrinti, k.checked);
+  kaynakDurumu();
+  try {
+    const a = await istek('/api/ayarlar', { method:'PUT', body: JSON.stringify({ kaynaklar: { [k.dataset.kaynak]: k.checked } }) });
+    sonAyar = { ...sonAyar, kaynaklar: a.kaynaklar };
+    toast(k.checked ? 'Kaynak açıldı' : 'Kaynak kapatıldı');
+  } catch (err) { k.checked = !k.checked; kaynakDurumu(); hataGoster(err.message); }
+});
+
 $('test').onclick = async () => {
   $('test').disabled = true; $('testSonuc').className = ''; $('testSonuc').textContent = 'Kaydediliyor ve test ediliyor…';
   try {
     await kaydet();
-    const s = await istek('/api/ayarlar/test', { method:'POST' });
+    const acik = acikKaynaklar();
+    const s = await istek('/api/ayarlar/test' + (acik.length === 1 ? `?kaynak=${acik[0]}` : ''), { method:'POST' });
     $('testSonuc').textContent = s.sonuc;
-    $('testSonuc').className = (s.gmail_ok && s.github_ok) ? 'ok' : 'hata';
-    sonTestiYaz({ sonuc: s.sonuc, gmail_ok: s.gmail_ok, github_ok: s.github_ok });
+    $('testSonuc').className = acik.every(k => s[k + '_ok']) ? 'ok' : 'hata';
+    if (acik.length === 1) {  // tek kaynak denendiyse diğerinin son sonucu korunur
+      const eski = sonTest() || {};
+      const digeri = acik[0] === 'gmail' ? 'GitHub' : 'Gmail';
+      const eskiParca = (eski.sonuc || '').split(' · ').find(x => x.startsWith(digeri + ':'));
+      sonTestiYaz({ ...eski, sonuc: [s.sonuc, eskiParca].filter(Boolean).join(' · '), [acik[0] + '_ok']: s[acik[0] + '_ok'] });
+    } else sonTestiYaz({ sonuc: s.sonuc, gmail_ok: s.gmail_ok, github_ok: s.github_ok });
     kaynakDurumu();
   } catch (err) { $('testSonuc').textContent = err.message; $('testSonuc').className = 'hata'; }
   finally { $('test').disabled = false; }

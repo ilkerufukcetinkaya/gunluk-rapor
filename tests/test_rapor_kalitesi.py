@@ -11,7 +11,7 @@ import app as uygulama
 import guvenlik
 import servisler
 import veritabani
-from veritabani import GunlukIfade, Kullanici, Madde, OturumYapici, Rapor, Temel, motor
+from veritabani import GunlukIfade, Kullanici, KullaniciAyari, Madde, OturumYapici, Rapor, Temel, motor
 
 SIFRE = "dogru-sifre-123"
 
@@ -30,6 +30,8 @@ def kullanici_olustur(eposta="a@ornek.com", ad="A") -> int:
     with OturumYapici() as db:
         k = Kullanici(eposta=eposta, ad=ad, sifre_hash=guvenlik.sifre_ozeti(SIFRE), rol="uye", aktif=True, sifre_degistirmeli=False)
         db.add(k)
+        db.commit()
+        db.add(KullaniciAyari(user_id=k.id, kurulum_tamam=True))
         db.commit()
         return k.id
 
@@ -140,7 +142,7 @@ def test_duzelt_paket_secimi_yazim_ve_ikinci_cagri(sahte_claude):
 
     sahte_claude.yanitlar = [yankilayan, yankilayan]
     with istemci() as c:
-        c.put("/api/ayarlar", json={"proje_adi": "MEDUSA"})
+        c.put("/api/ayarlar", json={"proje_adi": "MEDUSA", "kaynaklar": {"gmail": True, "github": True}})
         r = c.post("/api/duzelt").json()
         assert (r["duzeltilen"], r["gonderilen"], r["hatalar"]) == (4, 4, [])
 

@@ -1,9 +1,11 @@
 {% import "_ikon.html" as i %}
-{#- Sayfa kabuğu: masaüstü üst bar + telefon alt sekmeleri. `aktif`: bugun | gecmis | ayarlar | yonetim -#}
+{#- Sayfa kabuğu: masaüstü üst bar + telefon alt sekmeleri. `aktif`: bugun | gecmis | ayarlar | yonetim | kurulum -#}
+{#- İlk kurulum bitmeden menü gösterilmez: sayfalar zaten sihirbaza geri yönlenir. -#}
+{% set menusuz = aktif == 'kurulum' and not kurulum_tamam %}
 <header class="ustbar">
   <div class="sol">
     <a class="marka" href="/"><i>{{ i.ikon('tik', 15, 2.6) }}</i>Rapor</a>
-    <nav aria-label="Menü">
+    <nav aria-label="Menü"{% if menusuz %} hidden{% endif %}>
       <a href="/"{% if aktif == 'bugun' %} class="on" aria-current="page"{% endif %}>Bugün</a>
       <a href="/gecmis"{% if aktif == 'gecmis' %} class="on" aria-current="page"{% endif %}>Geçmiş</a>
       <a href="/ayarlar"{% if aktif == 'ayarlar' %} class="on" aria-current="page"{% endif %}>Ayarlar</a>
@@ -17,7 +19,7 @@
   </div>
 </header>
 
-<div class="altAlan">
+<div class="altAlan"{% if menusuz %} hidden{% endif %}>
   {% if aktif == 'bugun' %}
   <div class="eylemler">
     <button type="button" class="secondary ikon" data-eylem="kopyala" aria-label="Kopyala" title="Kopyala">{{ i.ikon('kopyala', 19) }}</button>

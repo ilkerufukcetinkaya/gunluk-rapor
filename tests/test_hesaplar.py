@@ -37,6 +37,8 @@ def kullanici_olustur(eposta="a@ornek.com", ad="A", rol="uye", sifre=SIFRE, degi
                       aktif=aktif, sifre_degistirmeli=degistirmeli)
         db.add(k)
         db.commit()
+        db.add(KullaniciAyari(user_id=k.id, kurulum_tamam=True))
+        db.commit()
         return k.id
 
 
@@ -141,6 +143,8 @@ def test_davet_gecici_sifre_ve_sifre_zorlamasi():
         assert yeni.post("/sifre", data={"mevcut": gecici, "yeni": "kisa", "tekrar": "kisa"}).status_code == 400
         r = yeni.post("/sifre", data={"mevcut": gecici, "yeni": "yeni-sifre-uzun", "tekrar": "yeni-sifre-uzun"})
         assert r.status_code == 303 and r.headers["location"] == "/"
+        assert yeni.get("/").headers["location"] == "/kurulum"  # davet edilen ilk kez kurulum sihirbazına düşer
+        assert yeni.post("/api/kurulum/bitir").status_code == 200
         assert yeni.get("/").status_code == 200
         assert yeni.get("/api/durum").json()["kullanici"] == {"ad": "Deniz", "rol": "uye"}
 
@@ -172,6 +176,8 @@ def test_ilk_yonetici_envden(monkeypatch):
     monkeypatch.setenv("ADMIN_SIFRE", SIFRE)
     with istemci() as c:  # lifespan çalışır
         assert giris(c, "patron@ornek.com").headers["location"] == "/"
+        assert c.get("/yonetim").headers["location"] == "/kurulum"
+        c.post("/api/kurulum/bitir")
         assert c.get("/yonetim").status_code == 200
 
 
@@ -258,7 +264,10 @@ def test_ayar_girilmemisse_kaynak_atlanir():
     kullanici_olustur()
     with istemci() as c:
         giris(c)
-        mesajlar = [h["mesaj"] for h in c.get("/api/bugun").json()["hatalar"]]
+        # kapalı kaynak sessizce atlanır; açık ama ayarsız kaynak uyarı yazar
+        assert c.get("/api/bugun").json()["hatalar"] == []
+        c.put("/api/ayarlar", json={"kaynaklar": {"gmail": True, "github": True}})
+        mesajlar = [h["mesaj"] for h in c.get("/api/bugun?yenile=1").json()["hatalar"]]
         assert mesajlar == ["Gmail ayarı girilmemiş (Ayarlar)", "GitHub ayarı girilmemiş (Ayarlar)"]
         assert c.post("/api/ayarlar/test").json()["sonuc"] == "Gmail: ayar girilmemiş · GitHub: ayar girilmemiş"
 
@@ -343,6 +352,7 @@ def test_ice_aktar_bulunan_ve_bugun_satirlari_engellemez():
     veri = {**ORNEK_V2, "daily": {**ORNEK_V2["daily"], "date": tarih.isoformat()}}
     with istemci() as c:
         giris(c)
+        c.put("/api/ayarlar", json={"kaynaklar": {"github": True}})
         r = c.post("/api/ice-aktar", json=veri)
         assert r.status_code == 200 and r.json() == {"ok": True, "surekli": 2, "devam": 1, "bugun": 1}
         d = c.get("/api/durum").json()["maddeler"]

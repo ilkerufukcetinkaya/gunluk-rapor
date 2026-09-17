@@ -100,12 +100,11 @@ def kullanici_olustur(eposta="a@ornek.com", ad="A", gmail=True, **ayar) -> int:
         k = Kullanici(eposta=eposta, ad=ad, sifre_hash=guvenlik.sifre_ozeti(SIFRE), rol="uye", aktif=True, sifre_degistirmeli=False)
         db.add(k)
         db.commit()
-        if gmail or ayar:
-            a = KullaniciAyari(user_id=k.id, **ayar)
-            if gmail:
-                a.gmail_kullanici, a.gmail_sifre_enc = eposta.replace("@ornek.com", "@gmail.com"), guvenlik.sifrele("uyg-sifre")
-            db.add(a)
-            db.commit()
+        a = KullaniciAyari(user_id=k.id, kurulum_tamam=True, **ayar)
+        if gmail:
+            a.gmail_kullanici, a.gmail_sifre_enc = eposta.replace("@ornek.com", "@gmail.com"), guvenlik.sifrele("uyg-sifre")
+        db.add(a)
+        db.commit()
         return k.id
 
 
@@ -378,9 +377,10 @@ def test_sema_guncelle_hatirlatma_iki_kez(tmp_path):
 
     eklenen = veritabani.sema_guncelle(eski)
     assert eklenen == [
-        "push_abonelikleri", "hatirlatma_gonderimleri",
+        "push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim",
         "user_settings.hatirlatma_saat", "user_settings.hatirlatma_gunler", "user_settings.hatirlatma_push",
         "user_settings.hatirlatma_eposta", "user_settings.hatirlatma_eposta_adres",
+        "user_settings.kaynaklar", "user_settings.kurulum_tamam",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:
