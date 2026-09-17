@@ -13,7 +13,6 @@
   <div class="sag">
     <span class="rozet" id="durumRozeti" hidden></span>
     <a class="kim" href="/ayarlar"><span class="avatar">{{ kullanici.ad[:1]|upper }}</span>{{ kullanici.ad }}</a>
-    <button type="button" class="arac-koyu" data-tema title="Tema: sistem / açık / koyu" aria-label="Tema">{{ i.ikon('tema', 17) }}</button>
     <form method="post" action="/cikis"><button type="submit" class="arac-koyu" title="Çıkış" aria-label="Çıkış">{{ i.ikon('cikis', 17) }}</button></form>
   </div>
 </header>
@@ -33,13 +32,6 @@
 </div>
 
 <script>
-document.querySelectorAll('[data-tema]').forEach(b => b.onclick = () => {
-  const sira = ['', 'light', 'dark'], simdiki = document.documentElement.dataset.theme || '';
-  const yeni = sira[(sira.indexOf(simdiki) + 1) % sira.length];
-  if (yeni) document.documentElement.dataset.theme = yeni; else delete document.documentElement.dataset.theme;
-  try { if (yeni) localStorage.setItem('gunluk-rapor-tema', yeni); else localStorage.removeItem('gunluk-rapor-tema'); } catch {}
-  document.dispatchEvent(new Event('tema-degisti'));
-});
 // Üst bardaki durum rozeti: bugünkü rapor kopyalandıysa yeşil, değilse hatırlatma saatiyle sarı.
 window.durumRozeti = (sonKopya, saat) => {
   const r = document.getElementById('durumRozeti'); if (!r) return;

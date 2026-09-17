@@ -71,7 +71,6 @@ input[type=time]{width:124px; font-weight:600; flex:none}
       <a class="link" href="/sifre">Şifre</a>
     </div>
     <div class="alt">
-      <button type="button" class="link soluk" data-tema>{{ i.ikon('tema', 15) }}Tema</button>
       {% if kullanici.rol == 'admin' %}<a class="link soluk" href="/yonetim">{{ i.ikon('kisiler', 15) }}Yönetim</a>{% endif %}
       <form method="post" action="/cikis"><button type="submit" class="link soluk">{{ i.ikon('cikis', 15) }}Çıkış</button></form>
     </div>

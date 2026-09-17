@@ -3,16 +3,19 @@
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/ikon-180.png">
 <link rel="icon" type="image/png" href="/static/ikon-192.png">
+<meta name="color-scheme" content="light">
 <meta name="theme-color" content="#12151a">
 <meta name="apple-mobile-web-app-title" content="Rapor">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>
-try { const t = localStorage.getItem('gunluk-rapor-tema'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+// Uygulama yalnız açık temada çalışır; eski tema tercihi temizlenir.
+try { localStorage.removeItem('gunluk-rapor-tema'); } catch {}
 </script>
 <style>
 :root{
+  color-scheme:light;
   --bg:#eef0f3; --paper:#ffffff; --ink:#12151a; --ink-2:#6b7280; --ink-3:#8a919c; --line:#f0f2f5;
   --accent:#2d6cdf; --accent-hover:#1f54b8; --accent-bg:#e9eefb; --accent-ink:#ffffff;
   --bubble:#e3f6d6; --bubble-ink:#163a1e; --danger:#c2410c; --focus:#2d6cdf;
@@ -25,30 +28,6 @@ try { const t = localStorage.getItem('gunluk-rapor-tema'); if (t === 'light' || 
   --weekly-ink:#1f2a44;
   --shadow:0 1px 1px rgba(18,21,26,.03), 0 12px 32px -20px rgba(18,21,26,.18);
   --shadow-up:0 -8px 30px -18px rgba(18,21,26,.25);
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#0f1216; --paper:#171b21; --ink:#e8ebef; --ink-2:#9aa3b0; --ink-3:#7d8591; --line:#232830;
-    --accent:#5b8ff0; --accent-hover:#7ba5f3; --accent-bg:#1b2539; --accent-ink:#ffffff;
-    --bubble:#1f3b2a; --bubble-ink:#d6f0dc; --danger:#f08a5d; --focus:#5b8ff0;
-    --field:#22272f; --count:#2a303a; --sub:#1d2229; --check-off:#4a525e; --chev:#5a626e;
-    --btn:#e8ebef; --btn-ink:#12151a;
-    --warn-bg:#2e2513; --warn-ink:#f2c35b; --gmail:#f07b76; --gmail-bg:#3a1f1f; --ongoing:#e0a93a; --ongoing-bg:#2e2513;
-    --ok-ink:#4fd18b; --weekly-ink:#c9d6f2;
-    --shadow:0 1px 1px rgba(0,0,0,.2), 0 12px 32px -20px rgba(0,0,0,.6);
-    --shadow-up:0 -8px 30px -18px rgba(0,0,0,.7);
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#0f1216; --paper:#171b21; --ink:#e8ebef; --ink-2:#9aa3b0; --ink-3:#7d8591; --line:#232830;
-  --accent:#5b8ff0; --accent-hover:#7ba5f3; --accent-bg:#1b2539; --accent-ink:#ffffff;
-  --bubble:#1f3b2a; --bubble-ink:#d6f0dc; --danger:#f08a5d; --focus:#5b8ff0;
-  --field:#22272f; --count:#2a303a; --sub:#1d2229; --check-off:#4a525e; --chev:#5a626e;
-  --btn:#e8ebef; --btn-ink:#12151a;
-  --warn-bg:#2e2513; --warn-ink:#f2c35b; --gmail:#f07b76; --gmail-bg:#3a1f1f; --ongoing:#e0a93a; --ongoing-bg:#2e2513;
-  --ok-ink:#4fd18b; --weekly-ink:#c9d6f2;
-  --shadow:0 1px 1px rgba(0,0,0,.2), 0 12px 32px -20px rgba(0,0,0,.6);
-  --shadow-up:0 -8px 30px -18px rgba(0,0,0,.7);
 }
 *{box-sizing:border-box}
 html,body{margin:0}
