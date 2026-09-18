@@ -41,8 +41,8 @@ input[type=time]{width:124px; font-weight:600; flex:none}
 .cihazlar .bilgi small.bos{color:var(--ink-2); font-weight:400}
 .cihazlar .bilgi small.bos::before{display:none}
 .cihazlar button{font:inherit; font-size:13.5px; font-weight:600; background:none; border:0; padding:0; color:var(--danger); cursor:pointer}
-.ikiDugme{display:flex; gap:8px}
-.ikiDugme button{flex:1; height:44px; font-size:13.5px; border-radius:12px}
+.ikiDugme{display:flex; gap:8px; flex-wrap:wrap}
+.ikiDugme button{flex:1 1 150px; height:44px; font-size:13.5px; border-radius:12px}
 #pushSonuc{font-size:13px; white-space:pre-wrap; margin:0}
 #pushSonuc:empty{display:none}
 #kaydet{width:100%}
@@ -177,8 +177,10 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <div class="ikiDugme">
             <button class="secondary" type="button" id="pushAc">Bu cihazda aç</button>
             <button class="secondary" type="button" id="pushDene">Test gönder</button>
+            <button class="secondary" type="button" id="epostaDene">E-posta testi gönder</button>
           </div>
           <p id="pushSonuc" aria-live="polite"></p>
+          <p id="epostaSonuc" aria-live="polite"></p>
         </div>
         <div class="row orta">
           <div class="kim"><label class="lbl" for="hatirlatma_eposta">E-posta hatırlatması</label><div class="meta" id="epostaHedef">Giriş e-postanıza</div></div>
@@ -437,6 +439,15 @@ $('pushDene').onclick = async () => {
       : 'Bildirim açılmış cihaz yok.';
     await cihazlariYukle();
   } catch (err) { $('pushSonuc').textContent = err.message; $('pushDene').disabled = false; }
+};
+
+$('epostaDene').onclick = async () => {
+  $('epostaDene').disabled = true; $('epostaSonuc').textContent = 'Gönderiliyor…';
+  try {
+    const s = await istek('/api/hatirlat/eposta-dene', { method:'POST' });
+    $('epostaSonuc').textContent = s.ok ? 'Test e-postası gönderildi.' : `Gönderilemedi: ${s.neden}`;
+  } catch (err) { $('epostaSonuc').textContent = err.message; }
+  finally { $('epostaDene').disabled = false; }
 };
 
 cihazlariYukle().catch(err => hataGoster(err.message));

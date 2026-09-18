@@ -168,6 +168,7 @@ class HatirlatmaGonderimi(Temel):
     tarih: Mapped[date] = mapped_column(Date)
     kanal: Mapped[str] = mapped_column(String(10))  # 'push' | 'eposta'
     durum: Mapped[str] = mapped_column(String(20), default="gonderiliyor")
+    hata_metni: Mapped[str | None] = mapped_column(Text, nullable=True)  # durum 'hata' ise kısa neden
     olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
 
 
@@ -200,6 +201,7 @@ EK_KOLONLAR = [
     ("user_settings", "hatirlatma_eposta_adres", "VARCHAR(254)", "VARCHAR(254)"),
     ("user_settings", "kaynaklar", "JSON", "JSON"),
     ("user_settings", "kurulum_tamam", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("hatirlatma_gonderimleri", "hata_metni", "TEXT", "TEXT"),
 ]
 # Sonradan eklenen tablolar; users tablosu olan şemada eksikse oluşturulur.
 EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim"]

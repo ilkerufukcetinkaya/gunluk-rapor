@@ -95,9 +95,9 @@ def saat(monkeypatch):
     return ayarla
 
 
-def kullanici_olustur(eposta="a@ornek.com", ad="A", gmail=True, **ayar) -> int:
+def kullanici_olustur(eposta="a@ornek.com", ad="A", gmail=True, rol="uye", **ayar) -> int:
     with OturumYapici() as db:
-        k = Kullanici(eposta=eposta, ad=ad, sifre_hash=guvenlik.sifre_ozeti(SIFRE), rol="uye", aktif=True, sifre_degistirmeli=False)
+        k = Kullanici(eposta=eposta, ad=ad, sifre_hash=guvenlik.sifre_ozeti(SIFRE), rol=rol, aktif=True, sifre_degistirmeli=False)
         db.add(k)
         db.commit()
         a = KullaniciAyari(user_id=k.id, kurulum_tamam=True, **ayar)
@@ -391,3 +391,135 @@ def test_sema_guncelle_hatirlatma_iki_kez(tmp_path):
     eski.dispose()
     assert veritabani.sema_guncelle() == []
     assert veritabani.sema_guncelle() == []
+
+
+# ---------------------------------------------------------------- K1-ek: log, yönetim sütunu, e-posta testi
+
+def test_hatirlat_kullanici_basina_tek_info_logu(push, saat, caplog):
+    uid = kullanici_olustur()
+    abonelik_ekle(uid)
+    with caplog.at_level("INFO", logger="gunluk-rapor"):
+        cron()
+    satirlar = [k.message for k in caplog.records if k.message.startswith("hatirlat user=")]
+    assert satirlar == [f"hatirlat user={uid} push=1/1 eposta=gönderildi neden=-"]
+    assert "a@gmail.com" not in satirlar[0] and "uyg-sifre" not in satirlar[0]
+
+
+def test_hatirlat_logu_atlanan_kullanici_icin_de_yazilir(push, saat, caplog):
+    uid = kullanici_olustur()
+    saat(CUMARTESI, 18, 0)
+    with caplog.at_level("INFO", logger="gunluk-rapor"):
+        cron()
+    satirlar = [k.message for k in caplog.records if k.message.startswith("hatirlat user=")]
+    assert satirlar == [f"hatirlat user={uid} push=atlandı eposta=atlandı neden=bugün hatırlatma günü değil"]
+
+
+def test_eposta_hatasi_warning_loglanir_ve_kayda_yazilir(push, saat, caplog):
+    uid = kullanici_olustur()
+    SahteSmtp.hata = smtplib.SMTPAuthenticationError(535, b"bad")
+    with caplog.at_level("INFO", logger="gunluk-rapor"):
+        cron()
+    uyarilar = [k.message for k in caplog.records if k.levelname == "WARNING" and "kanal hatasi" in k.message]
+    assert len(uyarilar) == 1
+    assert uyarilar[0].startswith(f"hatirlat kanal hatasi user={uid} kanal=eposta neden=Gmail'e giriş yapılamadı")
+    assert "uyg-sifre" not in uyarilar[0]
+    with OturumYapici() as db:
+        kayit = db.scalars(select(HatirlatmaGonderimi).where(HatirlatmaGonderimi.kanal == "eposta")).one()
+        assert kayit.durum == "hata" and "Gmail'e giriş yapılamadı" in kayit.hata_metni
+
+
+def test_push_hatasi_warning_loglanir_ve_kayda_yazilir(push, saat, caplog):
+    uid = kullanici_olustur(gmail=False)
+    abonelik_ekle(uid)
+    push.hatalar["https://push.ornek.com/1"] = 500
+    with caplog.at_level("INFO", logger="gunluk-rapor"):
+        cron()
+    uyarilar = [k.message for k in caplog.records if k.levelname == "WARNING" and "kanal hatasi" in k.message]
+    assert len(uyarilar) == 1 and f"user={uid} kanal=push" in uyarilar[0]
+    with OturumYapici() as db:
+        kayit = db.scalars(select(HatirlatmaGonderimi).where(HatirlatmaGonderimi.kanal == "push")).one()
+        assert kayit.durum == "hata" and "500" in kayit.hata_metni
+
+
+def test_yonetim_son_hatirlatma_sutunu(push, saat):
+    yonetici = kullanici_olustur("y@ornek.com", "Yonetici", gmail=False, rol="admin")
+    uid = kullanici_olustur("b@ornek.com", "B")
+    abonelik_ekle(uid, "https://push.ornek.com/b")
+    SahteSmtp.hata = smtplib.SMTPAuthenticationError(535, b"bad")
+    cron()
+
+    y = istemci("y@ornek.com").get("/yonetim")
+    assert y.status_code == 200
+    assert "Son hatırlatma" in y.text
+    assert "e-posta ✗ (Gmail&#39;e giriş yapılamadı" in y.text
+    assert "push ✓" in y.text
+    assert "16.09.2026" in y.text
+    # Hiç gönderimi olmayan yöneticinin satırında tire durur.
+    with OturumYapici() as db:
+        assert yonetici not in api.son_hatirlatmalar(db)
+    assert '<span class="yok">—</span>' in y.text
+    assert "uyg-sifre" not in y.text
+
+
+def test_son_hatirlatmalar_kayit_yoksa_bos():
+    kullanici_olustur()
+    with OturumYapici() as db:
+        assert api.son_hatirlatmalar(db) == {}
+
+
+def test_son_hatirlatmalar_yalniz_en_son_gunu_dondurur():
+    uid = kullanici_olustur()
+    with OturumYapici() as db:
+        db.add_all([
+            HatirlatmaGonderimi(user_id=uid, tarih=date(2026, 9, 15), kanal="push", durum="gonderildi"),
+            HatirlatmaGonderimi(user_id=uid, tarih=CARSAMBA, kanal="push", durum="gonderildi"),
+            HatirlatmaGonderimi(user_id=uid, tarih=CARSAMBA, kanal="eposta", durum="hata",
+                                hata_metni="A" * 90),
+        ])
+        db.commit()
+        ozet = api.son_hatirlatmalar(db)
+    assert ozet[uid]["tarih"] == CARSAMBA
+    assert ozet[uid]["kanallar"] == [
+        {"ad": "e-posta", "ok": False, "neden": "A" * 60},
+        {"ad": "push", "ok": True, "neden": ""},
+    ]
+
+
+def test_eposta_dene_gonderir():
+    kullanici_olustur()
+    y = istemci().post("/api/hatirlat/eposta-dene")
+    assert y.status_code == 200 and y.json() == {"ok": True}
+    assert len(SahteSmtp.gonderilen) == 1
+    mesaj = SahteSmtp.gonderilen[0]
+    assert mesaj["Subject"] == "Günlük rapor — e-posta testi"
+    assert mesaj["To"] == "a@ornek.com" and mesaj["From"] == "a@gmail.com"
+
+
+def test_eposta_dene_kayitli_hatirlatma_adresine_gider():
+    kullanici_olustur(hatirlatma_eposta_adres="baska@ornek.com")
+    assert istemci().post("/api/hatirlat/eposta-dene").json() == {"ok": True}
+    assert SahteSmtp.gonderilen[0]["To"] == "baska@ornek.com"
+
+
+def test_eposta_dene_smtp_hatasinda_neden_doner(caplog):
+    kullanici_olustur()
+    SahteSmtp.hata = smtplib.SMTPAuthenticationError(535, b"bad")
+    with caplog.at_level("INFO", logger="gunluk-rapor"):
+        y = istemci().post("/api/hatirlat/eposta-dene")
+    assert y.status_code == 200
+    govde = y.json()
+    assert govde["ok"] is False and "uygulama şifresi" in govde["neden"]
+    assert "uyg-sifre" not in govde["neden"]
+    assert any(k.levelname == "WARNING" and "eposta testi" in k.message for k in caplog.records)
+
+
+def test_eposta_dene_gmail_ayari_yoksa_400():
+    kullanici_olustur(gmail=False)
+    y = istemci().post("/api/hatirlat/eposta-dene")
+    assert y.status_code == 400 and "Gmail" in y.json()["detail"]
+    assert SahteSmtp.gonderilen == []
+
+
+def test_eposta_dene_oturumsuz_401():
+    kullanici_olustur()
+    assert TestClient(uygulama.app).post("/api/hatirlat/eposta-dene").status_code == 401

@@ -115,7 +115,10 @@ def test_sema_guncelle_eski_semada_kolon_tablo_ve_geri_doldurma(tmp_path):
         b.execute(text("INSERT INTO user_settings (user_id, gmail_kullanici, gmail_sifre_enc, github_token_enc) VALUES "
                        "(1, 'a@gmail.com', 'enc-g', 'enc-t'), (2, NULL, NULL, 'enc-t'), (3, 'c@gmail.com', '', NULL)"))
 
-    assert veritabani.sema_guncelle(eski) == ["claude_kullanim", "user_settings.kaynaklar", "user_settings.kurulum_tamam"]
+    assert veritabani.sema_guncelle(eski) == [
+        "claude_kullanim", "user_settings.kaynaklar", "user_settings.kurulum_tamam",
+        "hatirlatma_gonderimleri.hata_metni",
+    ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.begin() as b:
         satirlar = b.execute(text("SELECT user_id, kaynaklar, kurulum_tamam FROM user_settings ORDER BY user_id")).all()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import re
 import threading
@@ -23,6 +24,7 @@ from veritabani import (
 )
 
 router = APIRouter(prefix="/api")
+log = logging.getLogger("gunluk-rapor")
 
 REPO_BICIMI = re.compile(r"^[\w.-]+/[\w.-]+$")
 EPOSTA_BICIMI = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -1113,6 +1115,29 @@ def hatirlatma_epostasi(ozet: str, bulunanlar: list[Madde], tarih: date) -> str:
     return "\n".join(satirlar + [app_url(), "", "Bu hatırlatma, raporu kopyaladığın gün gelmez."])
 
 
+KANAL_ADI = {"push": "push", "eposta": "e-posta"}
+
+
+def son_hatirlatmalar(db: Session) -> dict[int, dict]:
+    """Kullanıcı → en son gönderim günü ve o günün kanal sonuçları (yönetim ekranı için)."""
+    son = dict(db.execute(select(
+        HatirlatmaGonderimi.user_id, func.max(HatirlatmaGonderimi.tarih),
+    ).group_by(HatirlatmaGonderimi.user_id)).all())
+    if not son:
+        return {}
+    kosullar = [(HatirlatmaGonderimi.user_id == uid) & (HatirlatmaGonderimi.tarih == t) for uid, t in son.items()]
+    ozet: dict[int, dict] = {uid: {"tarih": t, "kanallar": []} for uid, t in son.items()}
+    for g in db.scalars(select(HatirlatmaGonderimi).where(or_(*kosullar)).order_by(
+        HatirlatmaGonderimi.kanal, HatirlatmaGonderimi.id,
+    )):
+        ozet[g.user_id]["kanallar"].append({
+            "ad": KANAL_ADI.get(g.kanal, g.kanal),
+            "ok": g.durum == "gonderildi",
+            "neden": "" if g.durum == "gonderildi" else (g.hata_metni or g.durum or "")[:60],
+        })
+    return ozet
+
+
 def kanal_talep_et(db: Session, user_id: int, tarih: date, kanal: str) -> HatirlatmaGonderimi | None:
     """Gönderimden önce satırı yazar; aynı gün başka bir ping bu kanalı aldıysa None."""
     kayit = HatirlatmaGonderimi(user_id=user_id, tarih=tarih, kanal=kanal, durum="gonderiliyor")
@@ -1125,7 +1150,22 @@ def kanal_talep_et(db: Session, user_id: int, tarih: date, kanal: str) -> Hatirl
     return kayit
 
 
+def kanal_hatasi_yaz(kayit: HatirlatmaGonderimi, user_id: int, kanal: str, neden: str) -> None:
+    """Gönderim satırını 'hata' olarak kapatır ve nedeni WARNING olarak loglar (adres/şifre yazılmaz)."""
+    kayit.durum = "hata"
+    kayit.hata_metni = neden[:200]
+    log.warning("hatirlat kanal hatasi user=%s kanal=%s neden=%s", user_id, kanal, neden[:200])
+
+
 def kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
+    """Sonucu döner ve kullanıcı başına tek satır INFO logu yazar."""
+    sonuc = _kullaniciya_hatirlat(db, k, an)
+    log.info("hatirlat user=%s push=%s eposta=%s neden=%s",
+             sonuc["user_id"], sonuc["push"], sonuc["eposta"], sonuc["neden"] or "-")
+    return sonuc
+
+
+def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
     tarih = an.date()
     sonuc = {"user_id": k.id, "push": "atlandı", "eposta": "atlandı", "neden": ""}
     a = ayar_satiri(db, k)
@@ -1186,14 +1226,19 @@ def kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
             nedenler.append("push bugün gönderildi")
         else:
             try:
-                basarili, toplam, _ = push_cihazlarina_gonder(db, k.id, {"baslik": "Günlük Rapor", "govde": ozet, "url": app_url()})
+                basarili, toplam, ayrinti = push_cihazlarina_gonder(db, k.id, {"baslik": "Günlük Rapor", "govde": ozet, "url": app_url()})
                 sonuc["push"] = f"{basarili}/{toplam}"
-                kayit.durum = "gonderildi" if basarili else "hata"
+                if basarili:
+                    kayit.durum = "gonderildi"
+                else:
+                    kanal_hatasi_yaz(kayit, k.id, "push", "; ".join(
+                        c["mesaj"] for c in ayrinti if c["durum"] != "ok") or "gönderilebilen cihaz yok")
             except Exception as e:
                 db.rollback()
                 sonuc["push"] = "hata"
-                nedenler.append(f"push: beklenmeyen hata ({e.__class__.__name__})")
-                kayit.durum = "hata"
+                neden = f"beklenmeyen hata ({e.__class__.__name__}: {e})"
+                nedenler.append(f"push: {neden}")
+                kanal_hatasi_yaz(kayit, k.id, "push", neden)
             db.commit()
 
     if eposta_gerekli:
@@ -1212,10 +1257,35 @@ def kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
             sonuc["eposta"] = "hata" if hata else "gönderildi"
             if hata:
                 nedenler.append(hata)
-            kayit.durum = "hata" if hata else "gonderildi"
+                kanal_hatasi_yaz(kayit, k.id, "eposta", hata)
+            else:
+                kayit.durum = "gonderildi"
             db.commit()
     sonuc["neden"] = "; ".join(nedenler)
     return sonuc
+
+
+@router.post("/hatirlat/eposta-dene")
+def hatirlatma_eposta_dene(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Kullanıcının kendi Gmail'inden hatırlatma adresine gerçek bir test maili gönderir."""
+    a = ayar_satiri(db, kullanici)
+    ayarlar = cozulmus_ayarlar(a)
+    if not (ayarlar["gmail_kullanici"] and ayarlar["gmail_sifre"]):
+        raise HTTPException(status_code=400, detail="Önce Gmail adresi ve uygulama şifresini kaydedin")
+    hedef = hatirlatma_ayari(a)["adres"] or kullanici.eposta
+    metin = "\n".join([
+        "Bu bir test e-postasıdır; hatırlatmalar da bu adrese böyle gelir.", "", app_url(),
+    ])
+    try:
+        hata = servisler.eposta_gonder(
+            ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], hedef, "Günlük rapor — e-posta testi", metin)
+    except Exception as e:
+        hata = f"E-posta gönderilemedi ({e.__class__.__name__}: {e})"
+    if hata:
+        log.warning("hatirlat eposta testi user=%s neden=%s", kullanici.id, hata[:200])
+        return {"ok": False, "neden": hata}
+    log.info("hatirlat eposta testi user=%s neden=gönderildi", kullanici.id)
+    return {"ok": True}
 
 
 @router.post("/hatirlat")

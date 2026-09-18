@@ -208,6 +208,7 @@ def yonetim_sayfasi(request: Request, ben: Kullanici, db: Session, durum: int = 
     kullanicilar = db.scalars(select(Kullanici).order_by(Kullanici.olusturma, Kullanici.id)).all()
     ayarlar = {a.user_id: a for a in db.scalars(select(KullaniciAyari))}
     cagrilar = api.aylik_claude_cagrilari(db, api.bugun())
+    hatirlatmalar = api.son_hatirlatmalar(db)
     ozet = {}
     for k in kullanicilar:
         a = ayarlar.get(k.id) or KullaniciAyari(user_id=k.id)
@@ -215,6 +216,7 @@ def yonetim_sayfasi(request: Request, ben: Kullanici, db: Session, durum: int = 
             "kurulum": bool(a.kurulum_tamam),
             "kaynaklar": [ad for ad, acik in api.kaynak_durumu(a).items() if acik],
             "ay_cagri": cagrilar.get(k.id, 0),
+            "son_hatirlatma": hatirlatmalar.get(k.id),
         }
     return sayfa(request, "yonetim.html", durum, kullanici=ben, kullanicilar=kullanicilar, ozet=ozet, hata=hata, bilgi=bilgi)
 

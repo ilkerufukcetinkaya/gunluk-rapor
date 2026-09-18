@@ -30,6 +30,11 @@ main{gap:16px}
 .sutun .ikonlar .tile{width:22px; height:22px; border-radius:6px}
 .sutun .yok{color:var(--ink-3)}
 .sutun .cagri{font-weight:600}
+.sutun.hatirlatma{min-width:150px; flex:0 1 auto}
+.sutun.hatirlatma .gun{font-size:12px; color:var(--ink-3)}
+.sutun.hatirlatma .kanallar{overflow-wrap:anywhere}
+.sutun .kotu{color:var(--danger); font-weight:600}
+.sutun .ayrac{color:var(--ink-3)}
 @media (max-width:760px){ .sutunlar{flex-basis:100%; padding-left:46px} }
 </style>
 </head>
@@ -83,6 +88,15 @@ main{gap:16px}
             {%- if not o.kaynaklar %}<span class="yok">—</span>{% endif -%}
           </span></div>
           <div class="sutun"><small>Bu ay çağrı</small><b class="cagri">{{ o.ay_cagri }}</b></div>
+          <div class="sutun hatirlatma"><small>Son hatırlatma</small>
+            {%- set s = o.son_hatirlatma %}
+            {%- if s %}
+            <span class="gun">{{ s.tarih.strftime('%d.%m.%Y') }}</span>
+            <span class="kanallar">
+            {%- for c in s.kanallar %}{% if not loop.first %}<span class="ayrac"> / </span>{% endif %}<span class="{% if c.ok %}tamam{% else %}kotu{% endif %}">{{ c.ad }} {{ '✓' if c.ok else '✗' }}{% if c.neden %} ({{ c.neden }}){% endif %}</span>{% endfor -%}
+            </span>
+            {%- else %}<span class="yok">—</span>{% endif -%}
+          </div>
         </div>
         <form method="post" action="/yonetim/{{ k.id }}/sifirla" data-ad="{{ k.ad }}" onsubmit="return confirm(this.dataset.ad + ' için yeni geçici şifre üretilsin mi? Eski şifresi geçersiz olur.')">
           <button type="submit" class="link">Şifre sıfırla</button>
