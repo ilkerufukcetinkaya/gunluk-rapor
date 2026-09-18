@@ -13,8 +13,13 @@ main{gap:16px}
 .bilgi form{margin:0; display:flex; flex-direction:column; gap:6px; align-items:flex-start}
 .bilgi form button[disabled]{opacity:.5; cursor:not-allowed}
 .bilgi .sonuc{font-weight:600; color:var(--ok-ink)}
+.tik{display:flex; align-items:center; gap:6px; font-size:13.5px; color:var(--ink-2); white-space:nowrap}
+.tik input{width:16px; height:16px; margin:0; accent-color:var(--dark)}
+.tik input:disabled + span{color:var(--ink-3)}
+.davet .tik{height:46px}
+.satir form.sifirla{display:flex; align-items:center; gap:8px}
 .davet-tarih{font-size:12px; color:var(--ink-3)}
-.davet{display:grid; grid-template-columns:1fr 1fr auto; gap:10px; align-items:end; padding:14px}
+.davet{display:grid; grid-template-columns:1fr 1fr auto auto; gap:10px; align-items:end; padding:14px}
 .davet label{display:block; font-size:14.5px; font-weight:600; margin-bottom:8px}
 .davet button{height:46px}
 @media (max-width:560px){ .davet{grid-template-columns:1fr} }
@@ -59,9 +64,10 @@ main{gap:16px}
     <p class="hint">{{ bilgi.eposta }} için geçici şifre. <b>Bu şifre bir daha gösterilmeyecek.</b></p>
     <div class="sifre"><code id="gecici">{{ bilgi.sifre }}</code><button class="primary" type="button" id="kopyala">Kopyala</button></div>
     {% if bilgi.gonderim and bilgi.gonderim.ok %}
-    <p class="sonuc">Gönderildi — {{ bilgi.eposta }}</p>
+    <p class="sonuc">{% if bilgi.tur == 'sifirlama' %}Yeni şifre e-postayla gönderildi{% else %}Davet e-postası gönderildi{% endif %} — {{ bilgi.eposta }}</p>
     {% else %}
-    {% if bilgi.gonderim %}<p class="uyari" role="alert">{{ bilgi.gonderim.neden }}</p>{% endif %}
+    {% if bilgi.gonderim %}{% set neden = bilgi.gonderim.neden %}
+    <p class="uyari" role="alert">{% if neden.startswith('E-posta gönder') %}{{ neden }}{% else %}E-posta gönderilemedi: {{ neden }}{% endif %} — şifreyi elle ilet</p>{% endif %}
     <form method="post" action="/yonetim/{{ bilgi.hedef }}/davet-eposta">
       <input type="hidden" name="sifre" value="{{ bilgi.sifre }}">
       <input type="hidden" name="tur" value="{{ bilgi.tur }}">
@@ -77,8 +83,10 @@ main{gap:16px}
     <form class="card davet" method="post" action="/yonetim/davet">
       <div><label for="ad">Ad</label><input type="text" id="ad" name="ad" required></div>
       <div><label for="eposta">E-posta</label><input type="email" id="eposta" name="eposta" required></div>
+      <label class="tik"><input type="checkbox" name="mail_gonder" checked{% if not eposta_acik %} disabled{% endif %}><span>Davet e-postası gönder</span></label>
       <button class="primary" type="submit">Davet et</button>
     </form>
+    {% if not eposta_acik %}<p class="hint" style="padding:6px 6px 0">E-posta gönderimi yapılandırılmamış (RESEND_API_KEY yok); geçici şifreyi elle iletin.</p>{% endif %}
   </div>
 
   <div>
@@ -114,7 +122,8 @@ main{gap:16px}
             {%- else %}<span class="yok">—</span>{% endif -%}
           </div>
         </div>
-        <form method="post" action="/yonetim/{{ k.id }}/sifirla" data-ad="{{ k.ad }}" onsubmit="return confirm(this.dataset.ad + ' için yeni geçici şifre üretilsin mi? Eski şifresi geçersiz olur.')">
+        <form class="sifirla" method="post" action="/yonetim/{{ k.id }}/sifirla" data-ad="{{ k.ad }}" onsubmit="return confirm(this.dataset.ad + ' için yeni geçici şifre üretilsin mi? Eski şifresi geçersiz olur.')">
+          <label class="tik" title="{% if eposta_acik %}Yeni geçici şifreyi e-postayla da gönder{% else %}E-posta gönderimi yapılandırılmamış (RESEND_API_KEY yok){% endif %}"><input type="checkbox" name="mail_gonder" checked{% if not eposta_acik %} disabled{% endif %}><span>e-posta</span></label>
           <button type="submit" class="link">Şifre sıfırla</button>
         </form>
         {% if k.id != kullanici.id %}

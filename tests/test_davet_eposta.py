@@ -5,7 +5,7 @@ from datetime import datetime
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 
 import app as uygulama
 import guvenlik
@@ -72,10 +72,10 @@ def davet_et(c, ad="Ayşe", eposta="ayse@ornek.com"):
 
 
 def sifre_ve_hedef(html: str) -> tuple[str, str]:
-    """Ekranda gösterilen geçici şifre ile davet-eposta formunun hedef kullanıcı id'si."""
+    """Ekranda gösterilen geçici şifre ile elle gönderme formunun hedef id'si (mail gitmişse form yok → "")."""
     sifre = re.search(r'<code id="gecici">([^<]+)</code>', html).group(1)
-    hedef = re.search(r'action="/yonetim/(\d+)/davet-eposta"', html).group(1)
-    return sifre, hedef
+    hedef = re.search(r'action="/yonetim/(\d+)/davet-eposta"', html)
+    return sifre, (hedef.group(1) if hedef else "")
 
 
 # ---------------------------------------------------------------- gövde ve başlıklar
@@ -96,7 +96,7 @@ def test_davet_govdesinde_baglanti_eposta_ve_gecici_sifre_gecer(resend):
     assert "İlk girişte yeni şifre belirleyeceksin." in metin
     assert "İlk açılışta 4 adımlık kurulum seni karşılar." in metin
     assert "Bu e-postayı yanıtlarsan Ufuk'a ulaşır." in metin
-    assert 'class="sonuc">Gönderildi' in y.text and sifre in y.text
+    assert 'class="sonuc">Davet e-postası gönderildi — ayse@ornek.com' in y.text and sifre in y.text
 
 
 def test_yanit_adresi_daveti_gonderen_yoneticinin_epostasi(resend):
@@ -198,7 +198,7 @@ def test_gonderim_hatasi_turkce_neden_olarak_ekranda(resend):
     resend.kod, resend.govde = 403, {"message": "Alan adı doğrulanmadı"}
     y = c.post(f"/yonetim/{hedef}/davet-eposta", data={"sifre": sifre})
     assert y.status_code == 200 and "Resend 403: Alan adı doğrulanmadı" in y.text
-    assert 'class="sonuc">Gönderildi' not in y.text
+    assert 'class="sonuc">' not in y.text and "şifreyi elle ilet" in y.text
     with OturumYapici() as db:
         assert db.get(Kullanici, int(hedef)).davet_eposta_tarihi is None
 
@@ -234,3 +234,113 @@ def test_sema_guncelle_davet_eposta_tarihi_kolonunu_idempotent_ekler(tmp_path):
     with eski.begin() as b:
         b.execute(text("INSERT INTO users (id, eposta) VALUES (1, 'a@b.c')"))
         assert b.execute(text("SELECT davet_eposta_tarihi FROM users")).scalar() is None
+
+
+# ---------------------------------------------------------------- K1-ek4: tek adımda gönderim
+
+def test_davet_tikliyken_mail_ayni_istekte_gider_ve_tarih_yazilir(resend):
+    kullanici_olustur()
+    c = istemci()
+    y = c.post("/yonetim/davet", data={"ad": "Ayşe", "eposta": "ayse@ornek.com", "mail_gonder": "on"})
+
+    assert y.status_code == 200
+    govde = resend.istekler[0]["govde"]
+    assert govde["to"] == ["ayse@ornek.com"] and govde["subject"] == "Günlük rapor aracına davet"
+    assert govde["reply_to"] == "yonetici@ornek.com"
+    sifre, hedef = sifre_ve_hedef(y.text)
+    assert sifre in govde["text"]
+    assert 'class="sonuc">Davet e-postası gönderildi — ayse@ornek.com' in y.text
+    with OturumYapici() as db:
+        k = db.scalar(select(Kullanici).where(Kullanici.eposta == "ayse@ornek.com"))
+        assert k.davet_eposta_tarihi is not None and k.sifre_degistirmeli is True
+
+
+def test_davet_tik_kapaliyken_mail_gitmez_elle_gonderme_dugmesi_kalir(resend):
+    kullanici_olustur()
+    c = istemci()
+    y = c.post("/yonetim/davet", data={"ad": "Ayşe", "eposta": "ayse@ornek.com"})
+
+    assert y.status_code == 200 and resend.istekler == []
+    assert "Davet e-postası gönder" in y.text and 'class="sonuc">' not in y.text
+    assert re.search(r'action="/yonetim/\d+/davet-eposta"', y.text)
+    with OturumYapici() as db:
+        assert db.scalar(select(Kullanici).where(Kullanici.eposta == "ayse@ornek.com")).davet_eposta_tarihi is None
+
+
+def test_davette_mail_hatasi_kullanici_olusturmayi_geri_almaz(resend):
+    kullanici_olustur()
+    resend.kod, resend.govde = 403, {"message": "Alan adı doğrulanmadı"}
+    c = istemci()
+    y = c.post("/yonetim/davet", data={"ad": "Ayşe", "eposta": "ayse@ornek.com", "mail_gonder": "on"})
+
+    assert y.status_code == 200
+    assert "E-posta gönderilemedi: Resend 403: Alan adı doğrulanmadı — şifreyi elle ilet" in y.text
+    with OturumYapici() as db:
+        k = db.scalar(select(Kullanici).where(Kullanici.eposta == "ayse@ornek.com"))
+        assert k is not None and k.davet_eposta_tarihi is None
+    # şifre panelde durur, elle gönderme düğmesi de
+    sifre, hedef = sifre_ve_hedef(y.text)
+    assert sifre and hedef
+
+
+def test_sifirlama_tikliyken_mail_ayni_istekte_gider(resend):
+    kullanici_olustur()
+    c = istemci()
+    _, hedef = sifre_ve_hedef(davet_et(c))
+    y = c.post(f"/yonetim/{hedef}/sifirla", data={"mail_gonder": "on"})
+
+    assert y.status_code == 200
+    yeni_sifre, _ = sifre_ve_hedef(y.text)
+    govde = resend.istekler[0]["govde"]
+    assert govde["subject"] == "Günlük rapor — şifren sıfırlandı" and yeni_sifre in govde["text"]
+    assert 'class="sonuc">Yeni şifre e-postayla gönderildi — ayse@ornek.com' in y.text
+    with OturumYapici() as db:
+        assert db.get(Kullanici, int(hedef)).davet_eposta_tarihi is not None
+
+
+def test_sifirlama_tik_kapaliyken_mail_gitmez_ama_sifre_degisir(resend):
+    kullanici_olustur()
+    c = istemci()
+    eski_sifre, hedef = sifre_ve_hedef(davet_et(c))
+    y = c.post(f"/yonetim/{hedef}/sifirla")
+
+    assert y.status_code == 200 and resend.istekler == []
+    yeni_sifre, _ = sifre_ve_hedef(y.text)
+    assert yeni_sifre != eski_sifre
+    with OturumYapici() as db:
+        assert db.get(Kullanici, int(hedef)).davet_eposta_tarihi is None
+
+
+def test_sifirlamada_mail_hatasi_yeni_sifreyi_geri_almaz(resend):
+    kullanici_olustur()
+    c = istemci()
+    eski_sifre, hedef = sifre_ve_hedef(davet_et(c))
+    resend.kod, resend.govde = 403, {"message": "Alan adı doğrulanmadı"}
+    y = c.post(f"/yonetim/{hedef}/sifirla", data={"mail_gonder": "on"})
+
+    assert y.status_code == 200 and "şifreyi elle ilet" in y.text
+    yeni_sifre, _ = sifre_ve_hedef(y.text)
+    assert yeni_sifre != eski_sifre
+    with OturumYapici() as db:
+        k = db.get(Kullanici, int(hedef))
+        assert k.davet_eposta_tarihi is None and guvenlik.sifre_dogru(yeni_sifre, k.sifre_hash)
+
+
+def test_tik_varsayilan_isaretli_resend_yoksa_pasif(monkeypatch, resend):
+    kullanici_olustur()
+    html = istemci().get("/yonetim").text
+    assert html.count('<input type="checkbox" name="mail_gonder" checked>') >= 1
+
+    monkeypatch.setenv("RESEND_API_KEY", "")
+    html = istemci().get("/yonetim").text
+    assert '<input type="checkbox" name="mail_gonder" checked disabled>' in html
+    assert "RESEND_API_KEY yok" in html
+
+
+def test_resend_yokken_tik_gonderilse_bile_neden_gosterilir(monkeypatch):
+    monkeypatch.setenv("RESEND_API_KEY", "")
+    kullanici_olustur()
+    y = istemci().post("/yonetim/davet", data={"ad": "Ayşe", "eposta": "ayse@ornek.com", "mail_gonder": "on"})
+    assert y.status_code == 200 and "RESEND_API_KEY yok" in y.text and "şifreyi elle ilet" in y.text
+    with OturumYapici() as db:
+        assert db.scalar(select(Kullanici).where(Kullanici.eposta == "ayse@ornek.com")) is not None
