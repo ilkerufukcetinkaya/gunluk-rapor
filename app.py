@@ -25,7 +25,9 @@ from kimlik import (  # noqa: E402
     GirisGerekli, SifreDegistirilmeli, aktif_kullanici, cerez_sil, cerez_yaz, giris_yapmis, oturum_verisi,
     oturumdaki_kullanici, yonetici,
 )
-from veritabani import Kullanici, KullaniciAyari, OturumYapici, oturum, simdi, tablolari_olustur  # noqa: E402
+from veritabani import (  # noqa: E402
+    Kullanici, KullaniciAyari, OturumYapici, kullaniciyi_sil, oturum, simdi, tablolari_olustur,
+)
 
 log = logging.getLogger("gunluk-rapor")
 sablonlar = Jinja2Templates(directory=Path(__file__).with_name("templates"))
@@ -232,6 +234,10 @@ def hedef_kullanici(db: Session, kullanici_id: int) -> Kullanici | None:
     return db.get(Kullanici, kullanici_id)
 
 
+def tek_yonetici_kaldi(db: Session) -> bool:
+    return db.scalar(select(func.count()).select_from(Kullanici).where(Kullanici.rol == "admin")) <= 1
+
+
 def davet_epostasi_yolla(db: Session, hedef: Kullanici, sifre: str, ben: Kullanici, sifirlama: bool) -> dict:
     """{"ok", "neden"}. Gönderim hatası yükseltilmez: kullanıcı ve yeni şifre yerinde kalır, neden ekrana çıkar."""
     if not eposta_gonderilebilir():
@@ -293,6 +299,25 @@ def aktifligi_degistir(
     hedef.aktif = not hedef.aktif
     db.commit()
     return RedirectResponse("/yonetim", status_code=303)
+
+
+@app.delete("/yonetim/{kullanici_id}", response_class=HTMLResponse)
+@app.post("/yonetim/{kullanici_id}/sil", response_class=HTMLResponse)
+def kullaniciyi_kaldir(
+    request: Request, kullanici_id: int, ben: Kullanici = Depends(yonetici), db: Session = Depends(oturum),
+):
+    """Kullanıcıyı ve ona bağlı her şeyi siler; kayıt gittiği için açık oturumları da düşer."""
+    hedef = hedef_kullanici(db, kullanici_id)
+    if hedef is None:
+        return yonetim_sayfasi(request, ben, db, 404, hata="Kullanıcı bulunamadı")
+    if hedef.rol == "admin" and tek_yonetici_kaldi(db):
+        return yonetim_sayfasi(request, ben, db, 400, hata="Son yöneticiyi silemezsin")
+    if hedef.id == ben.id:
+        return yonetim_sayfasi(request, ben, db, 400, hata="Kendi hesabınızı silemezsiniz")
+    ad, eposta = hedef.ad, hedef.eposta
+    kullaniciyi_sil(db, hedef)
+    log.warning("kullanıcı silindi id=%s ad=%s silen=%s", kullanici_id, ad, ben.id)
+    return yonetim_sayfasi(request, ben, db, bilgi={"baslik": f"{ad} silindi", "eposta": eposta, "silindi": True})
 
 
 @app.post("/yonetim/{kullanici_id}/sifirla", response_class=HTMLResponse)

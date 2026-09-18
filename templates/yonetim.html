@@ -18,6 +18,9 @@ main{gap:16px}
 .tik input:disabled + span{color:var(--ink-3)}
 .davet .tik{height:46px}
 .satir form.sifirla{display:flex; align-items:center; gap:8px}
+.satir form.sil{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.satir .onay{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.satir .onay .soru{font-size:13px; color:var(--danger); font-weight:600}
 .davet-tarih{font-size:12px; color:var(--ink-3)}
 .davet{display:grid; grid-template-columns:1fr 1fr auto auto; gap:10px; align-items:end; padding:14px}
 .davet label{display:block; font-size:14.5px; font-weight:600; margin-bottom:8px}
@@ -58,7 +61,12 @@ main{gap:16px}
   <p class="hint" style="padding:0 6px">Yeni kullanıcıyı yalnız siz eklersiniz. Geçici şifreyi davet e-postasıyla ya da WhatsApp'la iletin; ilk girişte kendi şifresini belirler.</p>
   {% if hata %}<p class="uyari" role="alert">{{ hata }}</p>{% endif %}
 
-  {% if bilgi %}
+  {% if bilgi and bilgi.silindi %}
+  <section class="card bilgi" role="status">
+    <h2>{{ bilgi.baslik }}</h2>
+    <p class="hint">{{ bilgi.eposta }} ve bu kullanıcıya bağlı tüm maddeler, raporlar ve ayarlar kalıcı olarak silindi.</p>
+  </section>
+  {% elif bilgi %}
   <section class="card bilgi" role="status">
     <h2>{{ bilgi.baslik }}</h2>
     <p class="hint">{{ bilgi.eposta }} için geçici şifre. <b>Bu şifre bir daha gösterilmeyecek.</b></p>
@@ -130,6 +138,14 @@ main{gap:16px}
         <form method="post" action="/yonetim/{{ k.id }}/aktiflik">
           <button type="submit" class="link{% if k.aktif %} tehlike{% endif %}">{% if k.aktif %}Pasife al{% else %}Aktif et{% endif %}</button>
         </form>
+        <form class="sil" method="post" action="/yonetim/{{ k.id }}/sil">
+          <button type="button" class="link tehlike" data-sil>Sil</button>
+          <div class="onay" hidden>
+            <span class="soru">{{ k.ad }} ve tüm raporları kalıcı olarak silinecek. Emin misin?</span>
+            <button type="submit" class="link tehlike">Sil</button>
+            <button type="button" class="link" data-vazgec>Vazgeç</button>
+          </div>
+        </form>
         {% endif %}
       </div>
       {% endfor %}
@@ -145,6 +161,11 @@ document.querySelectorAll('time.gun').forEach(t => {
 document.querySelectorAll('time.zaman').forEach(t => {
   const d = new Date(t.getAttribute('datetime'));
   if (!isNaN(d)) t.textContent = d.toLocaleString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+});
+document.querySelectorAll('form.sil').forEach(f => {
+  const ac = f.querySelector('[data-sil]'), onay = f.querySelector('.onay');
+  ac.onclick = () => { ac.hidden = true; onay.hidden = false; };
+  f.querySelector('[data-vazgec]').onclick = () => { onay.hidden = true; ac.hidden = false; };
 });
 const kb = document.getElementById('kopyala');
 if (kb) kb.onclick = async () => {

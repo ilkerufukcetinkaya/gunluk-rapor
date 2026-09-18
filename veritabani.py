@@ -6,8 +6,8 @@ import os
 from datetime import date, datetime, time, timezone
 
 from sqlalchemy import (
-    JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint, create_engine, inspect,
-    text,
+    JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint, create_engine, delete,
+    inspect, text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -290,6 +290,19 @@ def sema_guncelle(motor_=None) -> list[str]:
     return eklenen
 
 
+# Silme sırası: önce yaprak tablolar, en sonda users. gunluk_ifadeler items'a da bağlı olduğu için başta.
+KULLANICIYA_BAGLI = (GunlukIfade, Madde, Rapor, KullaniciAyari, PushAbonelik, HatirlatmaGonderimi, ClaudeKullanim)
+
+
+def kullaniciyi_sil(db: Session, kullanici: Kullanici) -> None:
+    """Kullanıcıyı ve ona bağlı her satırı tek transaction'da siler.
+    FK'ler ondelete=CASCADE tanımlı ama sqlite bunu varsayılan olarak zorlamıyor; sıraya güveniriz."""
+    for model in KULLANICIYA_BAGLI:
+        db.execute(delete(model).where(model.user_id == kullanici.id))
+    db.delete(kullanici)
+    db.commit()
+
+
 def tablolari_olustur() -> None:
     Temel.metadata.create_all(motor)
     eklenen = sema_guncelle()
@@ -303,4 +316,4 @@ def oturum():
         yield db
 
 
-__all__ = ["ClaudeKullanim", "GunlukIfade", "HatirlatmaGonderimi", "Kullanici", "KullaniciAyari", "Madde", "PushAbonelik", "Rapor", "Session", "motor", "oturum", "tablolari_olustur"]
+__all__ = ["ClaudeKullanim", "GunlukIfade", "HatirlatmaGonderimi", "Kullanici", "KullaniciAyari", "Madde", "PushAbonelik", "Rapor", "Session", "kullaniciyi_sil", "motor", "oturum", "tablolari_olustur"]
