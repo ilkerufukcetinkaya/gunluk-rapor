@@ -789,6 +789,37 @@ def eposta_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None = N
     return _smtp_gonder(gmail_kullanici, gmail_sifre, kime, konu, metin, yanit_adresi)
 
 
+# ---------------------------------------------------------------- davet / şifre sıfırlama e-postası
+
+DAVET_KONU = "Günlük rapor aracına davet"
+SIFIRLAMA_KONU = "Günlük rapor — şifren sıfırlandı"
+
+
+def davet_eposta_metni(ad: str, eposta: str, gecici_sifre: str, giris_baglantisi: str,
+                       yonetici_adi: str, sifirlama: bool = False) -> tuple[str, str]:
+    """(konu, düz metin gövde). Davet ve şifre sıfırlama aynı yapıyı paylaşır."""
+    acilis = ("Günlük rapor aracındaki şifren sıfırlandı; aşağıda yeni geçici şifren var."
+              if sifirlama else f"{yonetici_adi} seni Günlük rapor aracına davet etti.")
+    satirlar = [
+        f"Merhaba {ad},",
+        "",
+        acilis,
+        "",
+        "Bu araç, günün sonunda patrona atılacak raporu hazırlar.",
+        "E-postaların ve işlerin gün boyunca kendiliğinden listeye düşer.",
+        "",
+        f"Giriş: {giris_baglantisi}",
+        f"E-posta: {eposta}",
+        f"Geçici şifre: {gecici_sifre}",
+        "",
+        "İlk girişte yeni şifre belirleyeceksin.",
+        "İlk açılışta 4 adımlık kurulum seni karşılar.",
+        "",
+        f"Bu e-postayı yanıtlarsan {yonelme_eki(yonetici_adi)} ulaşır.",
+    ]
+    return (SIFIRLAMA_KONU if sifirlama else DAVET_KONU), "\n".join(satirlar)
+
+
 def _b64url(veri: bytes) -> str:
     return base64.urlsafe_b64encode(veri).rstrip(b"=").decode()
 

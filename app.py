@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 import api  # noqa: E402
 import guvenlik  # noqa: E402
+import servisler  # noqa: E402
 from kimlik import (  # noqa: E402
     GirisGerekli, SifreDegistirilmeli, aktif_kullanici, cerez_sil, cerez_yaz, giris_yapmis, oturum_verisi,
     oturumdaki_kullanici, yonetici,
@@ -204,6 +205,11 @@ def kurulum_sayfasi(request: Request, kullanici: Kullanici = Depends(aktif_kulla
 
 # ---------------------------------------------------------------- yönetim
 
+def eposta_gonderilebilir() -> bool:
+    """Davet/sıfırlama e-postaları yalnız Resend ile gider; Gmail yedeği kişisel ayar olduğu için sayılmaz."""
+    return bool((os.environ.get("RESEND_API_KEY") or "").strip())
+
+
 def yonetim_sayfasi(request: Request, ben: Kullanici, db: Session, durum: int = 200, hata=None, bilgi=None):
     kullanicilar = db.scalars(select(Kullanici).order_by(Kullanici.olusturma, Kullanici.id)).all()
     ayarlar = {a.user_id: a for a in db.scalars(select(KullaniciAyari))}
@@ -218,7 +224,8 @@ def yonetim_sayfasi(request: Request, ben: Kullanici, db: Session, durum: int = 
             "ay_cagri": cagrilar.get(k.id, 0),
             "son_hatirlatma": hatirlatmalar.get(k.id),
         }
-    return sayfa(request, "yonetim.html", durum, kullanici=ben, kullanicilar=kullanicilar, ozet=ozet, hata=hata, bilgi=bilgi)
+    return sayfa(request, "yonetim.html", durum, kullanici=ben, kullanicilar=kullanicilar, ozet=ozet,
+                 hata=hata, bilgi=bilgi, eposta_acik=eposta_gonderilebilir())
 
 
 def hedef_kullanici(db: Session, kullanici_id: int) -> Kullanici | None:
@@ -241,14 +248,17 @@ def davet_et(
     if db.scalar(select(Kullanici).where(Kullanici.eposta == eposta)):
         return yonetim_sayfasi(request, ben, db, 409, hata=f"{eposta} zaten kayıtlı")
     gecici = guvenlik.gecici_sifre()
-    db.add(Kullanici(eposta=eposta, ad=ad, sifre_hash=guvenlik.sifre_ozeti(gecici),
-                     rol="uye", aktif=True, sifre_degistirmeli=True))
+    yeni = Kullanici(eposta=eposta, ad=ad, sifre_hash=guvenlik.sifre_ozeti(gecici),
+                     rol="uye", aktif=True, sifre_degistirmeli=True)
+    db.add(yeni)
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         return yonetim_sayfasi(request, ben, db, 409, hata=f"{eposta} zaten kayıtlı")
-    return yonetim_sayfasi(request, ben, db, bilgi={"baslik": f"{ad} davet edildi", "eposta": eposta, "sifre": gecici})
+    return yonetim_sayfasi(request, ben, db, bilgi={
+        "baslik": f"{ad} davet edildi", "eposta": eposta, "sifre": gecici, "hedef": yeni.id, "tur": "davet",
+    })
 
 
 @app.post("/yonetim/{kullanici_id}/aktiflik", response_class=HTMLResponse)
@@ -278,4 +288,38 @@ def sifreyi_sifirla(
     db.commit()
     return yonetim_sayfasi(request, ben, db, bilgi={
         "baslik": f"{hedef.ad} için yeni geçici şifre", "eposta": hedef.eposta, "sifre": gecici,
+        "hedef": hedef.id, "tur": "sifirlama",
     })
+
+
+@app.post("/yonetim/{kullanici_id}/davet-eposta", response_class=HTMLResponse)
+def davet_epostasi_gonder(
+    request: Request, kullanici_id: int, sifre: str = Form(...), tur: str = Form("davet"),
+    ben: Kullanici = Depends(yonetici), db: Session = Depends(oturum),
+):
+    """Geçici şifre sunucuda saklanmaz; yalnız ekranda görüldüğü an form gövdesiyle geri gelir."""
+    hedef = hedef_kullanici(db, kullanici_id)
+    if hedef is None:
+        return yonetim_sayfasi(request, ben, db, 404, hata="Kullanıcı bulunamadı")
+    sifirlama = tur == "sifirlama"
+    bilgi = {
+        "baslik": f"{hedef.ad} için yeni geçici şifre" if sifirlama else f"{hedef.ad} davet edildi",
+        "eposta": hedef.eposta, "sifre": sifre, "hedef": hedef.id, "tur": tur,
+    }
+    if not eposta_gonderilebilir():
+        bilgi["gonderim"] = {"ok": False, "neden": "E-posta gönderimi yapılandırılmamış (RESEND_API_KEY yok)"}
+        return yonetim_sayfasi(request, ben, db, 400, bilgi=bilgi)
+    konu, metin = servisler.davet_eposta_metni(
+        hedef.ad, hedef.eposta, sifre, f"{api.app_url()}/giris", ben.ad, sifirlama)
+    try:
+        hata = servisler.eposta_gonder(hedef.eposta, konu, metin, yanit_adresi=ben.eposta)
+    except Exception as e:
+        hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
+    if hata:
+        log.warning("davet epostası user=%s neden=%s", hedef.id, hata[:200])
+    else:
+        hedef.davet_eposta_tarihi = simdi()
+        db.commit()
+        log.info("davet epostası user=%s neden=gönderildi", hedef.id)
+    bilgi["gonderim"] = {"ok": not hata, "neden": hata}
+    return yonetim_sayfasi(request, ben, db, bilgi=bilgi)

@@ -10,6 +10,10 @@ main{gap:16px}
 .sifre{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
 .sifre code{font:600 20px/1.3 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing:.04em; padding:8px 12px; background:var(--paper); border-radius:10px; user-select:all}
 .sifre button{height:44px}
+.bilgi form{margin:0; display:flex; flex-direction:column; gap:6px; align-items:flex-start}
+.bilgi form button[disabled]{opacity:.5; cursor:not-allowed}
+.bilgi .sonuc{font-weight:600; color:var(--ok-ink)}
+.davet-tarih{font-size:12px; color:var(--ink-3)}
 .davet{display:grid; grid-template-columns:1fr 1fr auto; gap:10px; align-items:end; padding:14px}
 .davet label{display:block; font-size:14.5px; font-weight:600; margin-bottom:8px}
 .davet button{height:46px}
@@ -46,7 +50,7 @@ main{gap:16px}
   <h1>Yönetim</h1>
 </div>
 <main>
-  <p class="hint" style="padding:0 6px">Yeni kullanıcıyı yalnız siz eklersiniz. Geçici şifreyi kullanıcıya WhatsApp'la iletin; ilk girişte kendi şifresini belirler.</p>
+  <p class="hint" style="padding:0 6px">Yeni kullanıcıyı yalnız siz eklersiniz. Geçici şifreyi davet e-postasıyla ya da WhatsApp'la iletin; ilk girişte kendi şifresini belirler.</p>
   {% if hata %}<p class="uyari" role="alert">{{ hata }}</p>{% endif %}
 
   {% if bilgi %}
@@ -54,6 +58,17 @@ main{gap:16px}
     <h2>{{ bilgi.baslik }}</h2>
     <p class="hint">{{ bilgi.eposta }} için geçici şifre. <b>Bu şifre bir daha gösterilmeyecek.</b></p>
     <div class="sifre"><code id="gecici">{{ bilgi.sifre }}</code><button class="primary" type="button" id="kopyala">Kopyala</button></div>
+    {% if bilgi.gonderim and bilgi.gonderim.ok %}
+    <p class="sonuc">Gönderildi — {{ bilgi.eposta }}</p>
+    {% else %}
+    {% if bilgi.gonderim %}<p class="uyari" role="alert">{{ bilgi.gonderim.neden }}</p>{% endif %}
+    <form method="post" action="/yonetim/{{ bilgi.hedef }}/davet-eposta">
+      <input type="hidden" name="sifre" value="{{ bilgi.sifre }}">
+      <input type="hidden" name="tur" value="{{ bilgi.tur }}">
+      <button class="primary" type="submit"{% if not eposta_acik %} disabled{% endif %}>Davet e-postası gönder</button>
+      {% if not eposta_acik %}<p class="hint">E-posta gönderimi yapılandırılmamış (RESEND_API_KEY yok); şifreyi elle iletin.</p>{% endif %}
+    </form>
+    {% endif %}
   </section>
   {% endif %}
 
@@ -78,6 +93,7 @@ main{gap:16px}
           {% if not k.aktif %}<span class="etiket">pasif</span>{% endif %}
           {% if k.sifre_degistirmeli %}<span class="etiket">şifre bekliyor</span>{% endif %}</div>
           <div class="meta">{{ k.eposta }} · Son giriş: {% if k.son_giris %}<time class="zaman" datetime="{{ k.son_giris.isoformat() }}">{{ k.son_giris.strftime('%d.%m.%Y %H:%M') }}</time>{% else %}hiç{% endif %}</div>
+          {% if k.davet_eposta_tarihi %}<div class="davet-tarih">davet e-postası gönderildi <time class="gun" datetime="{{ k.davet_eposta_tarihi.isoformat() }}">{{ k.davet_eposta_tarihi.strftime('%d.%m.%Y') }}</time></div>{% endif %}
         </div>
         {% set o = ozet[k.id] %}
         <div class="sutunlar">
@@ -113,6 +129,10 @@ main{gap:16px}
 </main>
 <div class="toast" id="toast"></div>
 <script>
+document.querySelectorAll('time.gun').forEach(t => {
+  const d = new Date(t.getAttribute('datetime'));
+  if (!isNaN(d)) t.textContent = d.toLocaleDateString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric' });
+});
 document.querySelectorAll('time.zaman').forEach(t => {
   const d = new Date(t.getAttribute('datetime'));
   if (!isNaN(d)) t.textContent = d.toLocaleString('tr-TR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });

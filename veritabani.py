@@ -55,6 +55,7 @@ class Kullanici(Temel):
     aktif: Mapped[bool] = mapped_column(Boolean, default=True)
     sifre_degistirmeli: Mapped[bool] = mapped_column(Boolean, default=True)
     son_giris: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    davet_eposta_tarihi: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
 
 
@@ -202,6 +203,7 @@ EK_KOLONLAR = [
     ("user_settings", "kaynaklar", "JSON", "JSON"),
     ("user_settings", "kurulum_tamam", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
     ("hatirlatma_gonderimleri", "hata_metni", "TEXT", "TEXT"),
+    ("users", "davet_eposta_tarihi", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
 ]
 # Sonradan eklenen tablolar; users tablosu olan şemada eksikse oluşturulur.
 EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim"]
