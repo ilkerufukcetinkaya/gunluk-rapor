@@ -189,7 +189,7 @@ input[type=time]{width:124px; font-weight:600; flex:none}
         <div class="row dikey">
           <label class="alan" for="hatirlatma_eposta_adres">Adres <small>— boşsa giriş e-postanız</small></label>
           <input type="email" id="hatirlatma_eposta_adres" name="hatirlatma_eposta_adres">
-          <p class="kayitli" id="epostaBilgi" hidden>Önce yukarıya Gmail adresi ve uygulama şifresi girin; hatırlatma sizin Gmail'inizden size gönderilir.</p>
+          <p class="kayitli" id="epostaBilgi">Hatırlatma <b id="epostaGonderen">rapor@medusarights.com</b> adresinden gelir; yanıtlarsanız size döner.</p>
         </div>
       </section>
     </div>
@@ -273,10 +273,9 @@ function doldur(a){
   $('hatirlatma_eposta_adres').value = a.hatirlatma_eposta_adres || '';
   $('hatirlatma_eposta_adres').placeholder = a.giris_eposta || '';
   $('epostaHedef').textContent = a.hatirlatma_eposta_adres || a.giris_eposta || 'Giriş e-postanıza';
+  // E-posta hatırlatması Gmail ayarına bağlı değil; sistem kendi adresinden gönderir.
+  if (a.eposta_gonderen) $('epostaGonderen').textContent = a.eposta_gonderen;
   const gmailYok = !(a.gmail_kullanici && a.gmail_sifre_kayitli);
-  $('hatirlatma_eposta').disabled = gmailYok;
-  $('hatirlatma_eposta_adres').disabled = gmailYok;
-  $('epostaBilgi').hidden = !gmailYok;
   const kaynaklar = a.kaynaklar || {};
   KAYNAK_ANAHTARLARI.forEach(k => k.checked = !!kaynaklar[k.dataset.kaynak]);
   if (ilkDoldurma){
@@ -297,10 +296,8 @@ async function kaydet(){
   govde.hatirlatma_saat = $('hatirlatma_saat').value || '17:00';
   govde.hatirlatma_gunler = [...document.querySelectorAll('#gunler input:checked')].map(k => Number(k.value));
   govde.hatirlatma_push = $('hatirlatma_push').checked;
-  if (!$('hatirlatma_eposta').disabled) {
-    govde.hatirlatma_eposta = $('hatirlatma_eposta').checked;
-    govde.hatirlatma_eposta_adres = $('hatirlatma_eposta_adres').value;
-  }
+  govde.hatirlatma_eposta = $('hatirlatma_eposta').checked;
+  govde.hatirlatma_eposta_adres = $('hatirlatma_eposta_adres').value;
   const kaynakDegisti = !sonAyar || !!govde.gmail_sifre || !!govde.github_token
     || govde.gmail_kullanici !== sonAyar.gmail_kullanici || govde.github_repo !== sonAyar.github_repo;
   const a = await istek('/api/ayarlar', { method:'PUT', body: JSON.stringify(govde) });

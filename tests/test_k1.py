@@ -87,7 +87,7 @@ def test_hatirlatma_ozeti_kapali_kaynagi_saymaz(monkeypatch):
     monkeypatch.setenv("APP_URL", "https://rapor.ornek.com")
     monkeypatch.setattr(api, "istanbul_simdi", lambda: datetime.combine(date(2026, 9, 16), time(17, 30), servisler.ISTANBUL))
     gonderilen = []
-    monkeypatch.setattr(servisler, "eposta_gonder", lambda *a: gonderilen.append(a) or None)
+    monkeypatch.setattr(servisler, "eposta_gonder", lambda *a, **kw: gonderilen.append((a, kw)) or None)
     monkeypatch.setattr(servisler, "gmail_tara", lambda *a, **k: [servisler.madde("eposta", "MSG'ye e-posta"), servisler.madde("eposta", "IMRO'ya e-posta")])
     uid = kullanici_olustur(
         gmail_kullanici=BEN, gmail_sifre_enc=guvenlik.sifrele("s"), github_repo="ben/proje",
@@ -96,7 +96,7 @@ def test_hatirlatma_ozeti_kapali_kaynagi_saymaz(monkeypatch):
     ekle(user_id=uid, tur="bulunan", tarih=date(2026, 9, 16), kaynak="medusa", kaynak_id="c1", metin="Arama hızlandı")
     r = TestClient(uygulama.app).post(f"/api/hatirlat?token={TOKEN}").json()
     assert r["kullanicilar"][0]["eposta"] == "gönderildi"
-    konu, govde = gonderilen[0][3], gonderilen[0][4]
+    konu, govde = gonderilen[0][0][1], gonderilen[0][0][2]
     assert govde.startswith("Bugünün raporu hazır bekliyor · 2 e-posta bulundu")
     assert "commit" not in govde and "Arama hızlandı" not in govde and "16.09.2026" in konu
 

@@ -719,12 +719,49 @@ def raporu_uret(ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | f
 
 # ---------------------------------------------------------------- hatırlatma: e-posta ve web push
 
-def eposta_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, metin: str) -> str | None:
-    """Kullanıcının kendi Gmail'inden gönderir. Başarıda None, hatada kısa mesaj döner; yükseltmez."""
+VARSAYILAN_GONDEREN = "rapor@medusarights.com"
+
+
+def gonderen_adresi() -> str:
+    return (os.environ.get("EPOSTA_GONDEREN") or "").strip() or VARSAYILAN_GONDEREN
+
+
+def _resend_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None, anahtar: str,
+                   istemci: httpx.Client | None = None) -> str | None:
+    """Render free planı giden SMTP portlarını kapatıyor; sistem e-postaları HTTPS ile gider."""
+    govde = {"from": gonderen_adresi(), "to": [kime], "subject": konu, "text": metin}
+    if yanit_adresi:
+        govde["reply_to"] = yanit_adresi
+    istemci = istemci or httpx.Client(timeout=20)
+    try:
+        yanit = istemci.post(
+            "https://api.resend.com/emails", json=govde,
+            headers={"Authorization": f"Bearer {anahtar}", "content-type": "application/json"},
+        )
+    except httpx.HTTPError as e:
+        return f"E-posta gönderilemedi ({e.__class__.__name__})"
+    except Exception as e:
+        return f"E-posta gönderilemedi: beklenmeyen hata ({e.__class__.__name__})"
+    if 200 <= yanit.status_code < 300:
+        return None
+    try:
+        neden = yanit.json().get("message") or yanit.text
+    except Exception:
+        neden = yanit.text
+    return f"Resend {yanit.status_code}: {(neden or '').strip()[:120]}"
+
+
+def _smtp_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, metin: str,
+                 yanit_adresi: str | None) -> str | None:
+    """Yerel geliştirme yedeği: kullanıcının kendi Gmail'inden SMTP ile gönderir."""
+    if not (gmail_kullanici and gmail_sifre):
+        return "E-posta gönderilemedi (RESEND_API_KEY tanımlı değil, Gmail yedeği de yok)"
     mesaj = EmailMessage()
     mesaj["From"] = gmail_kullanici
     mesaj["To"] = kime
     mesaj["Subject"] = konu
+    if yanit_adresi:
+        mesaj["Reply-To"] = yanit_adresi
     mesaj.set_content(metin, charset="utf-8")
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as sunucu:
@@ -739,6 +776,17 @@ def eposta_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, 
     except Exception as e:
         return f"E-posta gönderilemedi: beklenmeyen hata ({e.__class__.__name__})"
     return None
+
+
+def eposta_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None = None,
+                  gmail_kullanici: str = "", gmail_sifre: str = "",
+                  istemci: httpx.Client | None = None) -> str | None:
+    """Başarıda None, hatada kısa Türkçe neden döner; yükseltmez.
+    RESEND_API_KEY varsa HTTPS ile Resend, yoksa Gmail SMTP yedeği (yerel geliştirme)."""
+    anahtar = (os.environ.get("RESEND_API_KEY") or "").strip()
+    if anahtar:
+        return _resend_gonder(kime, konu, metin, yanit_adresi, anahtar, istemci)
+    return _smtp_gonder(gmail_kullanici, gmail_sifre, kime, konu, metin, yanit_adresi)
 
 
 def _b64url(veri: bytes) -> str:

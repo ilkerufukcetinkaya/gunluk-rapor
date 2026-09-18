@@ -103,6 +103,7 @@ def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
         "hatirlatma_eposta": h["eposta"],
         "hatirlatma_eposta_adres": h["adres"],
         "giris_eposta": kullanici.eposta if kullanici else "",
+        "eposta_gonderen": servisler.gonderen_adresi(),
         "gmail_kullanici": a.gmail_kullanici or "",
         "gmail_sifre_kayitli": bool(a.gmail_sifre_enc),
         "github_token_kayitli": bool(a.github_token_enc),
@@ -1185,7 +1186,6 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
     )))
     cihaz_sayisi = db.scalar(select(func.count()).select_from(PushAbonelik).where(PushAbonelik.user_id == k.id))
     ayarlar = cozulmus_ayarlar(a)
-    gmail_var = bool(ayarlar["gmail_kullanici"] and ayarlar["gmail_sifre"])
     nedenler = []
     push_gerekli = eposta_gerekli = False
     if not h["push"]:
@@ -1200,9 +1200,7 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
         nedenler.append("e-posta kapalı")
     elif "eposta" in islenmis:
         nedenler.append("e-posta bugün gönderildi")
-    elif not gmail_var:
-        nedenler.append("Gmail ayarı yok")
-    else:
+    else:  # Resend ile gönderildiği için kullanıcının Gmail ayarı olmasa da gider
         eposta_gerekli = True
     if not (push_gerekli or eposta_gerekli):
         sonuc["neden"] = "; ".join(nedenler)
@@ -1248,9 +1246,11 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
         else:
             try:
                 hata = servisler.eposta_gonder(
-                    ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], h["adres"] or k.eposta,
+                    h["adres"] or k.eposta,
                     f"Günlük rapor hatırlatması – {tarih.strftime('%d.%m.%Y')}",
                     hatirlatma_epostasi(ozet, bulunanlar, tarih),
+                    yanit_adresi=k.eposta,
+                    gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"],
                 )
             except Exception as e:
                 hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
@@ -1267,18 +1267,18 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
 
 @router.post("/hatirlat/eposta-dene")
 def hatirlatma_eposta_dene(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    """Kullanıcının kendi Gmail'inden hatırlatma adresine gerçek bir test maili gönderir."""
+    """Hatırlatma adresine gerçek bir test maili gönderir."""
     a = ayar_satiri(db, kullanici)
     ayarlar = cozulmus_ayarlar(a)
-    if not (ayarlar["gmail_kullanici"] and ayarlar["gmail_sifre"]):
-        raise HTTPException(status_code=400, detail="Önce Gmail adresi ve uygulama şifresini kaydedin")
     hedef = hatirlatma_ayari(a)["adres"] or kullanici.eposta
     metin = "\n".join([
-        "Bu bir test e-postasıdır; hatırlatmalar da bu adrese böyle gelir.", "", app_url(),
+        f"Bu bir test e-postasıdır; hatırlatmalar da {servisler.gonderen_adresi()} adresinden böyle gelir.",
+        "", app_url(),
     ])
     try:
         hata = servisler.eposta_gonder(
-            ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], hedef, "Günlük rapor — e-posta testi", metin)
+            hedef, "Günlük rapor — e-posta testi", metin, yanit_adresi=kullanici.eposta,
+            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"])
     except Exception as e:
         hata = f"E-posta gönderilemedi ({e.__class__.__name__}: {e})"
     if hata:

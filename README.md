@@ -22,6 +22,8 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `VAPID_CLAIM_EMAIL` | `mailto:adres` biçiminde; push servisleri sorun olursa buna ulaşır |
 | `APP_URL` | Bildirim ve e-postadaki bağlantı, örn. `https://gunluk-rapor.onrender.com` |
 | `CRON_TOKEN` | `/api/hatirlat` ucunun parolası (32 bayt rastgele). Üretmek: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `RESEND_API_KEY` | Sistem e-postalarının gönderildiği Resend anahtarı. Yoksa yerel geliştirmede Gmail SMTP yedeğine düşülür |
+| `EPOSTA_GONDEREN` | Gönderen adresi, varsayılan `rapor@medusarights.com`; Resend'de doğrulanmış alan adından olmalı |
 
 Tablolar açılışta otomatik oluşur; sonradan eklenen kolon ve indeksler de açılışta idempotent olarak eklenir (`veritabani.sema_guncelle`, ayrı migration aracı yok).
 
@@ -46,7 +48,19 @@ Render free uyuduğu için zamanlayıcı dışarıdadır. cron-job.org kurulumu:
 4. Kaydedip **Test run** → yanıt 200 ve kullanıcı başına `push` / `eposta` / `neden`.
 5. `GET /api/saglik` yanıtındaki `son_hatirlat_ping` cron'un geldiğini gösterir (bellekte tutulur; sık ping servisi uyanık tutar).
 
-Kural: aktif kullanıcı için bugün hatırlatma günüyse, saat geçtiyse ve bugün günlük rapor kopyalanmadıysa tarama yapılır, telefon bildirimi ve e-posta (kullanıcının kendi Gmail'inden kendisine) gider. Kanal başına günde bir kez; geç gelen ping (17:04) sorun değildir. Tek istek 20 saniyeyi aşarsa kalan kullanıcılar bir sonraki ping'e kalır.
+Kural: aktif kullanıcı için bugün hatırlatma günüyse, saat geçtiyse ve bugün günlük rapor kopyalanmadıysa tarama yapılır, telefon bildirimi ve e-posta (`EPOSTA_GONDEREN` adresinden, Yanıtla kullanıcının kendi adresine) gider. Kanal başına günde bir kez; geç gelen ping (17:04) sorun değildir. Tek istek 20 saniyeyi aşarsa kalan kullanıcılar bir sonraki ping'e kalır.
+
+## E-posta gönderimi (Resend)
+
+Render free planı giden SMTP portlarını kapatıyor (`OSError`), bu yüzden sistem e-postaları HTTPS ile Resend üzerinden gider.
+
+1. [resend.com](https://resend.com)'da hesap açın → **Domains** → `medusarights.com` ekleyin.
+2. Resend'in verdiği SPF/DKIM (ve istenirse DMARC) kayıtlarını alan adının DNS'ine girin, doğrulanmasını bekleyin.
+3. **API Keys** → yeni anahtar (Sending access yeter) → değeri Render'da `RESEND_API_KEY` olarak tanımlayın.
+4. `EPOSTA_GONDEREN`'i doğrulanmış alan adındaki bir adrese ayarlayın (varsayılan `rapor@medusarights.com`).
+5. Ayarlar › Hatırlatma › **E-posta testi gönder** ile doğrulayın; hata olursa neden ekranda ve logda görünür.
+
+`RESEND_API_KEY` tanımlı değilse kullanıcının kendi Gmail'i üzerinden SMTP yedeği denenir — yalnız yerel geliştirme içindir.
 
 **iPhone:** bildirimler yalnız ana ekrana eklenmiş uygulamada çalışır (iOS 16.4+). Safari'de siteyi açın → Paylaş → **Ana Ekrana Ekle** → ana ekrandaki "Rapor" simgesinden açıp Ayarlar › Hatırlatma › **Bu cihazda bildirimleri aç**. Android/masaüstü Chrome'da doğrudan Ayarlar'dan açılır.
 

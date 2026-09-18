@@ -3,6 +3,7 @@ import json
 import smtplib
 from datetime import date, datetime, time
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pywebpush import WebPushException
@@ -59,6 +60,33 @@ class SahteSmtp:
 
     def send_message(self, mesaj):
         SahteSmtp.gonderilen.append(mesaj)
+
+
+class SahteResend:
+    """servisler.httpx.Client yerine geçer: Resend isteklerini kaydeder, ayarlanan yanıtı döner."""
+
+    istekler: list = []
+    kod: int = 200
+    govde: dict | None = None
+    hata: Exception | None = None
+
+    def __init__(self, *a, **kw):
+        pass
+
+    def post(self, url, json=None, headers=None):
+        SahteResend.istekler.append({"url": url, "govde": json, "headers": headers})
+        if SahteResend.hata:
+            raise SahteResend.hata
+        return httpx.Response(SahteResend.kod, json=SahteResend.govde if SahteResend.govde is not None else {"id": "re_1"})
+
+
+@pytest.fixture
+def resend(monkeypatch):
+    SahteResend.istekler, SahteResend.kod, SahteResend.govde, SahteResend.hata = [], 200, None, None
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_anahtar")
+    monkeypatch.setenv("EPOSTA_GONDEREN", "rapor@medusarights.com")
+    monkeypatch.setattr(servisler.httpx, "Client", SahteResend)
+    return SahteResend
 
 
 @pytest.fixture(autouse=True)
@@ -272,11 +300,12 @@ def test_eposta_adresi_bossa_giris_epostasina(push, saat):
     assert bos != dolu
 
 
-def test_gmail_ayari_yoksa_eposta_atlandi_push_cihaz_yoksa_0(push, saat):
-    uid = kullanici_olustur(gmail=False)
+def test_push_cihazi_yoksa_0_kayit_acilmaz(push, saat):
+    """E-posta kapalıyken push kanalı cihaz yoksa kayıt açmaz; gün içinde cihaz eklenirse gönderir."""
+    uid = kullanici_olustur(gmail=False, hatirlatma_eposta=False)
     r = satir(cron(), uid)
-    assert r["eposta"] == "atlandı" and "Gmail ayarı yok" in r["neden"] and r["push"] == "0/0"
-    with OturumYapici() as db:  # cihaz eklenirse aynı gün sonraki ping gönderebilsin
+    assert r["eposta"] == "atlandı" and "e-posta kapalı" in r["neden"] and r["push"] == "0/0"
+    with OturumYapici() as db:
         assert db.scalar(select(func.count()).select_from(HatirlatmaGonderimi)) == 0
     abonelik_ekle(uid)
     assert satir(cron(), uid)["push"] == "1/1"
@@ -429,7 +458,7 @@ def test_eposta_hatasi_warning_loglanir_ve_kayda_yazilir(push, saat, caplog):
 
 
 def test_push_hatasi_warning_loglanir_ve_kayda_yazilir(push, saat, caplog):
-    uid = kullanici_olustur(gmail=False)
+    uid = kullanici_olustur(gmail=False, hatirlatma_eposta=False)
     abonelik_ekle(uid)
     push.hatalar["https://push.ornek.com/1"] = 500
     with caplog.at_level("INFO", logger="gunluk-rapor"):
@@ -442,7 +471,8 @@ def test_push_hatasi_warning_loglanir_ve_kayda_yazilir(push, saat, caplog):
 
 
 def test_yonetim_son_hatirlatma_sutunu(push, saat):
-    yonetici = kullanici_olustur("y@ornek.com", "Yonetici", gmail=False, rol="admin")
+    yonetici = kullanici_olustur("y@ornek.com", "Yonetici", gmail=False, rol="admin",
+                                 hatirlatma_push=False, hatirlatma_eposta=False)
     uid = kullanici_olustur("b@ornek.com", "B")
     abonelik_ekle(uid, "https://push.ornek.com/b")
     SahteSmtp.hata = smtplib.SMTPAuthenticationError(535, b"bad")
@@ -513,13 +543,116 @@ def test_eposta_dene_smtp_hatasinda_neden_doner(caplog):
     assert any(k.levelname == "WARNING" and "eposta testi" in k.message for k in caplog.records)
 
 
-def test_eposta_dene_gmail_ayari_yoksa_400():
+def test_eposta_dene_hicbir_gonderim_yolu_yoksa_neden_doner():
+    """Ne RESEND_API_KEY ne de Gmail yedeği varsa: 400 değil, ekranda gösterilecek neden."""
     kullanici_olustur(gmail=False)
     y = istemci().post("/api/hatirlat/eposta-dene")
-    assert y.status_code == 400 and "Gmail" in y.json()["detail"]
+    assert y.status_code == 200 and y.json()["ok"] is False
+    assert "RESEND_API_KEY tanımlı değil" in y.json()["neden"]
     assert SahteSmtp.gonderilen == []
 
 
 def test_eposta_dene_oturumsuz_401():
     kullanici_olustur()
     assert TestClient(uygulama.app).post("/api/hatirlat/eposta-dene").status_code == 401
+
+
+# ---------------------------------------------------------------- K1-ek2: Resend HTTPS gönderimi
+
+def test_resend_basarida_none_doner_ve_istegi_kurar(resend):
+    assert servisler.eposta_gonder("kime@ornek.com", "Konu", "Gövde", yanit_adresi="ben@ornek.com") is None
+    istek = resend.istekler[0]
+    assert istek["url"] == "https://api.resend.com/emails"
+    assert istek["headers"]["Authorization"] == "Bearer re_test_anahtar"
+    assert istek["govde"] == {
+        "from": "rapor@medusarights.com", "to": ["kime@ornek.com"],
+        "subject": "Konu", "text": "Gövde", "reply_to": "ben@ornek.com",
+    }
+
+
+def test_resend_yanit_adresi_yoksa_alan_gonderilmez(resend):
+    servisler.eposta_gonder("kime@ornek.com", "Konu", "Gövde")
+    assert "reply_to" not in resend.istekler[0]["govde"]
+
+
+def test_resend_gonderen_varsayilani_ve_ortam_degiskeni(resend, monkeypatch):
+    monkeypatch.delenv("EPOSTA_GONDEREN", raising=False)
+    assert servisler.gonderen_adresi() == "rapor@medusarights.com"
+    monkeypatch.setenv("EPOSTA_GONDEREN", "baska@ornek.com")
+    servisler.eposta_gonder("kime@ornek.com", "Konu", "Gövde")
+    assert resend.istekler[0]["govde"]["from"] == "baska@ornek.com"
+
+
+def test_resend_422_kisa_turkce_neden_doner(resend):
+    resend.kod, resend.govde = 422, {"message": "D" * 200}
+    hata = servisler.eposta_gonder("kime@ornek.com", "Konu", "Gövde")
+    assert hata == "Resend 422: " + "D" * 120
+
+
+def test_resend_baglanti_hatasi_yutulur(resend):
+    resend.hata = httpx.ConnectTimeout("zaman aşımı")
+    assert servisler.eposta_gonder("kime@ornek.com", "Konu", "Gövde") == "E-posta gönderilemedi (ConnectTimeout)"
+
+
+def test_anahtar_yoksa_smtp_yedegi_calisir():
+    assert servisler.eposta_gonder(
+        "kime@ornek.com", "Konu", "Gövde", yanit_adresi="ben@ornek.com",
+        gmail_kullanici="a@gmail.com", gmail_sifre="uyg-sifre") is None
+    mesaj = SahteSmtp.gonderilen[0]
+    assert mesaj["From"] == "a@gmail.com" and mesaj["Reply-To"] == "ben@ornek.com"
+
+
+def test_anahtar_da_gmail_de_yoksa_neden_doner():
+    hata = servisler.eposta_gonder("kime@ornek.com", "Konu", "Gövde")
+    assert "RESEND_API_KEY tanımlı değil" in hata and SahteSmtp.gonderilen == []
+
+
+def test_hatirlatma_resend_ile_gider_ve_yanit_adresi_tasir(push, saat, resend):
+    uid = kullanici_olustur()
+    r = satir(cron(), uid)
+    assert r["eposta"] == "gönderildi"
+    govde = resend.istekler[0]["govde"]
+    assert govde["to"] == ["a@ornek.com"] and govde["reply_to"] == "a@ornek.com"
+    assert govde["from"] == "rapor@medusarights.com"
+    assert "Günlük rapor hatırlatması – 16.09.2026" == govde["subject"]
+    assert SahteSmtp.gonderilen == []  # SMTP'ye hiç düşülmez
+
+
+def test_hatirlatma_gmail_ayari_olmayan_kullaniciya_da_gider(push, saat, resend):
+    uid = kullanici_olustur(gmail=False)
+    r = satir(cron(), uid)
+    assert r["eposta"] == "gönderildi" and "Gmail" not in r["neden"]
+    assert resend.istekler[0]["govde"]["to"] == ["a@ornek.com"]
+
+
+def test_hatirlatma_resend_hatasi_kayda_ve_loga_yazilir(push, saat, resend, caplog):
+    uid = kullanici_olustur(gmail=False)
+    resend.kod, resend.govde = 422, {"message": "Alan adı doğrulanmadı"}
+    with caplog.at_level("INFO", logger="gunluk-rapor"):
+        assert satir(cron(), uid)["eposta"] == "hata"
+    with OturumYapici() as db:
+        kayit = db.scalars(select(HatirlatmaGonderimi).where(HatirlatmaGonderimi.kanal == "eposta")).one()
+        assert kayit.durum == "hata" and kayit.hata_metni == "Resend 422: Alan adı doğrulanmadı"
+    assert any("kanal=eposta" in k.message and "Resend 422" in k.message for k in caplog.records)
+
+
+def test_eposta_dene_resend_ile_gider(resend):
+    kullanici_olustur(gmail=False)
+    y = istemci().post("/api/hatirlat/eposta-dene")
+    assert y.status_code == 200 and y.json() == {"ok": True}
+    govde = resend.istekler[0]["govde"]
+    assert govde["subject"] == "Günlük rapor — e-posta testi"
+    assert govde["to"] == ["a@ornek.com"] and govde["reply_to"] == "a@ornek.com"
+    assert "rapor@medusarights.com" in govde["text"]
+
+
+def test_eposta_dene_resend_hatasinda_neden_doner(resend):
+    kullanici_olustur()
+    resend.kod, resend.govde = 403, {"message": "Alan adı doğrulanmadı"}
+    govde = istemci().post("/api/hatirlat/eposta-dene").json()
+    assert govde == {"ok": False, "neden": "Resend 403: Alan adı doğrulanmadı"}
+
+
+def test_ayarlar_gonderen_adresini_doner(resend):
+    kullanici_olustur()
+    assert istemci().get("/api/ayarlar").json()["eposta_gonderen"] == "rapor@medusarights.com"

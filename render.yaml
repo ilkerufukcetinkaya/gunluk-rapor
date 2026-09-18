@@ -27,3 +27,7 @@ services:
         sync: false
       - key: CRON_TOKEN
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EPOSTA_GONDEREN
+        sync: false
