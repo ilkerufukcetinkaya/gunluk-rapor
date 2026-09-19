@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 rapor.db
 tasarim/
+
+.DS_Store
+sayfa-taslak.html
+.claude/
