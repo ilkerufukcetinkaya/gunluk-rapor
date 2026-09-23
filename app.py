@@ -1,10 +1,12 @@
 """Günlük rapor servisi: hesaplar, sayfalar ve API. Her kullanıcı kendi Gmail/GitHub ayarlarıyla çalışır."""
+import hmac
 import logging
 import mimetypes
 import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 
@@ -20,6 +22,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 import api  # noqa: E402
 import guvenlik  # noqa: E402
+import kimlik  # noqa: E402
 import servisler  # noqa: E402
 from kimlik import (  # noqa: E402
     GirisGerekli, SifreDegistirilmeli, aktif_kullanici, cerez_sil, cerez_yaz, giris_yapmis, oturum_verisi,
@@ -195,14 +198,80 @@ def gecmis_sayfasi(request: Request, kullanici: Kullanici = Depends(kurulmus_kul
 
 @app.get("/ayarlar", response_class=HTMLResponse)
 def ayarlar_sayfasi(request: Request, kullanici: Kullanici = Depends(kurulmus_kullanici)):
-    return sayfa(request, "ayarlar.html", kullanici=kullanici)
+    return sayfa(request, "ayarlar.html", kullanici=kullanici, google_ayarli=servisler.google_ayarli())
 
 
 @app.get("/kurulum", response_class=HTMLResponse)
 def kurulum_sayfasi(request: Request, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)):
     """Her zaman açılır (Ayarlar'daki "Kurulumu yeniden aç" da buraya gelir); Bitir kurulum_tamam'ı true bırakır."""
     a = db.get(KullaniciAyari, kullanici.id)
-    return sayfa(request, "kurulum.html", kullanici=kullanici, kurulum_tamam=bool(a and a.kurulum_tamam))
+    return sayfa(request, "kurulum.html", kullanici=kullanici, kurulum_tamam=bool(a and a.kurulum_tamam),
+                 google_ayarli=servisler.google_ayarli())
+
+
+# ---------------------------------------------------------------- Google ile bağlan (OAuth 2.0 + PKCE)
+
+GOOGLE_DONUSLER = ("/ayarlar", "/kurulum")  # ?donus= beyaz listesi; ilki varsayılan
+
+
+def google_yonlendirme_adresi(request: Request) -> str:
+    """APP_URL + /oauth/google/geri. Yerelde (localhost) ya da APP_URL yoksa isteğin kökü: http://localhost:8765."""
+    yerel = request.url.hostname in ("localhost", "127.0.0.1")
+    kok = ("" if yerel else (os.environ.get("APP_URL") or "").strip().rstrip("/")) or str(request.base_url).rstrip("/")
+    return kok + "/oauth/google/geri"
+
+
+def google_donusu(hedef: str, **parametre) -> RedirectResponse:
+    yanit = RedirectResponse(f"{hedef}?{urlencode(parametre)}", status_code=303)
+    kimlik.pkce_cerezi_sil(yanit)
+    return yanit
+
+
+@app.get("/oauth/google/basla")
+def google_basla(request: Request, donus: str = "", kullanici: Kullanici = Depends(aktif_kullanici)):
+    hedef = donus if donus in GOOGLE_DONUSLER else GOOGLE_DONUSLER[0]
+    if not servisler.google_ayarli():
+        return google_donusu(hedef, google="hata", neden="Google bağlantısı bu sunucuda ayarlı değil")
+    dogrulayici, challenge = servisler.pkce_cifti()
+    state, nonce = kimlik.google_state_uret(kullanici.id, hedef)
+    yanit = RedirectResponse(servisler.google_yetki_adresi(
+        google_yonlendirme_adresi(request), state, challenge, login_hint=kullanici.eposta), status_code=303)
+    kimlik.pkce_cerezi_yaz(yanit, nonce, dogrulayici)
+    return yanit
+
+
+@app.get("/oauth/google/geri")
+def google_geri(
+    request: Request, code: str = "", state: str = "", error: str = "",
+    kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
+):
+    """state (imza, 10 dk, oturumdaki kullanıcı) ve PKCE çerezi doğrulanır; hata/iptal → donus?google=hata&neden=…"""
+    veri = kimlik.google_state_coz(state)
+    hedef = veri["d"] if veri and veri.get("d") in GOOGLE_DONUSLER else GOOGLE_DONUSLER[0]
+    if veri is None:
+        return google_donusu(hedef, google="hata", neden="İstek geçersiz ya da süresi doldu; yeniden deneyin")
+    if veri["u"] != kullanici.id:
+        return google_donusu(hedef, google="hata", neden="Oturum eşleşmedi; yeniden deneyin")
+    if error:
+        neden = "İzin verilmedi" if error == "access_denied" else "Google isteği reddetti"
+        return google_donusu(hedef, google="hata", neden=neden)
+    pkce = kimlik.pkce_cerezi_oku(request)
+    if not pkce or not hmac.compare_digest(pkce["n"], veri["n"]):
+        return google_donusu(hedef, google="hata", neden="Doğrulama başarısız; yeniden deneyin")
+    if not code or not servisler.google_ayarli():
+        return google_donusu(hedef, google="hata", neden="Google yetki kodu gelmedi")
+    try:
+        token = servisler.google_kod_takas(code, pkce["v"], google_yonlendirme_adresi(request))
+    except servisler.GoogleHatasi as e:
+        log.warning("google baglanti hatasi user=%s neden=%s", kullanici.id, str(e)[:200])
+        return google_donusu(hedef, google="hata", neden=str(e))
+    api.google_baglantisini_kaydet(db, kullanici, token)
+    return google_donusu(hedef, google="bagli")
+
+
+@app.post("/oauth/google/kaldir")
+def google_kaldir(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    return api.ayar_ozeti(api.google_baglantisini_kaldir(db, kullanici), kullanici)
 
 
 # ---------------------------------------------------------------- yönetim

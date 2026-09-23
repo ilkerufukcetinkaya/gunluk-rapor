@@ -24,6 +24,8 @@ try { localStorage.removeItem('gunluk-rapor-tema'); } catch {}
   --dark:#12151a; --dark-2:#2a303a; --dark-ink-2:#9aa3b0;
   --warn:#f2c35b; --warn-dark:#3b2f12; --warn-line:#5a4616; --warn-bg:#fff4e0; --warn-ink:#7a5a12;
   --gmail:#d9433d; --gmail-bg:#fdecec; --ongoing:#c98a12; --ongoing-bg:#fff4e0;
+  --takvim:#1f8a4c; --takvim-bg:#e5f5ec; --drive:#b7791f; --drive-bg:#fdf1dc;
+  --turuncu-bg:#ffe8d9; --turuncu-ink:#9a3412;
   --ok:#22b866; --ok-ink:#1f8a4c; --ok-dark:#133524; --ok-line:#1f5a3a;
   --weekly-ink:#1f2a44;
   --shadow:0 1px 1px rgba(18,21,26,.03), 0 12px 32px -20px rgba(18,21,26,.18);
@@ -76,6 +78,8 @@ h2{font-size:17px; font-weight:700; letter-spacing:-.02em; margin:0}
 .t-gmail{background:var(--gmail-bg); color:var(--gmail)}
 .t-git{background:var(--accent-bg); color:var(--accent)}
 .t-devam{background:var(--ongoing-bg); color:var(--ongoing)}
+.t-takvim{background:var(--takvim-bg); color:var(--takvim)}
+.t-drive{background:var(--drive-bg); color:var(--drive)}
 .t-cihaz{background:var(--paper); color:var(--ink-2)}
 
 /* onay kutusu */
@@ -177,6 +181,7 @@ button:disabled{opacity:.6; cursor:default}
 .serit{display:flex; align-items:center; gap:10px; flex-wrap:wrap; border-radius:12px; padding:9px 14px; font-size:13px; font-weight:500; margin:0}
 .serit.mavi{background:var(--accent-bg); color:var(--accent-hover)}
 .serit.sari{background:var(--warn-bg); color:var(--warn-ink)}
+.serit.turuncu{background:var(--turuncu-bg); color:var(--turuncu-ink)}
 .serit .link{font-size:13px; color:inherit; text-decoration:underline; text-underline-offset:2px}
 .serit .kapat{margin-left:auto; text-decoration:none; opacity:.8}
 .sistemRozet{font-size:11px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:1px 8px}

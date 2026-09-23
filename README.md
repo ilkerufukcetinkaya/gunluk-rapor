@@ -1,6 +1,6 @@
 # Günlük rapor
 
-Patrona WhatsApp'tan gönderilen günlük raporu hazırlayan küçük web servisi. Her kullanıcının kendi hesabı, Gmail/GitHub ayarları ve maddeleri sunucuda durur. Bugün gönderilen iş e-postalarını (Gmail) ve projenin bugünkü commit'lerini (GitHub) tarar, rapor maddesi önerir; tikle, düzenle, kopyala. Maddeler tek Claude çağrısıyla yazım ve üslup yönünden düzeltilir (orijinal saklanır, geri alınabilir). Kopyalanan raporlar geçmişte birikir; geçmişten haftalık özet üretilir. Gönderim elle yapılır; rapor kopyalanmamışsa ayarlanan saatte (varsayılan hafta içi 17:00) telefona bildirim ve e-posta ile hatırlatılır.
+Patrona WhatsApp'tan gönderilen günlük raporu hazırlayan küçük web servisi. Her kullanıcının kendi hesabı, Gmail/GitHub ayarları ve maddeleri sunucuda durur. Bugün gönderilen iş e-postalarını (Gmail), toplantıları (Google Takvim), üzerinde çalışılan dosyaları (Google Drive) ve projenin bugünkü commit'lerini (GitHub) tarar, rapor maddesi önerir; tikle, düzenle, kopyala. Maddeler tek Claude çağrısıyla yazım ve üslup yönünden düzeltilir (orijinal saklanır, geri alınabilir). Kopyalanan raporlar geçmişte birikir; geçmişten haftalık özet üretilir. Gönderim elle yapılır; rapor kopyalanmamışsa ayarlanan saatte (varsayılan hafta içi 17:00) telefona bildirim ve e-posta ile hatırlatılır.
 
 ## Çalıştırma
 
@@ -24,6 +24,8 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `CRON_TOKEN` | `/api/hatirlat` ucunun parolası (32 bayt rastgele). Üretmek: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `RESEND_API_KEY` | Sistem e-postalarının gönderildiği Resend anahtarı. Yoksa yerel geliştirmede Gmail SMTP yedeğine düşülür |
 | `EPOSTA_GONDEREN` | Gönderen adresi, varsayılan `rapor@medusarights.com`; Resend'de doğrulanmış alan adından olmalı |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google OAuth istemcisi (Web application). Biri bile yoksa "Google ile bağlan" arayüzü hiç görünmez |
+| `GOOGLE_TEST_MODU` | Varsayılan `1`: OAuth uygulaması Google'da test modunda, bağlantı 7 günde düşer; son 24 saatte uyarılır. Yayın moduna geçince `0` |
 
 Tablolar açılışta otomatik oluşur; sonradan eklenen kolon ve indeksler de açılışta idempotent olarak eklenir (`veritabani.sema_guncelle`, ayrı migration aracı yok).
 
@@ -50,6 +52,17 @@ Render free uyuduğu için zamanlayıcı dışarıdadır. cron-job.org kurulumu:
 
 Kural: aktif kullanıcı için bugün hatırlatma günüyse, saat geçtiyse ve bugün günlük rapor kopyalanmadıysa tarama yapılır, telefon bildirimi ve e-posta (`EPOSTA_GONDEREN` adresinden, Yanıtla kullanıcının kendi adresine) gider. Kanal başına günde bir kez; geç gelen ping (17:04) sorun değildir. Tek istek 20 saniyeyi aşarsa kalan kullanıcılar bir sonraki ping'e kalır.
 
+## Google ile bağlan (Gmail, Takvim, Drive)
+
+Kullanıcı tek onayla Gmail (gönderilenler), Google Takvim (katıldığı toplantılar) ve Drive'ı (değiştirdiği dosyaların adları) salt okunur bağlar. Google kütüphanesi yok; OAuth 2.0 + PKCE ve REST çağrıları `httpx` ile.
+
+1. [console.cloud.google.com](https://console.cloud.google.com) → yeni proje → **APIs & Services › Library**: Gmail API, Google Calendar API, Google Drive API'yi etkinleştirin.
+2. **OAuth consent screen**: External, uygulama adı "Günlük Rapor", test kullanıcılarına ekip adreslerini ekleyin. Kapsamlar: `openid`, `email`, `gmail.readonly`, `calendar.readonly`, `drive.metadata.readonly`.
+3. **Credentials › Create OAuth client ID** → Web application → Authorized redirect URIs: `https://gunluk-rapor.onrender.com/oauth/google/geri` ve `http://localhost:8765/oauth/google/geri`.
+4. İstemci kimliği ve sırrını Render'da (ve yerelde `.env`'de) `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` olarak girin. Yönlendirme adresi `APP_URL + /oauth/google/geri`'dir; localhost'tan açıldığında ya da `APP_URL` yoksa isteğin kökü kullanılır.
+
+Akış: Ayarlar › Kaynaklar › **Google ile bağlan** (ya da kurulum sihirbazının 2. adımı) → Google onayı → `/oauth/google/geri`. Refresh token `GIZLI_ANAHTAR` ile şifrelenip saklanır, access token yalnız bellekte tutulur. Google hesabı bağlıyken Gmail REST ile okunur; uygulama şifresi yedek yoldur ve Google bağlantısı yenilenmeliyse ona düşülür. Test modunda Google refresh token'ı 7 gün sonra geçersiz kılar: son 24 saatte Bugün sayfasında sarı şerit ve hatırlatmada uyarı, süre dolunca turuncu şerit çıkar; **Yeniden bağlan** yeni 7 gün başlatır. **Bağlantıyı kaldır** izni Google'da da geri alır.
+
 ## E-posta gönderimi (Resend)
 
 Render free planı giden SMTP portlarını kapatıyor (`OSError`), bu yüzden sistem e-postaları HTTPS ile Resend üzerinden gider.
@@ -74,6 +87,7 @@ Render free planı giden SMTP portlarını kapatıyor (`OSError`), bu yüzden si
 - `POST /api/haftalik` `{"hafta_baslangic": "YYYY-MM-DD"}` (Pazartesi) o haftanın günlük raporlarından özet
 - `GET /api/bugun` bugünkü öneriler (kullanıcı başına günde bir tarama, `?yenile=1` ile yeniden)
 - `GET/PUT /api/ayarlar`, `POST /api/ayarlar/test`, `POST /api/ice-aktar`
+- `GET /oauth/google/basla?donus=/ayarlar|/kurulum` Google onayına yönlendirir · `GET /oauth/google/geri` dönüş (state + PKCE doğrulanır) · `POST /oauth/google/kaldir`
 - `GET /api/push/anahtar`, `GET/POST /api/push/abone`, `DELETE /api/push/abone/{id}`, `POST /api/push/dene` bu kullanıcının cihazlarına test bildirimi
 - `POST /api/hatirlat?token=` ya da `Authorization: Bearer` — oturumsuz cron ucu, yanlış token 401
 - `GET /api/saglik` (korumasız) `{"ok", "son_hatirlat_ping"}` · `/sw.js` ve `/static/*` (PWA; ikonlar `ikon_uret.py` ile üretilir)

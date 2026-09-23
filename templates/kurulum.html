@@ -43,6 +43,10 @@ main{max-width:640px; gap:14px}
 #testSonuc.hata{color:var(--danger)}
 .ipucu{background:var(--accent-bg); border-radius:12px; padding:10px 12px; font-size:13px; margin:0; display:flex; gap:8px; align-items:flex-start}
 .ipucu svg{color:var(--accent); margin-top:2px}
+.googleYol{gap:10px}
+.googleYol .primary{width:100%}
+.googleYol .link{align-self:center; padding:4px 10px}
+#googleSonuc{font-size:13px; margin:0; color:var(--ok-ink)}
 
 /* sürekli işler adımı */
 .grup > .lbl{padding:14px 14px 4px; font-size:13px; font-weight:700; color:var(--ink-2)}
@@ -133,10 +137,23 @@ label.row{cursor:pointer}
   <!-- 2) Gmail -->
   <section class="card adim" data-adim="1" aria-labelledby="b1" hidden>
     <div class="ust">
+      {% if google_ayarli %}
+      <h2 id="b1">Google hesabını bağla</h2>
+      <p class="hint">Gönderdiğin e-postalar, katıldığın toplantılar ve üzerinde çalıştığın dosyalar rapora kendiliğinden düşer. Yalnız okuma izni istenir.</p>
+      {% else %}
       <h2 id="b1">Gmail'i bağla</h2>
       <p class="hint">Gün içinde gönderdiğin e-postalar rapora kendiliğinden düşer. Yalnız Gönderilmiş klasörü okunur.</p>
+      {% endif %}
     </div>
-    <div class="gmailIzgara">
+    {% if google_ayarli %}
+    <div class="row dikey googleYol" id="googleYol">
+      <button type="button" class="primary" id="googleBaglan">{{ i.ikon('google', 17, 2.4) }}<span class="etiket">Google ile bağlan</span></button>
+      <p id="googleSonuc" aria-live="polite" hidden></p>
+      <p class="hint">Google 'uygulama doğrulanmadı' uyarısı gösterebilir: Gelişmiş → Günlük Rapor'a git. Test sürecinde bağlantı 7 günde bir yenilenir.</p>
+      <button type="button" class="link soluk" id="sifreyleBaglan" aria-expanded="false" aria-controls="sifreYolu">Uygulama şifresiyle bağlan</button>
+    </div>
+    {% endif %}
+    <div class="gmailIzgara" id="sifreYolu"{% if google_ayarli %} hidden{% endif %}>
       <div class="form">
         <div class="row dikey">
           <label class="alan" for="gmail_kullanici">Gmail adresi</label>
@@ -351,6 +368,24 @@ $('test').onclick = async () => {
   finally { $('test').disabled = false; }
 };
 
+// Google ile bağlan: onay sonrası /kurulum?google=… adresine, bu adıma dönülür.
+if ($('googleBaglan')) {
+  $('googleBaglan').onclick = () => { $('googleBaglan').disabled = true; location.href = '/oauth/google/basla?donus=/kurulum'; };
+  $('sifreyleBaglan').onclick = () => {
+    const ac = $('sifreYolu').hidden;
+    $('sifreYolu').hidden = !ac; $('sifreyleBaglan').setAttribute('aria-expanded', ac);
+    if (ac) $('gmail_sifre').focus();
+  };
+}
+function googleDurumuYaz(g){
+  if (!$('googleBaglan') || !g || !g.bagli) return;
+  const yenile = g.durum === 'yenile';
+  $('googleBaglan').querySelector('.etiket').textContent = yenile ? 'Google ile yeniden bağlan' : 'Başka Google hesabıyla bağlan';
+  $('googleBaglan').className = yenile ? 'primary' : 'secondary';
+  $('googleSonuc').textContent = yenile ? '' : `Google bağlı: ${g.eposta}. Devam edebilirsin.`;
+  $('googleSonuc').hidden = yenile;
+}
+
 // ---------------------------------------------------------------- 3) sürekli işler
 const anahtar = m => m.replace(/\s+/g, ' ').trim().replace(/I/g, 'ı').replace(/İ/g, 'i').toLowerCase();
 // Tiksiz satır sarılan düz metindir; tiklenince metin düzenlenebilir alana döner.
@@ -453,8 +488,16 @@ $('pushAc').onclick = async () => {
     $('hatirlatma_eposta').checked = a.hatirlatma_eposta !== false;
     $('epostaMeta').textContent = `Kendi Gmail'inden ${a.hatirlatma_eposta_adres || bilgi.eposta} adresine gönderilir`;
     sablonlariCiz();
+    googleDurumuYaz(a.google);
+    // uygulama şifresi zaten kayıtlıysa o yol açık gelir
+    if ($('sifreYolu') && a.gmail_sifre_kayitli) { $('sifreYolu').hidden = false; $('sifreyleBaglan').setAttribute('aria-expanded', 'true'); }
   } catch (err) { hataGoster('Bilgiler yüklenemedi: ' + err.message); }
-  goster(0);
+  // Google onayından dönüş: kaldığı adımdan (Google adımı) devam
+  const q = new URLSearchParams(location.search), google = q.get('google');
+  if (google) history.replaceState(null, '', location.pathname);
+  goster(google ? 1 : 0);
+  if (google === 'bagli') toast('Google bağlandı');
+  else if (google) hataGoster('Google bağlanamadı: ' + (q.get('neden') || 'bilinmeyen hata'));
 })();
 </script>
 </body>

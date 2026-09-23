@@ -87,6 +87,12 @@ class KullaniciAyari(Temel):
     # E2: giriş/Gmail adresinin alan adına ek olarak kendi şirketi sayılan alan adları ["ilsvision.com", ...]
     kendi_alanlar: Mapped[list | None] = mapped_column(JSON, nullable=True)
     ekip_ici_atla: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())  # tüm alıcıları kendi şirketinden olan mail madde üretmez
+    # G1: Google OAuth. refresh token Fernet'le şifreli; access token yalnız bellekte tutulur.
+    google_refresh_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    google_eposta: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    google_baglanti: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # onay anı
+    google_durum: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'bagli' | 'yenile' | None
+    google_kapsamlar: Mapped[list | None] = mapped_column(JSON, nullable=True)  # verilen scope adresleri
     guncelleme: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi, onupdate=simdi)
 
 
@@ -252,6 +258,11 @@ EK_KOLONLAR = [
     ("user_settings", "karistir", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
     ("user_settings", "kendi_alanlar", "JSON", "JSON"),
     ("user_settings", "ekip_ici_atla", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("user_settings", "google_refresh_enc", "TEXT", "TEXT"),
+    ("user_settings", "google_eposta", "VARCHAR(254)", "VARCHAR(254)"),
+    ("user_settings", "google_baglanti", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
+    ("user_settings", "google_durum", "VARCHAR(10)", "VARCHAR(10)"),
+    ("user_settings", "google_kapsamlar", "JSON", "JSON"),
 ]
 # Sonradan eklenen tablolar; başvurduğu tabloların hepsi olan şemada eksikse oluşturulur.
 EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim", "kategoriler", "rapor_duzeni"]

@@ -10,7 +10,8 @@ _gecici_klasor = tempfile.mkdtemp(prefix="gunluk-rapor-test-")
 # app.py load_dotenv'i override=False ile çağırır; burada tanımlananlar .env'dekilerin önüne geçer.
 os.environ["DATABASE_URL"] = f"sqlite:///{_gecici_klasor}/test.db"
 os.environ["GIZLI_ANAHTAR"] = Fernet.generate_key().decode()
-for anahtar in ("ANTHROPIC_API_KEY", "ADMIN_EPOSTA", "ADMIN_SIFRE", "RENDER", "RESEND_API_KEY", "EPOSTA_GONDEREN"):
+for anahtar in ("ANTHROPIC_API_KEY", "ADMIN_EPOSTA", "ADMIN_SIFRE", "RENDER", "RESEND_API_KEY", "EPOSTA_GONDEREN",
+               "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_TEST_MODU"):
     os.environ[anahtar] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

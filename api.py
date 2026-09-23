@@ -35,10 +35,15 @@ SAAT_BICIMI = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 ALAN_BICIMI = re.compile(r"^[\w-]+(\.[\w-]+)+$")
 VARSAYILAN_SAAT = time(17, 0)
 VARSAYILAN_GUNLER = "1,2,3,4,5"
-KAYNAKLAR = ("gmail", "github", "medusa")
+TEMEL_KAYNAKLAR = ("gmail", "github", "medusa")
+GOOGLE_KAYNAKLARI = ("takvim", "drive")  # yalnız Google bağlantısıyla (ve kapsamı verilmişse) açılabilir
+KAYNAKLAR = TEMEL_KAYNAKLAR + GOOGLE_KAYNAKLARI
 YAKINDA = {"medusa"}  # arayüzde "yakında"; açılamaz
 # Bulunan maddenin kaynak alanı → hangi kaynak modülünden geldiği ('medusa' tarihsel olarak GitHub commit'leridir).
-BULUNAN_KAYNAGI = {"eposta": "gmail", "medusa": "github"}
+BULUNAN_KAYNAGI = {"eposta": "gmail", "medusa": "github", "takvim": "takvim", "drive": "drive"}
+GOOGLE_YAKINDA_MESAJI = "Google bağlantın yarın yenilenmeli"
+GOOGLE_UYARI_SURESI = timedelta(hours=24)
+GOOGLE_BASLA = "/oauth/google/basla"
 GUNLUK_CLAUDE_SINIRI = 8
 KOTA_MESAJI = "Bugünkü düzeltme hakkı doldu, yarın devam"
 GECMIS_GUN = 30  # geçmiş gün düzenleme: bugün … 30 gün önce
@@ -106,15 +111,151 @@ def hatirlatma_ayari(a: KullaniciAyari) -> dict:
 
 
 def kaynak_durumu(a: KullaniciAyari) -> dict[str, bool]:
-    """Kaydedilmiş seçim; kaynak için seçim yoksa şifresi/token'ı kayıtlıysa açık sayılır."""
+    """Kaydedilmiş seçim; kaynak için seçim yoksa şifresi/token'ı (Gmail'de Google izni) kayıtlıysa açık sayılır.
+    Takvim ve Drive yalnız GOOGLE_* tanımlıyken listelenir ve yalnız izni verilmiş Google bağlantısıyla açık olur."""
     secim = a.kaynaklar if isinstance(a.kaynaklar, dict) else {}
-    varsayilan = {"gmail": bool(a.gmail_sifre_enc), "github": bool(a.github_token_enc)}
-    return {k: k not in YAKINDA and bool(secim.get(k, varsayilan.get(k, False))) for k in KAYNAKLAR}
+    kapsam = google_kapsamlari(a)
+    varsayilan = {"gmail": bool(a.gmail_sifre_enc) or "gmail" in kapsam, "github": bool(a.github_token_enc)}
+    return {
+        k: k not in YAKINDA and (k not in GOOGLE_KAYNAKLARI or k in kapsam) and bool(secim.get(k, varsayilan.get(k, False)))
+        for k in (KAYNAKLAR if servisler.google_ayarli() else TEMEL_KAYNAKLAR)
+    }
+
+
+# ---------------------------------------------------------------- Google bağlantısı
+
+def google_bagli(a: KullaniciAyari) -> bool:
+    """Refresh token kayıtlı ('yenile' durumunda da); GOOGLE_* tanımlı değilse bağlantı yok sayılır."""
+    return servisler.google_ayarli() and bool(a.google_refresh_enc)
+
+
+def google_kapsamlari(a: KullaniciAyari) -> set[str]:
+    """Verilen izinlerin kısa adları: gmail / takvim / drive."""
+    return set(servisler.google_kisa_kapsamlar(a.google_kapsamlar)) if google_bagli(a) else set()
+
+
+def google_bitis(a: KullaniciAyari) -> datetime | None:
+    """Test modunda bağlantı onaydan 7 gün sonra düşer; GOOGLE_TEST_MODU=0 iken bitiş yok."""
+    if not (servisler.google_test_modu() and google_bagli(a) and a.google_baglanti):
+        return None
+    return utc(a.google_baglanti) + servisler.GOOGLE_TEST_SURESI
+
+
+def google_uyari(a: KullaniciAyari, an: datetime | None = None) -> dict | None:
+    """Bugün şeridi ve hatırlatma için: kalan ≤ 24 saat 'yakinda', süre dolmuş ya da 'yenile' durumu 'doldu'."""
+    if not google_bagli(a):
+        return None
+    an = an or simdi()
+    bitis = google_bitis(a)
+    if a.google_durum == "yenile" or (bitis is not None and bitis <= an):
+        return {"tur": "doldu", "metin": servisler.GOOGLE_YENILE_MESAJI, "eylem": "Yeniden bağlan", "adres": GOOGLE_BASLA}
+    if bitis is not None and bitis - an <= GOOGLE_UYARI_SURESI:
+        return {"tur": "yakinda", "metin": GOOGLE_YAKINDA_MESAJI, "eylem": "Şimdi yenile", "adres": GOOGLE_BASLA}
+    return None
+
+
+def google_ozeti(a: KullaniciAyari) -> dict:
+    """Arayüz için; token hiçbir zaman dönmez."""
+    bagli, kapsam, bitis = google_bagli(a), google_kapsamlari(a), google_bitis(a)
+    return {
+        "ayarli": servisler.google_ayarli(),
+        "bagli": bagli,
+        "eposta": (a.google_eposta or "") if bagli else "",
+        "durum": ("yenile" if a.google_durum == "yenile" else "bagli") if bagli else None,
+        "kapsamlar": {k: k in kapsam for k in servisler.GOOGLE_KAPSAMLARI},
+        "test_modu": servisler.google_test_modu(),
+        "bitis": zaman_iso(bitis),
+        "gecerlilik": servisler.gecerlilik_metni(bitis) if bitis else "",
+        "uyari": google_uyari(a),
+    }
+
+
+# user_id → (access token, geçerlilik sonu epoch); yalnız bellekte, süreç yeniden başlayınca refresh edilir.
+_google_erisim: dict[int, tuple[str, float]] = {}
+
+
+def google_erisim_tokeni(db: Session, a: KullaniciAyari) -> str:
+    """Önbellekteki access token; süresi dolmuşsa (ya da 60 sn kaldıysa) refresh. invalid_grant → durum 'yenile'
+    yazılır ve GoogleYenilenmeli yükselir."""
+    kayit = _google_erisim.get(a.user_id)
+    if kayit and kayit[1] > saat_.time() + 60:
+        return kayit[0]
+    try:
+        refresh = guvenlik.coz(a.google_refresh_enc)
+        if not refresh:
+            raise servisler.GoogleYenilenmeli(servisler.GOOGLE_YENILE_MESAJI)
+        with _kullanici_kilidi(a.user_id, "google"):
+            token, sure = servisler.google_yenile(refresh)
+    except servisler.GoogleYenilenmeli:
+        _google_erisim.pop(a.user_id, None)
+        a.google_durum = "yenile"
+        db.commit()
+        log.warning("google baglantisi yenilenmeli user=%s", a.user_id)
+        raise
+    _google_erisim[a.user_id] = (token, saat_.time() + sure)
+    return token
+
+
+def google_tarama_ayari(db: Session, a: KullaniciAyari) -> dict:
+    """raporu_uret'in 'google' ayarı. Google'la taranacak açık kaynak yoksa token alınmaz."""
+    if not google_bagli(a):
+        return {}
+    kapsam = google_kapsamlari(a)
+    g = {"kapsamlar": sorted(kapsam), "eposta": a.google_eposta or ""}
+    if not any(acik and k in kapsam for k, acik in kaynak_durumu(a).items()):
+        return g
+    if a.google_durum == "yenile":
+        return {**g, "yenile": True}
+    try:
+        return {**g, "token": google_erisim_tokeni(db, a)}
+    except servisler.GoogleYenilenmeli:
+        return {**g, "yenile": True}
+    except servisler.GoogleHatasi as e:
+        return {**g, "hata": str(e)}
+
+
+def google_baglantisini_kaydet(db: Session, kullanici: Kullanici, token: dict) -> KullaniciAyari:
+    """Onay dönüşü: refresh token şifreli saklanır; verilen kapsamların kaynakları açılır, verilmeyenler kapanır
+    (Gmail izni verilmediyse uygulama şifreli Gmail seçimi korunur)."""
+    a = ayar_satiri(db, kullanici)
+    db.add(a)
+    a.google_refresh_enc = guvenlik.sifrele(token["refresh_token"])
+    a.google_eposta = token["eposta"]
+    a.google_baglanti = simdi()
+    a.google_durum = "bagli"
+    a.google_kapsamlar = list(token["kapsamlar"])
+    kisa = set(servisler.google_kisa_kapsamlar(a.google_kapsamlar))
+    onceki = kaynak_durumu(a)
+    a.kaynaklar = {**onceki, "gmail": "gmail" in kisa or (onceki["gmail"] and bool(a.gmail_sifre_enc)),
+                   **{k: k in kisa for k in GOOGLE_KAYNAKLARI}}
+    db.commit()
+    _google_erisim[kullanici.id] = (token["access_token"], saat_.time() + token["expires_in"])
+    onbellegi_temizle(kullanici.id)
+    log.info("google baglandi user=%s kapsamlar=%s", kullanici.id, ",".join(sorted(kisa)) or "-")
+    return a
+
+
+def google_baglantisini_kaldir(db: Session, kullanici: Kullanici) -> KullaniciAyari:
+    """Google'daki izin geri alınır (hata olsa da), alanlar silinir; Takvim/Drive kapanır, Gmail uygulama şifresi
+    varsa IMAP ile sürer."""
+    a = ayar_satiri(db, kullanici)
+    db.add(a)
+    refresh = guvenlik.coz(a.google_refresh_enc)
+    if refresh:
+        servisler.google_iptal(refresh)
+    onceki = kaynak_durumu(a)
+    a.google_refresh_enc = a.google_eposta = a.google_baglanti = a.google_durum = a.google_kapsamlar = None
+    a.kaynaklar = {**onceki, "gmail": onceki["gmail"] and bool(a.gmail_sifre_enc), **{k: False for k in GOOGLE_KAYNAKLARI}}
+    db.commit()
+    _google_erisim.pop(kullanici.id, None)
+    onbellegi_temizle(kullanici.id)
+    log.info("google baglantisi kaldirildi user=%s", kullanici.id)
+    return a
 
 
 def acik_bulunan_kaynaklari(a: KullaniciAyari) -> set[str]:
     acik = kaynak_durumu(a)
-    return {kaynak for kaynak, modul in BULUNAN_KAYNAGI.items() if acik[modul]}
+    return {kaynak for kaynak, modul in BULUNAN_KAYNAGI.items() if acik.get(modul)}
 
 
 def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
@@ -144,6 +285,7 @@ def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
         "kendi_alanlar_otomatik": otomatik_kendi_alanlar(a, kullanici),
         "kendi_alanlar": list(a.kendi_alanlar or []),
         "ekip_ici_atla": a.ekip_ici_atla is not False,
+        "google": google_ozeti(a),
     }
 
 
@@ -693,8 +835,10 @@ def madde_sirala(govde: Siralama, kullanici: Kullanici = Depends(aktif_kullanici
 _onbellek: dict[tuple[int, str], dict] = {}
 
 
-def onbellegi_temizle() -> None:
-    _onbellek.clear()
+def onbellegi_temizle(user_id: int | None = None) -> None:
+    """Hepsini ya da yalnız bir kullanıcının taramalarını atar (kaynak bağlantısı değişince yeniden taransın)."""
+    for anahtar in [k for k in _onbellek if user_id is None or k[0] == user_id]:
+        del _onbellek[anahtar]
 
 
 def eposta_eskilerini_gizle(mevcut: dict, sonuc: dict) -> None:
@@ -709,6 +853,18 @@ def eposta_eskilerini_gizle(mevcut: dict, sonuc: dict) -> None:
             m.gizli = True
 
 
+def google_eskilerini_gizle(mevcut: dict, sonuc: dict, bugun_mu: bool) -> None:
+    """Takvim/Drive: bugünün taramasında hatasız taranan kaynağın artık üretilmeyen (iptal edilen toplantı, son
+    değişikliği başkası yapan dosya) ve kullanıcının düzenlemediği maddeleri gizlenir, silinmez."""
+    if not bugun_mu:
+        return
+    for kaynak in sonuc.get("taranan", []):
+        guncel = {m["id"] for m in sonuc[kaynak]}
+        for kaynak_id, m in mevcut.items():
+            if m.kaynak == kaynak and kaynak_id not in guncel and not m.kullanici_duzenledi:
+                m.gizli = True
+
+
 def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool = False) -> dict:
     """Kullanıcı başına günde bir tarama (kilit + önbellek); bulunanları maddelere yazar, önbellek özetini döner."""
     anahtar = (kullanici.id, tarih.isoformat())
@@ -719,9 +875,12 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
             ))}
             # kullanıcının düzenlediği madde Claude'a hiç gitmez; metni değişen düzenlenmemiş madde yeniden çevrilir
             haric = {k: None if m.kullanici_duzenledi else m.metin for k, m in mevcut.items()}
-            sonuc = servisler.raporu_uret(
-                cozulmus_ayarlar(ayar_satiri(db, kullanici), kullanici), os.environ.get("ANTHROPIC_API_KEY", ""), haric, tarih,
-            )
+            a = ayar_satiri(db, kullanici)
+            ayarlar = cozulmus_ayarlar(a, kullanici)
+            ayarlar["google"] = google_tarama_ayari(db, a)
+            sonuc = servisler.raporu_uret(ayarlar, os.environ.get("ANTHROPIC_API_KEY", ""), haric, tarih)
+            if sonuc.get("google_yetkisiz"):  # reddedilen access token bir sonraki taramada yenilensin
+                _google_erisim.pop(kullanici.id, None)
             notlar = set(db.scalars(select(Madde.kaynak_id).where(
                 Madde.user_id == kullanici.id, Madde.tur == "bugun", Madde.tarih == tarih, Madde.kaynak == "not",
             )))
@@ -737,7 +896,7 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
                 notlar.add(m["id"])
                 not_sirasi += 1
             sira = sonraki_sira(db, kullanici, "bulunan", tarih)
-            for m in sonuc["eposta"] + sonuc["medusa"]:
+            for m in sonuc["eposta"] + sonuc["medusa"] + sonuc["takvim"] + sonuc["drive"]:
                 zaman = m.get("kaynak_zaman")
                 eski = mevcut.get(m["id"])
                 if eski is not None:
@@ -758,6 +917,7 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
                 db.add(mevcut[m["id"]])
                 sira += 1
             eposta_eskilerini_gizle(mevcut, sonuc)
+            google_eskilerini_gizle(mevcut, sonuc, tarih == bugun())
             db.commit()
             # geçmiş günler de önbellekte kalır; düzenlenebilir aralığın dışına düşenler atılır
             sinir = (bugun() - timedelta(days=GECMIS_GUN)).isoformat()
@@ -765,7 +925,8 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
                 del _onbellek[eski]
             _onbellek[anahtar] = {
                 "hatalar": sonuc["hatalar"],
-                "sayim": {"eposta": len(sonuc["eposta"]), "medusa": len(sonuc["medusa"])},
+                "sayim": {"eposta": len(sonuc["eposta"]), "medusa": len(sonuc["medusa"]),
+                          **{k: len(sonuc[k]) for k in sonuc["taranan"]}},
                 "tarama_zamani": zaman_iso(simdi()),
             }
         return _onbellek[anahtar]
@@ -1424,12 +1585,21 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
 def baglantiyi_test_et(
     kaynak: Literal["", "gmail", "github"] = "", kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
 ) -> dict:
-    """kaynak verilirse yalnız o kaynak denenir (kurulum sihirbazı Gmail adımı)."""
-    ayarlar = cozulmus_ayarlar(ayar_satiri(db, kullanici))
+    """kaynak verilirse yalnız o kaynak denenir (kurulum sihirbazı Gmail adımı). Gmail Google bağlantısıyla
+    okunuyorsa Google token'ı yenilenerek denenir."""
+    a = ayar_satiri(db, kullanici)
+    ayarlar = cozulmus_ayarlar(a)
     parcalar, gmail_ok, github_ok = [], False, False
 
     if kaynak != "github":
-        if ayarlar["gmail_kullanici"] and ayarlar["gmail_sifre"]:
+        if "gmail" in google_kapsamlari(a) and a.google_durum != "yenile":
+            try:
+                google_erisim_tokeni(db, a)
+                parcalar.append(f"Gmail: Google hesabıyla bağlı ({a.google_eposta})")
+                gmail_ok = True
+            except servisler.GoogleHatasi as e:
+                parcalar.append(f"Gmail: {e}")
+        elif ayarlar["gmail_kullanici"] and ayarlar["gmail_sifre"]:
             try:
                 parcalar.append(servisler.gmail_test(ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"]))
                 gmail_ok = True
@@ -1736,18 +1906,22 @@ def cron_tokeni_dogru(request: Request, token: str) -> bool:
 
 
 def hatirlatma_ozeti(bulunanlar: list[Madde]) -> str:
-    eposta = sum(1 for m in bulunanlar if m.kaynak == "eposta")
-    commit = len(bulunanlar) - eposta
-    parcalar = ([f"{eposta} e-posta"] if eposta else []) + ([f"{commit} commit"] if commit else [])
+    sayi = {k: sum(1 for m in bulunanlar if m.kaynak == k) for k in ("eposta", "takvim", "drive")}
+    commit = len(bulunanlar) - sum(sayi.values())
+    parcalar = [f"{n} {ad}" for n, ad in ((sayi["eposta"], "e-posta"), (commit, "commit"),
+                                           (sayi["takvim"], "toplantı"), (sayi["drive"], "dosya")) if n]
     if not parcalar:
         return "Bugün için bulunan yok, yapılanları ekle"
     return "Bugünün raporu hazır bekliyor · " + ", ".join(parcalar) + " bulundu"
 
 
-def hatirlatma_epostasi(ozet: str, bulunanlar: list[Madde], tarih: date) -> str:
+def hatirlatma_epostasi(ozet: str, bulunanlar: list[Madde], tarih: date, google: dict | None = None) -> str:
+    """google: google_uyari sonucu; Bugün şeridindeki cümle ve bağlantı eklenir."""
     satirlar = [ozet, ""]
     if bulunanlar:
         satirlar += [f"• {madde_rapor_metni(m, None, tarih)}" for m in bulunanlar] + [""]
+    if google:
+        satirlar += [f"{google['metin']} · {google['eylem']}: {app_url()}{google['adres']}", ""]
     return "\n".join(satirlar + [app_url(), "", "Bu hatırlatma, raporu kopyaladığın gün gelmez."])
 
 
@@ -1851,6 +2025,8 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
         Madde.kaynak.in_(acik_bulunan_kaynaklari(a)),
     ).order_by(Madde.sira, Madde.id)).all()
     ozet = hatirlatma_ozeti(bulunanlar)
+    google = google_uyari(a, an)  # tarama 'yenile' yazmış olabilir
+    push_govdesi = f"{ozet} · {google['metin']}" if google else ozet
 
     # Kanallar bağımsız: biri düşerse diğeri yine gider. Hata da kaydedilir; aynı gün yeniden denenmez.
     if push_gerekli:
@@ -1859,7 +2035,7 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
             nedenler.append("push bugün gönderildi")
         else:
             try:
-                basarili, toplam, ayrinti = push_cihazlarina_gonder(db, k.id, {"baslik": "Günlük Rapor", "govde": ozet, "url": app_url()})
+                basarili, toplam, ayrinti = push_cihazlarina_gonder(db, k.id, {"baslik": "Günlük Rapor", "govde": push_govdesi, "url": app_url()})
                 sonuc["push"] = f"{basarili}/{toplam}"
                 if basarili:
                     kayit.durum = "gonderildi"
@@ -1883,7 +2059,7 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
                 hata = servisler.eposta_gonder(
                     h["adres"] or k.eposta,
                     f"Günlük rapor hatırlatması – {tarih.strftime('%d.%m.%Y')}",
-                    hatirlatma_epostasi(ozet, bulunanlar, tarih),
+                    hatirlatma_epostasi(ozet, bulunanlar, tarih, google),
                     yanit_adresi=k.eposta,
                     gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"],
                 )

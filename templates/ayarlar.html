@@ -17,6 +17,7 @@ main{gap:16px}
 .durum.ok{color:var(--ok-ink)}
 .durum.ok::before{background:var(--ok)}
 .durum.hata{color:var(--danger)}
+.durum.izinsiz::before{display:none}
 .ayrinti{background:var(--sub); display:flex; flex-direction:column; gap:8px}
 .kayitli{color:var(--ink-2); font-size:12px; margin:0}
 .kendiRozetler{display:flex; flex-wrap:wrap; gap:6px}
@@ -74,6 +75,22 @@ input[type=time]{width:124px; font-weight:600; flex:none}
 .katDetay .eylem .secondary{height:40px; font-size:13.5px; border-radius:12px; background:var(--paper)}
 .katDetay .eylem .tehlike{margin-left:auto}
 .bicimSatiri .segment{flex:none}
+/* Google hesabı */
+.t-google{background:var(--accent-bg); color:var(--accent)}
+.googleEylem{display:flex; flex-direction:column; align-items:flex-end; gap:6px}
+.googleSatir .kim .meta{margin-top:3px}
+.googleNot{background:var(--sub); padding-top:10px; padding-bottom:12px}
+.googleNot .kayitli{font-size:12.5px}
+.googleSerit{margin:0 14px 12px}
+.izinYok{font-size:11px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:1px 8px; vertical-align:1px}
+.durum .izinYok{margin-left:0}
+.durum:not(.izinsiz) .izinYok{margin-left:4px}
+.yontem{background:var(--paper); border-radius:12px; padding:0}
+.yontem summary{cursor:pointer; list-style:none; display:flex; align-items:center; gap:6px; padding:10px 12px; font-size:13.5px; font-weight:600}
+.yontem summary::-webkit-details-marker{display:none}
+.yontem summary svg{transition:transform .15s; color:var(--ink-3)}
+.yontem[open] summary svg{transform:rotate(90deg)}
+.yontem .icerik{display:flex; flex-direction:column; gap:8px; padding:0 12px 12px}
 @media (min-width:761px){
   .ikiDugme button{height:42px}
 }
@@ -107,6 +124,20 @@ input[type=time]{width:124px; font-weight:600; flex:none}
     <div>
       <div class="sec"><h2>Kaynaklar</h2></div>
       <section class="card">
+        {% if google_ayarli %}
+        <div class="row orta kaynak googleSatir" id="googleSatir">
+          <div class="tile t-google">{{ i.ikon('google', 17, 2.4) }}</div>
+          <div class="kim"><div class="lbl">Google hesabı</div><div class="durum" id="googleDurum">Bağlı değil</div><div class="meta" id="googleGecerlilik" hidden></div></div>
+          <div class="googleEylem">
+            <a class="link" id="googleBaglan" href="/oauth/google/basla?donus=/ayarlar">Google ile bağlan</a>
+            <button type="button" class="link tehlike" id="googleKaldir" hidden>Bağlantıyı kaldır</button>
+          </div>
+        </div>
+        <p class="serit turuncu googleSerit" id="googleYenile" hidden><span>Bağlantı süresi doldu —</span><a class="link" href="/oauth/google/basla?donus=/ayarlar">Yeniden bağlan</a></p>
+        <div class="row dikey googleNot" id="googleNot" hidden>
+          <p class="kayitli">Google 'uygulama doğrulanmadı' uyarısı gösterebilir: Gelişmiş → Günlük Rapor'a git. Test sürecinde bağlantı 7 günde bir yenilenir.</p>
+        </div>
+        {% endif %}
         <div class="row orta kaynak">
           <div class="tile t-gmail">{{ i.ikon('zarf', 17) }}</div>
           <div class="kim"><div class="lbl">Gmail</div><div class="durum" id="gmailDurum">Kapalı</div></div>
@@ -114,11 +145,13 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <input type="checkbox" class="sw" id="kaynak_gmail" data-kaynak="gmail" data-ayrinti="gmailAyrinti" aria-label="Gmail'i tara">
         </div>
         <div class="row dikey ayrinti" id="gmailAyrinti" hidden>
+          {% if google_ayarli %}<details class="yontem" id="sifreYontemi"><summary>{{ i.ikon('ileri', 14, 2.4) }}Diğer yöntem: uygulama şifresi</summary><div class="icerik">{% endif %}
           <label class="alan" for="gmail_kullanici">Gmail adresi</label>
           <input type="email" id="gmail_kullanici" name="gmail_kullanici">
           <label class="alan" for="gmail_sifre">Uygulama şifresi <small>— Google hesabı › Güvenlik › Uygulama şifreleri</small></label>
           <input type="password" id="gmail_sifre" name="gmail_sifre" autocomplete="new-password">
           <p class="kayitli" id="gmail_sifre_durum"></p>
+          {% if google_ayarli %}</div></details>{% endif %}
           <label class="alan" for="eposta_gruplama">Gönderilen e-postalar</label>
           <select id="eposta_gruplama" name="eposta_gruplama">
             <option value="konu">Her konu ayrı madde (önerilen)</option>
@@ -134,6 +167,18 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           </div>
           <p class="ipucu">Telefondan hızlı not: kendine 'rapor: ...' konulu e-posta at, akşam listede olur.</p>
         </div>
+        {% if google_ayarli %}
+        <div class="row orta kaynak" id="takvimSatir">
+          <div class="tile t-takvim">{{ i.ikon('takvim', 17) }}</div>
+          <div class="kim"><div class="lbl">Takvim</div><div class="durum" id="takvimDurum">Google ile bağlanınca</div></div>
+          <input type="checkbox" class="sw" id="kaynak_takvim" data-kaynak="takvim" data-google="1" aria-label="Takvimi tara" disabled>
+        </div>
+        <div class="row orta kaynak" id="driveSatir">
+          <div class="tile t-drive">{{ i.ikon('belge', 17) }}</div>
+          <div class="kim"><div class="lbl">Drive</div><div class="durum" id="driveDurum">Google ile bağlanınca</div></div>
+          <input type="checkbox" class="sw" id="kaynak_drive" data-kaynak="drive" data-google="1" aria-label="Drive'ı tara" disabled>
+        </div>
+        {% endif %}
         <div class="row orta kaynak">
           <div class="tile t-git">{{ i.ikon('dal', 17) }}</div>
           <div class="kim"><div class="lbl" id="githubAd">GitHub</div><div class="durum" id="githubDurum">Kapalı</div></div>
@@ -270,6 +315,7 @@ async function istek(yol, secenek = {}){
 
 // --- "Değiştir" ile açılan ayrıntı alanları ---
 function ayrintiAc(id, acik){
+  if (!id || !$(id)) return;
   $(id).hidden = !acik;
   document.querySelectorAll(`[data-ac="${id}"]`).forEach(b => { b.setAttribute('aria-expanded', acik); b.textContent = acik ? 'Kapat' : 'Değiştir'; });
 }
@@ -286,9 +332,13 @@ function parca(sonuc, onek){
 let sonAyar = null;
 const KAYNAK_ANAHTARLARI = [...document.querySelectorAll('input.sw[data-kaynak]')];
 const acikKaynaklar = () => KAYNAK_ANAHTARLARI.filter(k => k.checked).map(k => k.dataset.kaynak);
+// Bağlantı testi yalnız Gmail ve GitHub için; Takvim/Drive Google bağlantısıyla gelir.
+const testEdilenler = () => acikKaynaklar().filter(k => k === 'gmail' || k === 'github');
 function kaynakDurumu(){
   const a = sonAyar; if (!a) return;
   const t = sonTest();
+  const g = a.google || {};
+  const googleGmail = !!(g.bagli && g.kapsamlar && g.kapsamlar.gmail);
   const gmailVar = !!(a.gmail_kullanici && a.gmail_sifre_kayitli);
   const githubVar = !!(a.github_repo && a.github_token_kayitli);
   $('githubAd').textContent = 'GitHub' + ((a.proje_adi || a.github_repo) ? ` · ${a.proje_adi || a.github_repo}` : '');
@@ -296,9 +346,12 @@ function kaynakDurumu(){
     // "Değiştir" yalnız açık kaynakta görünür
     document.querySelectorAll(`[data-ac="${k.dataset.ayrinti}"]`).forEach(b => b.hidden = !k.checked);
   });
-  $('testSatiri').hidden = !acikKaynaklar().length;
-  if (!$('kaynak_gmail').checked) durumYaz($('gmailDurum'), '', gmailVar ? 'Kapalı · taranmıyor' : 'Kapalı');
-  else if (!gmailVar) durumYaz($('gmailDurum'), '', 'Ayarlanmadı');
+  $('testSatiri').hidden = !testEdilenler().length;
+  if (!$('kaynak_gmail').checked) durumYaz($('gmailDurum'), '', (gmailVar || googleGmail) ? 'Kapalı · taranmıyor' : 'Kapalı');
+  else if (googleGmail && g.durum !== 'yenile') durumYaz($('gmailDurum'), 'ok', `Google hesabıyla · ${g.eposta}`);
+  else if (googleGmail && gmailVar) durumYaz($('gmailDurum'), 'hata', 'Google yenilenmeli · uygulama şifresiyle taranıyor');
+  else if (googleGmail) durumYaz($('gmailDurum'), 'hata', 'Google bağlantısı yenilenmeli');
+  else if (!gmailVar) durumYaz($('gmailDurum'), '', g.bagli ? 'Google izni verilmedi · uygulama şifresi girilmedi' : 'Ayarlanmadı');
   else if (!t) durumYaz($('gmailDurum'), '', 'Kayıtlı · test edilmedi');
   else if (t.gmail_ok) durumYaz($('gmailDurum'), 'ok', 'Bağlı · ' + parca(t.sonuc, 'Gmail').replace(/^bağlandı,\s*/, ''));
   else durumYaz($('gmailDurum'), 'hata', parca(t.sonuc, 'Gmail') || 'Bağlanamadı');
@@ -307,6 +360,38 @@ function kaynakDurumu(){
   else if (!t) durumYaz($('githubDurum'), '', 'Kayıtlı · test edilmedi');
   else if (t.github_ok) durumYaz($('githubDurum'), 'ok', 'Bağlı · ' + parca(t.sonuc, 'GitHub'));
   else durumYaz($('githubDurum'), 'hata', parca(t.sonuc, 'GitHub') || 'Bağlanamadı');
+  googleDurumu();
+}
+
+// --- Google hesabı satırı: bağlı değil / bağlı (e-posta, geçerlilik) / yenilenmeli; Takvim ve Drive anahtarları ---
+function googleDurumu(){
+  if (!$('googleSatir')) return;
+  const g = (sonAyar && sonAyar.google) || {};
+  const yenile = g.bagli && g.durum === 'yenile';
+  $('googleBaglan').hidden = !!g.bagli;  // süresi dolduysa "Yeniden bağlan" turuncu şeritte
+  $('googleKaldir').hidden = !g.bagli;
+  $('googleNot').hidden = g.bagli && !yenile;
+  $('googleYenile').hidden = !yenile;
+  if (!g.bagli) durumYaz($('googleDurum'), '', 'Bağlı değil');
+  else if (yenile) durumYaz($('googleDurum'), 'hata', `${g.eposta} · bağlantı süresi doldu`);
+  else if (g.uyari && g.uyari.tur === 'doldu') durumYaz($('googleDurum'), 'hata', `${g.eposta} · bağlantı süresi doldu`);
+  else durumYaz($('googleDurum'), 'ok', `Bağlı · ${g.eposta}`);
+  const gecerlilik = g.bagli && !yenile && g.test_modu ? g.gecerlilik : '';
+  $('googleGecerlilik').textContent = gecerlilik || ''; $('googleGecerlilik').hidden = !gecerlilik;
+  ['takvim', 'drive'].forEach(k => {
+    const sw = $('kaynak_' + k), izin = !!(g.bagli && g.kapsamlar && g.kapsamlar[k]);
+    sw.disabled = !izin;
+    if (!izin) sw.checked = false;
+    const durum = $(k + 'Durum');
+    if (!g.bagli) durumYaz(durum, '', 'Google ile bağlanınca');
+    else if (!izin) { durumYaz(durum, 'izinsiz', ''); durum.append(el('span', 'izinYok', 'izin verilmedi')); }
+    else if (!sw.checked) durumYaz(durum, '', 'Kapalı · taranmıyor');
+    else if (yenile) durumYaz(durum, 'hata', 'Google bağlantısı yenilenmeli');
+    else durumYaz(durum, 'ok', 'Google hesabıyla');
+  });
+  if (g.bagli && !g.kapsamlar.gmail) {
+    const d = $('gmailDurum'); if (!d.querySelector('.izinYok')) d.append(el('span', 'izinYok', 'izin verilmedi'));
+  }
 }
 
 let ilkDoldurma = true;
@@ -336,9 +421,11 @@ function doldur(a){
   const kaynaklar = a.kaynaklar || {};
   KAYNAK_ANAHTARLARI.forEach(k => k.checked = !!kaynaklar[k.dataset.kaynak]);
   if (ilkDoldurma){
-    // Açık ama ayarı eksik kaynağın ayrıntıları açık başlar.
+    // Açık ama ayarı eksik kaynağın ayrıntıları açık başlar; uygulama şifresi kayıtlıysa "Diğer yöntem" de açık.
     ilkDoldurma = false;
-    if (kaynaklar.gmail && gmailYok) ayrintiAc('gmailAyrinti', true);
+    const googleGmail = !!(a.google && a.google.bagli && a.google.kapsamlar.gmail);
+    if ($('sifreYontemi')) $('sifreYontemi').open = !!a.gmail_sifre_kayitli || (kaynaklar.gmail && gmailYok && !googleGmail);
+    if (kaynaklar.gmail && gmailYok && !googleGmail) ayrintiAc('gmailAyrinti', true);
     if (kaynaklar.github && !(a.github_repo && a.github_token_kayitli)) ayrintiAc('githubAyrinti', true);
   }
   KAYNAK_ANAHTARLARI.forEach(k => { if (!k.checked) ayrintiAc(k.dataset.ayrinti, false); });
@@ -392,7 +479,7 @@ $('test').onclick = async () => {
   $('test').disabled = true; $('testSonuc').className = ''; $('testSonuc').textContent = 'Kaydediliyor ve test ediliyor…';
   try {
     await kaydet();
-    const acik = acikKaynaklar();
+    const acik = testEdilenler();
     const s = await istek('/api/ayarlar/test' + (acik.length === 1 ? `?kaynak=${acik[0]}` : ''), { method:'POST' });
     $('testSonuc').textContent = s.sonuc;
     $('testSonuc').className = acik.every(k => s[k + '_ok']) ? 'ok' : 'hata';
@@ -409,8 +496,25 @@ $('test').onclick = async () => {
 
 istek('/api/ayarlar').then(doldur).catch(err => hataGoster(err.message));
 
+if ($('googleKaldir')) $('googleKaldir').onclick = async () => {
+  if (!confirm('Google bağlantısı kaldırılsın mı? Takvim ve Drive taranmaz; uygulama şifresi varsa Gmail onunla sürer.')) return;
+  $('googleKaldir').disabled = true;
+  try { doldur(await istek('/oauth/google/kaldir', { method:'POST' })); hataGoster(''); toast('Google bağlantısı kaldırıldı'); }
+  catch (err) { hataGoster(err.message); }
+  finally { $('googleKaldir').disabled = false; }
+};
+// OAuth dönüşü: ?google=bagli | hata&neden=…
+(() => {
+  const q = new URLSearchParams(location.search), sonuc = q.get('google');
+  if (!sonuc) return;
+  if (sonuc === 'bagli') { sonTestiYaz(null); toast('Google bağlandı'); }
+  else hataGoster('Google bağlanamadı: ' + (q.get('neden') || 'bilinmeyen hata'));
+  history.replaceState(null, '', location.pathname);
+})();
+
 // ---------------------------------------------------------------- rapor kategorileri, karıştırma, biçim
-const KAYNAK_ADLARI = { gmail:'Gmail', github:'GitHub', medusa:'MEDUSA' };
+const KAYNAK_ADLARI = { gmail:'Gmail', github:'GitHub', medusa:'MEDUSA', takvim:'Takvim', drive:'Drive' };
+const PIL_KAYNAKLARI = {{ (['gmail', 'github', 'medusa'] + (['takvim', 'drive'] if google_ayarli else []))|tojson }};
 const SISTEM_ACIKLAMA = { devam:'Devam eden işler buraya düşer', onemli:'Yıldızlı maddeler buraya düşer' };
 let kategoriler = [], acikKategori = null, yeniKategori = false, kategoriSiralayici = null;
 function el(etiket, sinif, metin){ const e=document.createElement(etiket); if(sinif) e.className=sinif; if(metin!==undefined) e.textContent=metin; return e; }
@@ -420,7 +524,7 @@ async function kategorileriYukle(){ kategoriler = (await istek('/api/kategoriler
 
 function kaynakPilleri(secili){
   const kutu = el('div', 'piller'); kutu.setAttribute('role', 'group'); kutu.setAttribute('aria-label', 'Kaynaklar');
-  Object.entries(KAYNAK_ADLARI).forEach(([k, ad]) => {
+  PIL_KAYNAKLARI.map(k => [k, KAYNAK_ADLARI[k]]).forEach(([k, ad]) => {
     const b = el('button', 'pil' + (secili.includes(k) ? ' on' : ''), ad); b.type = 'button'; b.dataset.kaynak = k;
     b.setAttribute('aria-pressed', secili.includes(k));
     if (k === 'medusa') { b.disabled = true; b.title = 'MEDUSA yakında'; b.append(el('span', 'yakinda', 'yakında')); }

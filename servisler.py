@@ -1,4 +1,5 @@
-"""Günlük rapor için veri kaynakları: Gmail (gönderilenler), GitHub (proje commit'leri), Claude (iş diline çeviri)."""
+"""Günlük rapor için veri kaynakları: Gmail (gönderilenler), GitHub (proje commit'leri), Google Takvim ve Drive,
+Claude (iş diline çeviri)."""
 from __future__ import annotations
 
 import base64
@@ -9,12 +10,14 @@ import json
 import logging
 import os
 import re
+import secrets
 import smtplib
 import threading
 from datetime import date, datetime, time, timedelta, timezone
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.utils import getaddresses, parsedate_to_datetime
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -70,6 +73,10 @@ EPOSTA_KURALI = (
     "E-posta maddelerinde konu başlığını anlamını koruyarak cümlede tut; birden çok maddeyi birleştirme; "
     "sayı ekleme ya da çıkarma yapma."
 )
+GOOGLE_KURALI = (
+    "Toplantı ('takvim') ve dosya ('drive') maddelerinde tırnak içindeki toplantı ve dosya adını aynen koru, "
+    "katılımcı kurum adlarını değiştirme."
+)
 
 
 def kendi_sirket_kurali(kendi_sirket: list[str] | None) -> str:
@@ -77,7 +84,7 @@ def kendi_sirket_kurali(kendi_sirket: list[str] | None) -> str:
     if not kendi_sirket:
         return ""
     return (
-        f"Kullanıcının kendi şirketi ({', '.join(kendi_sirket)}) alıcı, bilgilendirilen ya da paylaşılan taraf olarak "
+        f"Kullanıcının kendi şirketi ({', '.join(kendi_sirket)}) alıcı, toplantı katılımcısı, bilgilendirilen ya da paylaşılan taraf olarak "
         "ASLA yazılmaz; \"… ile paylaşıldı\", \"… de bilgilendirildi\" gibi kendi şirketine yapılan atıfları cümleden çıkar "
         "(olgu çıkarmama kuralının tek istisnası budur)."
     )
@@ -90,7 +97,7 @@ def claude_sistem(proje_adi: str = "", kendi_sirket: list[str] | None = None) ->
         "Bir müzik edisyon şirketinde çalışan bir danışmanın günlük raporu için maddeler yazıyorsun. "
         "Teknik terimleri (trigram, indeks, rollup, N+1, commit, endpoint vb.) yöneticinin anlayacağı iş diline çevir; "
         "her girdi için TEK cümle, geçmiş zaman, abartı yok, uydurma yok. "
-        + EPOSTA_KURALI + " "
+        + EPOSTA_KURALI + " " + GOOGLE_KURALI + " "
         + (kendi + " " if kendi else "")
         + urun
         + "Yalnız JSON dizi döndür: [{\"id\":..., \"metin\":...}]"
@@ -621,6 +628,381 @@ def commit_zamani(commit: dict) -> datetime | None:
     return zaman.astimezone(ISTANBUL)
 
 
+# ---------------------------------------------------------------- Google: OAuth, Gmail REST, Takvim, Drive
+
+GOOGLE_YETKI_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_IPTAL_URL = "https://oauth2.googleapis.com/revoke"
+GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
+TAKVIM_API = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+DRIVE_API = "https://www.googleapis.com/drive/v3/files"
+# kısa ad → scope; kaynaklar sözlüğündeki anahtarlarla aynı
+GOOGLE_KAPSAMLARI = {
+    "gmail": "https://www.googleapis.com/auth/gmail.readonly",
+    "takvim": "https://www.googleapis.com/auth/calendar.readonly",
+    "drive": "https://www.googleapis.com/auth/drive.metadata.readonly",
+}
+GOOGLE_SCOPE = "openid email " + " ".join(GOOGLE_KAPSAMLARI.values())
+GOOGLE_TEST_SURESI = timedelta(days=7)  # test modundaki uygulamada refresh token 7 gün yaşar
+GOOGLE_YENILE_MESAJI = "Google bağlantısı yenilenmeli"
+GMAIL_BASLIKLARI = ("From", "To", "Cc", "Subject", "Date", "Message-ID")
+GOOGLE_SAYFA_SINIRI = 10
+DRIVE_SINIRI = 15
+
+
+class GoogleHatasi(KaynakHatasi):
+    pass
+
+
+class GoogleYenilenmeli(GoogleHatasi):
+    """Refresh token artık geçersiz (invalid_grant): kullanıcı yeniden bağlanmalı."""
+
+
+class GoogleYetkisiz(GoogleHatasi):
+    """Access token reddedildi (401): önbellekteki token atılmalı."""
+
+
+def google_istemci_bilgisi() -> tuple[str, str]:
+    return (os.environ.get("GOOGLE_CLIENT_ID") or "").strip(), (os.environ.get("GOOGLE_CLIENT_SECRET") or "").strip()
+
+
+def google_ayarli() -> bool:
+    """İki değişken de yoksa Google arayüzü hiç görünmez."""
+    return all(google_istemci_bilgisi())
+
+
+def google_test_modu() -> bool:
+    """Varsayılan açık; uygulama Google'da yayın moduna geçince GOOGLE_TEST_MODU=0 yapılır."""
+    return (os.environ.get("GOOGLE_TEST_MODU") or "1").strip() != "0"
+
+
+def google_istemci() -> httpx.Client:
+    return httpx.Client(timeout=20)
+
+
+def google_kisa_kapsamlar(kapsamlar: list[str] | None) -> list[str]:
+    verilen = set(kapsamlar or [])
+    return [k for k, adres in GOOGLE_KAPSAMLARI.items() if adres in verilen]
+
+
+def pkce_cifti() -> tuple[str, str]:
+    """(code_verifier, S256 code_challenge)."""
+    dogrulayici = secrets.token_urlsafe(64)
+    return dogrulayici, _b64url(hashlib.sha256(dogrulayici.encode()).digest())
+
+
+def google_yetki_adresi(yonlendirme: str, state: str, challenge: str, login_hint: str = "") -> str:
+    params = {
+        "client_id": google_istemci_bilgisi()[0], "redirect_uri": yonlendirme, "response_type": "code",
+        "scope": GOOGLE_SCOPE, "state": state, "code_challenge": challenge, "code_challenge_method": "S256",
+        "access_type": "offline", "prompt": "consent", "include_granted_scopes": "true",
+    }
+    if login_hint:
+        params["login_hint"] = login_hint
+    return GOOGLE_YETKI_URL + "?" + urlencode(params)
+
+
+def _google_token_istegi(veri: dict, istemci: httpx.Client) -> dict:
+    """Token ucuna form isteği. invalid_grant → GoogleYenilenmeli; diğer hatalar GoogleHatasi (gizli değer yazılmaz)."""
+    try:
+        yanit = istemci.post(GOOGLE_TOKEN_URL, data=veri, headers={"Accept": "application/json"})
+    except httpx.HTTPError as e:
+        raise GoogleHatasi(f"Google'a bağlanılamadı ({e.__class__.__name__})") from e
+    try:
+        govde = yanit.json()
+    except ValueError:
+        govde = {}
+    govde = govde if isinstance(govde, dict) else {}
+    if yanit.status_code >= 400 or not govde.get("access_token"):
+        hata = govde.get("error") if isinstance(govde.get("error"), str) else ""
+        if hata == "invalid_grant":
+            raise GoogleYenilenmeli(GOOGLE_YENILE_MESAJI)
+        raise GoogleHatasi(f"Google token vermedi ({hata or yanit.status_code})")
+    return govde
+
+
+def id_token_epostasi(id_token: str | None, client_id: str) -> str:
+    """Token ucundan TLS ile doğrudan gelen id_token'ın imzası ayrıca doğrulanmaz (OpenID Connect Core 3.1.3.7);
+    aud bu uygulama olmalı."""
+    try:
+        yuk = (id_token or "").split(".")[1]
+        veri = json.loads(base64.urlsafe_b64decode(yuk + "=" * (-len(yuk) % 4)))
+    except (IndexError, ValueError) as e:
+        raise GoogleHatasi("Google kimlik bilgisi okunamadı") from e
+    if not isinstance(veri, dict) or (client_id and veri.get("aud") != client_id):
+        raise GoogleHatasi("Google kimlik bilgisi bu uygulamaya ait değil")
+    eposta = veri.get("email")
+    if not isinstance(eposta, str) or "@" not in eposta:
+        raise GoogleHatasi("Google e-posta adresini vermedi")
+    return eposta.strip().lower()
+
+
+def google_kod_takas(kod: str, dogrulayici: str, yonlendirme: str, istemci: httpx.Client | None = None) -> dict:
+    """Yetki kodu → {access_token, expires_in, refresh_token, kapsamlar, eposta}."""
+    client_id, secret = google_istemci_bilgisi()
+    govde = _google_token_istegi({
+        "code": kod, "client_id": client_id, "client_secret": secret, "redirect_uri": yonlendirme,
+        "grant_type": "authorization_code", "code_verifier": dogrulayici,
+    }, istemci or google_istemci())
+    if not govde.get("refresh_token"):
+        raise GoogleHatasi("Google yenileme anahtarı vermedi; yeniden bağlanın")
+    return {
+        "access_token": govde["access_token"], "expires_in": int(govde.get("expires_in") or 3600),
+        "refresh_token": govde["refresh_token"], "kapsamlar": str(govde.get("scope") or "").split(),
+        "eposta": id_token_epostasi(govde.get("id_token"), client_id),
+    }
+
+
+def google_yenile(refresh_token: str, istemci: httpx.Client | None = None) -> tuple[str, int]:
+    """(access_token, saniye). Refresh token geçersizse GoogleYenilenmeli."""
+    client_id, secret = google_istemci_bilgisi()
+    govde = _google_token_istegi({
+        "refresh_token": refresh_token, "client_id": client_id, "client_secret": secret, "grant_type": "refresh_token",
+    }, istemci or google_istemci())
+    return govde["access_token"], int(govde.get("expires_in") or 3600)
+
+
+def google_iptal(token: str, istemci: httpx.Client | None = None) -> bool:
+    """Google'daki izni geri alır; hata yükseltmez (bağlantı yine de bizde silinir)."""
+    try:
+        yanit = (istemci or google_istemci()).post(GOOGLE_IPTAL_URL, data={"token": token})
+        return yanit.status_code < 400
+    except Exception:
+        return False
+
+
+def _google_get(istemci: httpx.Client, token: str, url: str, params, ad: str) -> dict:
+    """ad: 'Gmail' | 'Takvim' | 'Drive' (hata metinleri için)."""
+    try:
+        yanit = istemci.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as e:
+        raise KaynakHatasi(f"{ad} (Google) okunamadı: bağlantı hatası ({e.__class__.__name__})") from e
+    if yanit.status_code == 401:
+        raise GoogleYetkisiz(f"{ad} (Google) oturumu geçersiz; birazdan yeniden deneyin")
+    if yanit.status_code >= 400:
+        try:
+            neden = yanit.json()["error"]["message"]
+        except Exception:
+            neden = yanit.text
+        neden = re.sub(r"\s+", " ", str(neden or "")).strip()[:160]
+        onek = f"{ad} (Google) erişimi reddedildi" if yanit.status_code == 403 else f"{ad} (Google) hata döndürdü"
+        raise KaynakHatasi(f"{onek} ({yanit.status_code}{': ' + neden if neden else ''})")
+    try:
+        govde = yanit.json()
+    except ValueError as e:
+        raise KaynakHatasi(f"{ad} (Google) yanıtı okunamadı") from e
+    return govde if isinstance(govde, dict) else {}
+
+
+def gun_araligi(gun: date) -> tuple[datetime, datetime]:
+    """Istanbul günü: [00:00, ertesi gün 00:00)."""
+    return datetime.combine(gun, time.min, ISTANBUL), datetime.combine(gun + timedelta(days=1), time.min, ISTANBUL)
+
+
+def rfc3339(zaman: datetime) -> str:
+    return zaman.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def iso_zaman(deger) -> datetime | None:
+    """RFC 3339 → Istanbul saati; okunamazsa None."""
+    if not isinstance(deger, str) or not deger:
+        return None
+    try:
+        zaman = datetime.fromisoformat(deger.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (zaman if zaman.tzinfo else zaman.replace(tzinfo=timezone.utc)).astimezone(ISTANBUL)
+
+
+def kaynak_kimligi(kimlik: str, gun: date) -> str:
+    """Takvim etkinliği / Drive dosyası + gün: aynı gün her taramada aynı id."""
+    return hashlib.sha1((kimlik + gun.isoformat()).encode("utf-8")).hexdigest()[:10]
+
+
+def _google_sayfalari(istemci: httpx.Client, token: str, url: str, params: dict, ad: str, alan: str) -> list:
+    ogeler, sayfa = [], None
+    for _ in range(GOOGLE_SAYFA_SINIRI):
+        govde = _google_get(istemci, token, url, {**params, **({"pageToken": sayfa} if sayfa else {})}, ad)
+        ogeler += [x for x in govde.get(alan) or [] if isinstance(x, dict)]
+        sayfa = govde.get("nextPageToken")
+        if not sayfa:
+            break
+    return ogeler
+
+
+def gmail_sorgusu(gun: date) -> str:
+    """IMAP yoluyla aynı pencere: bir gün önceden ertesi güne; kesin süzgeç Date başlığının Istanbul günü."""
+    bas = datetime.combine(gun - timedelta(days=1), time.min, ISTANBUL)
+    return f"in:sent after:{int(bas.timestamp())} before:{int(gun_araligi(gun)[1].timestamp())}"
+
+
+def google_gmail_tara(
+    token: str, kendi_adres: str, bugun: date, sozluk: dict[str, str] | None = None, gruplama: str = "konu",
+    kendi_alanlar: list[str] | None = None, ekip_ici_atla: bool = True, istemci: httpx.Client | None = None,
+) -> list[dict]:
+    """gmail_tara'nın REST karşılığı: aynı başlıklar epostalari_maddele ve notlari_maddele'ye aynen gider."""
+    istemci = istemci or google_istemci()
+    kimlikler = [m.get("id") for m in _google_sayfalari(
+        istemci, token, f"{GMAIL_API}/messages", {"q": gmail_sorgusu(bugun), "maxResults": 100}, "Gmail", "messages",
+    ) if m.get("id")]
+    mailler = []
+    for kimlik in dict.fromkeys(kimlikler):
+        govde = _google_get(istemci, token, f"{GMAIL_API}/messages/{kimlik}",
+                            [("format", "metadata")] + [("metadataHeaders", b) for b in GMAIL_BASLIKLARI], "Gmail")
+        basliklar = {str(b.get("name") or "").lower(): b.get("value")
+                     for b in (govde.get("payload") or {}).get("headers") or [] if isinstance(b, dict)}
+        m = {k: basliklar.get(k) for k in ("date", "subject", "from", "to", "cc", "message-id")}
+        m["gmail_id"] = kimlik
+        mailler.append(m)
+    notlar, gonderilen = [], []
+    for m in mailler:
+        konu = not_konusu(m, kendi_adres)
+        (gonderilen if konu is None else notlar).append(m)
+        if konu == "" and bugun_mu(m.get("date"), bugun):  # yalnız önek: satırlar gövdede
+            ham = _google_get(istemci, token, f"{GMAIL_API}/messages/{m['gmail_id']}", {"format": "raw"}, "Gmail").get("raw") or ""
+            try:
+                m["govde"] = duz_metin_govde(email.message_from_bytes(base64.urlsafe_b64decode(ham + "=" * (-len(ham) % 4))))
+            except ValueError:
+                m["govde"] = ""
+    return epostalari_maddele(gonderilen, kendi_adres, bugun, sozluk, gruplama, kendi_alanlar, ekip_ici_atla) \
+        + notlari_maddele(notlar, kendi_adres, bugun)
+
+
+def _takvim_zamani(deger: dict) -> tuple[datetime | None, bool]:
+    """Etkinliğin start/end alanı → (Istanbul zamanı, tüm gün mü)."""
+    if deger.get("dateTime"):
+        return iso_zaman(deger["dateTime"]), False
+    try:
+        return datetime.combine(date.fromisoformat(deger.get("date") or ""), time.min, ISTANBUL), True
+    except ValueError:
+        return None, False
+
+
+# Toplantı odası ve grup takvimleri katılımcı sayılmaz.
+TAKVIM_SISTEM_ALANLARI = ("resource.calendar.google.com", "group.calendar.google.com")
+
+
+def takvim_maddeleri(
+    etkinlikler: list[dict], bugun: date, sozluk: dict[str, str] | None = None, kendi_alanlar: list[str] | None = None,
+    an: datetime | None = None,
+) -> list[dict]:
+    """Dahil: düzenleyeni kullanıcı olan ya da kabul/belki yanıtı verilen etkinlik. Hariç: reddedilen, iptal, başka
+    katılımcısı ve açıklaması olmayan (kendine blok), bitiş saati henüz gelmemiş. Tüm gün etkinlikleri o gün sayılır."""
+    an = an or datetime.now(ISTANBUL)
+    bas, son = gun_araligi(bugun)
+    maddeler = []
+    for e in etkinlikler:
+        if e.get("status") == "cancelled":
+            continue
+        katilimcilar = [k for k in e.get("attendees") or [] if isinstance(k, dict)]
+        ben = next((k for k in katilimcilar if k.get("self")), {})
+        if ben.get("responseStatus") == "declined":
+            continue
+        duzenleyen = bool((e.get("organizer") or {}).get("self") or ben.get("organizer"))
+        if not (duzenleyen or ben.get("responseStatus") in ("accepted", "tentative")):
+            continue
+        digerleri = [k for k in katilimcilar if not k.get("self") and not k.get("resource") and k.get("email")
+                     and not str(k["email"]).lower().endswith(TAKVIM_SISTEM_ALANLARI)]
+        if not digerleri and not str(e.get("description") or "").strip():
+            continue
+        baslangic, tum_gun = _takvim_zamani(e.get("start") or {})
+        bitis, _ = _takvim_zamani(e.get("end") or {})
+        if baslangic is None:
+            continue
+        baslik = re.sub(r"\s+", " ", str(e.get("summary") or "")).strip() or "Başlıksız"
+        if tum_gun:
+            if not baslangic.date() <= bugun < (bitis.date() if bitis else baslangic.date() + timedelta(days=1)):
+                continue
+            metin, zaman = f"'{baslik}' (tüm gün)", bas
+        else:
+            if not bas <= baslangic < son or (bitis is not None and bitis > an):
+                continue
+            kurumlar = []
+            for k in digerleri:
+                adres = str(k["email"])
+                if kendi_alanlar is not None and kendi_mi(adres, kendi_alanlar):
+                    continue
+                kurum = kurum_adi(str(k.get("displayName") or ""), adres, sozluk)
+                if _kucult(kurum.strip()) != SIRKET_ICI and kurum not in kurumlar:
+                    kurumlar.append(kurum)
+            metin = f"'{baslik}' toplantısı yapıldı" + (f" ({', '.join(kurumlar)} ile)" if kurumlar else "")
+            zaman = baslangic
+        maddeler.append({"id": kaynak_kimligi(str(e.get("id") or metin), bugun), "metin": metin, "kaynak": "takvim",
+                         "kaynak_zaman": zaman})
+    return tekille(maddeler)
+
+
+def takvim_tara(
+    token: str, bugun: date, sozluk: dict[str, str] | None = None, kendi_alanlar: list[str] | None = None,
+    istemci: httpx.Client | None = None, an: datetime | None = None,
+) -> list[dict]:
+    bas, son = gun_araligi(bugun)
+    etkinlikler = _google_sayfalari(istemci or google_istemci(), token, TAKVIM_API, {
+        "timeMin": rfc3339(bas), "timeMax": rfc3339(son), "singleEvents": "true", "orderBy": "startTime", "maxResults": 250,
+    }, "Takvim", "items")
+    return takvim_maddeleri(etkinlikler, bugun, sozluk, kendi_alanlar, an)
+
+
+# mimeType → (tür, belirtme hâli): "'Katalog' tablosu güncellendi"
+DRIVE_TURLERI = {
+    "tablo": ("tablosu", ("application/vnd.google-apps.spreadsheet", "spreadsheetml", "application/vnd.ms-excel",
+                          "application/vnd.oasis.opendocument.spreadsheet", "text/csv")),
+    "belge": ("belgesi", ("application/vnd.google-apps.document", "wordprocessingml", "application/msword",
+                          "application/vnd.oasis.opendocument.text", "application/rtf", "text/plain")),
+    "sunum": ("sunumu", ("application/vnd.google-apps.presentation", "presentationml", "application/vnd.ms-powerpoint",
+                         "application/vnd.oasis.opendocument.presentation")),
+    "PDF": ("PDF'i", ("application/pdf",)),
+}
+UZANTI = re.compile(r"\.(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{2,5}$")
+
+
+def drive_turu(mime: str | None) -> str:
+    """tablo / belge / sunum / PDF / dosya."""
+    mime = mime or ""
+    return next((tur for tur, (_, eslesmeler) in DRIVE_TURLERI.items() if any(x in mime for x in eslesmeler)), "dosya")
+
+
+def dosya_adi(ad: str | None) -> str:
+    """'Katalog 2026.xlsx' → 'Katalog 2026'; uzantı yoksa ya da ad yalnız uzantıysa olduğu gibi."""
+    ad = re.sub(r"\s+", " ", ad or "").strip()
+    kisa = UZANTI.sub("", ad).strip()
+    return kisa or ad or "Adsız"
+
+
+def drive_maddeleri(dosyalar: list[dict], bugun: date) -> list[dict]:
+    """Yalnız son değişikliği kullanıcının yaptığı dosyalar; o gün oluşturulan 'oluşturuldu', diğerleri 'güncellendi'.
+    En fazla DRIVE_SINIRI madde, fazlası tek "ve N dosya daha güncellendi" maddesi."""
+    benim = sorted((d for d in dosyalar if (d.get("lastModifyingUser") or {}).get("me") is True and d.get("id")),
+                   key=lambda d: (iso_zaman(d.get("modifiedTime")) or datetime.min.replace(tzinfo=ISTANBUL), str(d["id"])))
+    maddeler = []
+    for d in benim[:DRIVE_SINIRI]:
+        olusturma = iso_zaman(d.get("createdTime"))
+        tur = drive_turu(d.get("mimeType"))
+        ek = DRIVE_TURLERI[tur][0] if tur in DRIVE_TURLERI else "dosyası"
+        ne = "oluşturuldu" if olusturma is not None and olusturma.date() == bugun else "güncellendi"
+        maddeler.append({"id": kaynak_kimligi(str(d["id"]), bugun), "metin": f"'{dosya_adi(d.get('name'))}' {ek} {ne}",
+                         "kaynak": "drive", "kaynak_zaman": iso_zaman(d.get("modifiedTime"))})
+    fazla = benim[DRIVE_SINIRI:]
+    if fazla:
+        maddeler.append({"id": kaynak_kimligi("drive-fazla", bugun), "metin": f"ve {len(fazla)} dosya daha güncellendi",
+                         "kaynak": "drive", "kaynak_zaman": iso_zaman(fazla[-1].get("modifiedTime"))})
+    return maddeler
+
+
+def drive_sorgusu(gun: date) -> str:
+    bas, son = gun_araligi(gun)
+    return (f"modifiedTime >= '{rfc3339(bas)}' and modifiedTime < '{rfc3339(son)}' and trashed=false "
+            "and mimeType != 'application/vnd.google-apps.folder'")
+
+
+def drive_tara(token: str, bugun: date, istemci: httpx.Client | None = None) -> list[dict]:
+    dosyalar = _google_sayfalari(istemci or google_istemci(), token, DRIVE_API, {
+        "q": drive_sorgusu(bugun), "corpora": "user", "pageSize": 100,
+        "fields": "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,lastModifyingUser(me))",
+    }, "Drive", "files")
+    return drive_maddeleri(dosyalar, bugun)
+
+
 # ---------------------------------------------------------------- Claude
 
 def _json_dizi_ayikla(metin: str) -> list:
@@ -705,7 +1087,8 @@ def claude_cevir(
             "content": (
                 f"Kaynağı 'medusa' olanlar {proje_adi + ' yazılımında' if proje_adi else 'yazılım projesinde'} "
                 "bugün yapılan değişikliklerin commit mesajları, "
-                "'eposta' olanlar bugün gönderilen e-postaların özetleri. Her birini çevir:\n"
+                "'eposta' olanlar bugün gönderilen e-postaların özetleri, 'takvim' olanlar bugün yapılan toplantılar, "
+                "'drive' olanlar bugün üzerinde çalışılan dosyalar. Her birini çevir:\n"
                 + json.dumps(girdiler, ensure_ascii=False)
             ),
         }],
@@ -741,6 +1124,7 @@ def duzelt_sistemi(proje_adi: str = "", kategorili: bool = False, kendi_sirket: 
         "Kişi, kurum, ürün adları ve sayılar aynen korunur.\n"
         "- Teknik terimleri yöneticinin anlayacağı iş diline çevir. " + urun + "\n"
         "- " + EPOSTA_KURALI + "\n"
+        "- " + GOOGLE_KURALI + "\n"
         + ("- " + kendi_sirket_kurali(kendi_sirket) + "\n" if kendi_sirket else "")
         + "- 'devam' türündeki maddelerde işin adı ve aşaması tek cümlede birleşir (örn. \"… için yanıt bekleniyor.\").\n"
         "- 'surekli' türündeki maddeler her gün tekrarlanan işlerdir: son raporlardaki cümlelerle aynı olmayan "
@@ -906,6 +1290,25 @@ def hafta_basligi(baslangic: date, bitis: date) -> str:
     return f"{baslangic.day}–{bitis.day} {TR_AYLAR[bitis.month - 1]} {bitis.year}"
 
 
+TR_KISA_AYLAR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]
+BIRLER = ["sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz"]
+ONLAR = ["", "on", "yirmi", "otuz", "kırk", "elli"]
+
+
+def saat_yonelme(saat: str) -> str:
+    """'14:05' → "14:05'e", '14:30' → "14:30'a", '09:06' → "09:06'ya": ek saatin okunuşunun son sözcüğüne uyar."""
+    ss, dd = (int(x) for x in saat.split(":"))
+    n = dd or ss
+    okunus = BIRLER[n % 10] if n % 10 or n == 0 else ONLAR[n // 10]
+    return saat + yonelme_eki(okunus)[len(okunus):]
+
+
+def gecerlilik_metni(bitis: datetime) -> str:
+    """'Bağlantı 26 Eyl 14:05'e kadar geçerli' (Istanbul saati)."""
+    z = bitis.astimezone(ISTANBUL)
+    return f"Bağlantı {z.day} {TR_KISA_AYLAR[z.month - 1]} {saat_yonelme(z.strftime('%H:%M'))} kadar geçerli"
+
+
 def haftalik_sistemi() -> str:
     return (
         "Bir müzik edisyon şirketinde çalışan bir danışmanın bir haftalık günlük raporlarından, yöneticisine "
@@ -960,53 +1363,84 @@ def raporu_uret(
     tarih: date | None = None,
 ) -> dict:
     """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu, eposta_gruplama,
-    kendi_alanlar, ekip_ici_atla, kendi_sirket (çözülmüş).
+    kendi_alanlar, ekip_ici_atla, kendi_sirket (çözülmüş); Google bağlıysa google: {token, kapsamlar, eposta,
+    yenile, hata} (token yoksa Google kaynakları atlanır).
     haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez. Sözlükse id → kayıtlı metin: metni
     değişen (ör. aynı konuya yeni mail gelen) madde yeniden çevrilir; değer None ise hiç gönderilmez.
-    tarih: taranan gün (Istanbul); verilmezse bugün."""
+    tarih: taranan gün (Istanbul); verilmezse bugün.
+    Dönen "taranan": hatasız taranan Google kaynakları (takvim/drive); eski maddeleri gizleme kuralı buna bakar."""
     bugun = tarih or istanbul_bugun()
-    sonuc = {"tarih": bugun.isoformat(), "eposta": [], "medusa": [], "not": [], "hatalar": []}
+    sonuc = {"tarih": bugun.isoformat(), "eposta": [], "medusa": [], "not": [], "takvim": [], "drive": [],
+             "hatalar": [], "taranan": []}
     # Kapalı kaynak sessizce atlanır; açık ama ayarı eksik olan uyarı yazar.
     acik = ayarlar.get("kaynaklar") or {"gmail": True, "github": True}
+    google = ayarlar.get("google") or {}
+    token, kapsam = google.get("token"), set(google.get("kapsamlar") or [])
+    if google.get("yenile"):
+        sonuc["hatalar"].append({"kaynak": "google", "mesaj": GOOGLE_YENILE_MESAJI})
+    elif google.get("hata"):
+        sonuc["hatalar"].append({"kaynak": "google", "mesaj": google["hata"]})
 
-    if acik.get("gmail") and ayarlar.get("gmail_kullanici") and ayarlar.get("gmail_sifre"):
+    def tara(kaynak: str, ad: str, islem):
+        """Kaynak hatası sonuca yazılır, None döner."""
         try:
-            bulunan = gmail_tara(
-                ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], bugun, ayarlar.get("alan_sozlugu"),
-                ayarlar.get("eposta_gruplama") or "konu",
-                kendi_alanlar=ayarlar.get("kendi_alanlar"), ekip_ici_atla=ayarlar.get("ekip_ici_atla", True),
-            )
-            sonuc["eposta"] = [m for m in bulunan if m["kaynak"] != "not"]
-            sonuc["not"] = [m for m in bulunan if m["kaynak"] == "not"]
+            return islem()
+        except GoogleYetkisiz as e:
+            sonuc["google_yetkisiz"] = True
+            sonuc["hatalar"].append({"kaynak": kaynak, "mesaj": str(e)})
         except KaynakHatasi as e:
-            sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": str(e)})
+            sonuc["hatalar"].append({"kaynak": kaynak, "mesaj": str(e)})
         except Exception as e:
-            sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": f"Gmail taranamadı: {e.__class__.__name__}"})
-    elif acik.get("gmail"):
+            sonuc["hatalar"].append({"kaynak": kaynak, "mesaj": f"{ad} taranamadı: {e.__class__.__name__}"})
+        return None
+
+    # Gmail: Google bağlıysa REST, değilse (ya da Google yenilenmeliyse) uygulama şifresiyle IMAP.
+    bulunan = None
+    eposta_ayari = dict(sozluk=ayarlar.get("alan_sozlugu"), gruplama=ayarlar.get("eposta_gruplama") or "konu",
+                        kendi_alanlar=ayarlar.get("kendi_alanlar"), ekip_ici_atla=ayarlar.get("ekip_ici_atla", True))
+    if acik.get("gmail") and token and "gmail" in kapsam:
+        bulunan = tara("gmail", "Gmail", lambda: google_gmail_tara(
+            token, google.get("eposta") or ayarlar.get("gmail_kullanici") or "", bugun, **eposta_ayari))
+    elif acik.get("gmail") and ayarlar.get("gmail_kullanici") and ayarlar.get("gmail_sifre"):
+        bulunan = tara("gmail", "Gmail", lambda: gmail_tara(
+            ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], bugun, eposta_ayari["sozluk"], eposta_ayari["gruplama"],
+            kendi_alanlar=eposta_ayari["kendi_alanlar"], ekip_ici_atla=eposta_ayari["ekip_ici_atla"],
+        ))
+    elif acik.get("gmail") and "gmail" not in kapsam:  # Google'la gelen Gmail'in hatası yukarıda yazıldı
         sonuc["hatalar"].append({"kaynak": "gmail", "mesaj": "Gmail ayarı girilmemiş (Ayarlar)"})
+    if bulunan is not None:
+        sonuc["eposta"] = [m for m in bulunan if m["kaynak"] != "not"]
+        sonuc["not"] = [m for m in bulunan if m["kaynak"] == "not"]
 
     if acik.get("github") and ayarlar.get("github_token") and ayarlar.get("github_repo"):
-        try:
-            sonuc["medusa"] = github_tara(ayarlar["github_token"], ayarlar["github_repo"], bugun)
-        except KaynakHatasi as e:
-            sonuc["hatalar"].append({"kaynak": "github", "mesaj": str(e)})
-        except Exception as e:
-            sonuc["hatalar"].append({"kaynak": "github", "mesaj": f"GitHub taranamadı: {e.__class__.__name__}"})
+        commitler = tara("github", "GitHub", lambda: github_tara(ayarlar["github_token"], ayarlar["github_repo"], bugun))
+        sonuc["medusa"] = commitler or []
     elif acik.get("github"):
         sonuc["hatalar"].append({"kaynak": "github", "mesaj": "GitHub ayarı girilmemiş (Ayarlar)"})
+
+    for kaynak, ad, islem in (
+        ("takvim", "Takvim", lambda: takvim_tara(token, bugun, ayarlar.get("alan_sozlugu"), ayarlar.get("kendi_alanlar"))),
+        ("drive", "Drive", lambda: drive_tara(token, bugun)),
+    ):
+        if acik.get(kaynak) and token and kaynak in kapsam:
+            maddeler = tara(kaynak, ad, islem)
+            if maddeler is not None:
+                sonuc[kaynak] = maddeler
+                sonuc["taranan"].append(kaynak)
 
     def kayitli(m: dict) -> bool:
         if m["id"] not in haric_idler:
             return False
         return not isinstance(haric_idler, dict) or haric_idler[m["id"]] in (None, m["metin"])
 
-    yeniler = [m for m in sonuc["eposta"] + sonuc["medusa"] if not kayitli(m)]
+    cevrilenler = ("eposta", "medusa", "takvim", "drive")
+    yeniler = [m for anahtar in cevrilenler for m in sonuc[anahtar] if not kayitli(m)]
     if api_anahtari and yeniler:
         cevrilmis, hata = claude_cevir(yeniler, api_anahtari, proje_adi=ayarlar.get("proje_adi") or "",
                                        kendi_sirket=ayarlar.get("kendi_sirket"))
         if not hata:  # metin ham kalır; çeviri metin_ai'ye gider
             metinler = {m["id"]: m["metin"] for m in cevrilmis}
-            for anahtar in ("eposta", "medusa"):
+            for anahtar in cevrilenler:
                 sonuc[anahtar] = [{**m, "metin_ai": metinler[m["id"]]} if m["id"] in metinler else m for m in sonuc[anahtar]]
         else:
             sonuc["hatalar"].append({"kaynak": "claude", "mesaj": hata})
