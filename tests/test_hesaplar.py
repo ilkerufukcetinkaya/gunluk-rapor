@@ -402,7 +402,7 @@ def test_claude_yalniz_yeni_maddeleri_ceviri(monkeypatch):
     commitler = [servisler.madde("medusa", "a")]
     gonderilen = []
 
-    def sahte_ceviri(maddeler, anahtar, istemci=None, proje_adi=""):
+    def sahte_ceviri(maddeler, anahtar, istemci=None, proje_adi="", **_):
         gonderilen.append(([m["metin"] for m in maddeler], proje_adi))
         return [{**m, "metin": m["metin"].upper()} for m in maddeler], None
 

@@ -32,6 +32,7 @@ log = logging.getLogger("gunluk-rapor")
 REPO_BICIMI = re.compile(r"^[\w.-]+/[\w.-]+$")
 EPOSTA_BICIMI = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SAAT_BICIMI = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+ALAN_BICIMI = re.compile(r"^[\w-]+(\.[\w-]+)+$")
 VARSAYILAN_SAAT = time(17, 0)
 VARSAYILAN_GUNLER = "1,2,3,4,5"
 KAYNAKLAR = ("gmail", "github", "medusa")
@@ -131,21 +132,42 @@ def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
         "proje_adi": a.proje_adi or "",
         "patron_telefon": a.patron_telefon or "",
         "rapor_basligi": a.rapor_basligi or "",
-        "alan_sozlugu": servisler.KURUMLAR if a.alan_sozlugu is None else a.alan_sozlugu,
+        "alan_sozlugu": alan_sozlugu(a),
         "kaynaklar": kaynak_durumu(a),
         "kurulum_tamam": bool(a.kurulum_tamam),
         "eposta_gruplama": eposta_gruplama(a),
         "rapor_bicimi": rapor_bicimi(a),
         "karistir": a.karistir is not False,
+        "kendi_alanlar_otomatik": otomatik_kendi_alanlar(a, kullanici),
+        "kendi_alanlar": list(a.kendi_alanlar or []),
+        "ekip_ici_atla": a.ekip_ici_atla is not False,
     }
+
+
+def alan_sozlugu(a: KullaniciAyari) -> dict[str, str]:
+    return servisler.KURUMLAR if a.alan_sozlugu is None else a.alan_sozlugu
+
+
+def otomatik_kendi_alanlar(a: KullaniciAyari, kullanici: Kullanici | None) -> list[str]:
+    """Giriş ve Gmail adresinin alan adları + sözlükte 'şirket içi' eşlenenler (Ayarlar'da gri rozet)."""
+    adresler = [kullanici.eposta if kullanici else "", a.gmail_kullanici or ""]
+    return servisler.kendi_alanlari(adresler, sozluk=alan_sozlugu(a))
+
+
+def kendi_alanlar(a: KullaniciAyari, kullanici: Kullanici | None) -> list[str]:
+    return list(dict.fromkeys(otomatik_kendi_alanlar(a, kullanici) + list(a.kendi_alanlar or [])))
 
 
 def eposta_gruplama(a: KullaniciAyari) -> str:
     return a.eposta_gruplama if a.eposta_gruplama in servisler.GRUPLAMALAR else "konu"
 
 
-def cozulmus_ayarlar(a: KullaniciAyari) -> dict:
+def cozulmus_ayarlar(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
+    kendi = kendi_alanlar(a, kullanici)
     return {
+        "kendi_alanlar": kendi,
+        "kendi_sirket": servisler.kendi_sirket_adlari(kendi, alan_sozlugu(a)),
+        "ekip_ici_atla": a.ekip_ici_atla is not False,
         "eposta_gruplama": eposta_gruplama(a),
         "kaynaklar": kaynak_durumu(a),
         "gmail_kullanici": a.gmail_kullanici or "",
@@ -153,7 +175,7 @@ def cozulmus_ayarlar(a: KullaniciAyari) -> dict:
         "github_token": guvenlik.coz(a.github_token_enc),
         "github_repo": a.github_repo or "",
         "proje_adi": a.proje_adi or "",
-        "alan_sozlugu": servisler.KURUMLAR if a.alan_sozlugu is None else a.alan_sozlugu,
+        "alan_sozlugu": alan_sozlugu(a),
     }
 
 
@@ -695,7 +717,7 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
             # kullanıcının düzenlediği madde Claude'a hiç gitmez; metni değişen düzenlenmemiş madde yeniden çevrilir
             haric = {k: None if m.kullanici_duzenledi else m.metin for k, m in mevcut.items()}
             sonuc = servisler.raporu_uret(
-                cozulmus_ayarlar(ayar_satiri(db, kullanici)), os.environ.get("ANTHROPIC_API_KEY", ""), haric, tarih,
+                cozulmus_ayarlar(ayar_satiri(db, kullanici), kullanici), os.environ.get("ANTHROPIC_API_KEY", ""), haric, tarih,
             )
             notlar = set(db.scalars(select(Madde.kaynak_id).where(
                 Madde.user_id == kullanici.id, Madde.tur == "bugun", Madde.tarih == tarih, Madde.kaynak == "not",
@@ -845,11 +867,14 @@ def duzeltmeyi_uygula(db: Session, kullanici: Kullanici, paket: list[Madde], tar
     son_raporlar = list(db.scalars(select(Rapor.metin).where(
         Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih < tarih,
     ).order_by(Rapor.tarih.desc()).limit(3)))
-    proje_adi = ayar_satiri(db, kullanici).proje_adi or ""
+    ayar = ayar_satiri(db, kullanici)
+    proje_adi = ayar.proje_adi or ""
+    kendi = kendi_alanlar(ayar, kullanici)
     servisler.kullanimi_sifirla()
     try:
         sonuc, oneriler = servisler.claude_duzelt_kategorili(
-            girdiler, son_raporlar, anahtar, proje_adi, kategoriler=kategori_listesi)
+            girdiler, son_raporlar, anahtar, proje_adi, kategoriler=kategori_listesi,
+            kendi_sirket=servisler.kendi_sirket_adlari(kendi, alan_sozlugu(ayar)))
     except servisler.ClaudeHatasi as e:
         return {"duzeltilen": 0, "gonderilen": len(paket), "hatalar": [f"Claude: {e}; ham metin kullanılıyor"]}
     except Exception as e:
@@ -1211,6 +1236,23 @@ class AyarGuncelle(BaseModel):
     eposta_gruplama: Literal["konu", "alici"] | None = None
     rapor_bicimi: Literal["kategorili", "duz"] | None = None
     karistir: bool | None = None
+    kendi_alanlar: str | list[str] | None = None
+    ekip_ici_atla: bool | None = None
+
+
+def kendi_alanlari_ayristir(deger: str | list[str]) -> list[str]:
+    """Virgül, boşluk ya da satırla ayrılmış alan adları; '@' öneki ve büyük harf yok sayılır."""
+    parcalar = re.split(r"[\s,;]+", deger) if isinstance(deger, str) else deger
+    sonuc = []
+    for p in parcalar:
+        alan = (p or "").strip().lstrip("@").lower().rstrip(".")
+        if not alan:
+            continue
+        if not ALAN_BICIMI.match(alan):
+            raise HTTPException(status_code=422, detail=f"Alan adı anlaşılamadı: {alan!r} (ör. ilsvision.com)")
+        if alan not in sonuc:
+            sonuc.append(alan)
+    return sonuc
 
 
 def sozlugu_ayristir(deger: str | dict[str, str]) -> dict[str, str]:
@@ -1265,7 +1307,10 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
     gruplama = veri.pop("eposta_gruplama", None)
     if gruplama is not None:
         a.eposta_gruplama = gruplama
-    for alan in ("hatirlatma_push", "hatirlatma_eposta", "rapor_bicimi", "karistir"):
+    if "kendi_alanlar" in veri:
+        deger = veri.pop("kendi_alanlar")
+        a.kendi_alanlar = kendi_alanlari_ayristir(deger) if deger is not None else None
+    for alan in ("hatirlatma_push", "hatirlatma_eposta", "rapor_bicimi", "karistir", "ekip_ici_atla"):
         deger = veri.pop(alan, None)
         if deger is not None:
             setattr(a, alan, deger)

@@ -84,6 +84,9 @@ class KullaniciAyari(Temel):
     # 'kategorili': başlıklı bölümler; 'duz': Yapılanlar / Devam eden
     rapor_bicimi: Mapped[str] = mapped_column(String(12), default="kategorili", server_default="kategorili")
     karistir: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())  # sürekli işler her gün farklı yerlere serpiştirilir
+    # E2: giriş/Gmail adresinin alan adına ek olarak kendi şirketi sayılan alan adları ["ilsvision.com", ...]
+    kendi_alanlar: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    ekip_ici_atla: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())  # tüm alıcıları kendi şirketinden olan mail madde üretmez
     guncelleme: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi, onupdate=simdi)
 
 
@@ -247,6 +250,8 @@ EK_KOLONLAR = [
     ("items", "onemli", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
     ("user_settings", "rapor_bicimi", "VARCHAR(12) NOT NULL DEFAULT 'kategorili'", "VARCHAR(12) NOT NULL DEFAULT 'kategorili'"),
     ("user_settings", "karistir", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("user_settings", "kendi_alanlar", "JSON", "JSON"),
+    ("user_settings", "ekip_ici_atla", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
 ]
 # Sonradan eklenen tablolar; başvurduğu tabloların hepsi olan şemada eksikse oluşturulur.
 EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim", "kategoriler", "rapor_duzeni"]

@@ -33,6 +33,13 @@ KURUMLAR = {
     "ilsvision.com": "şirket içi",
 }
 SIRKET_ICI = "şirket içi"
+EKIP_ICI = "ekip içi"  # E2: tüm alıcıları kullanıcının kendi şirketinden olan e-posta
+# Herkese açık posta sağlayıcıları; kullanıcının adresi buradaysa alan adı "kendi şirketi" sayılmaz.
+GENEL_SAGLAYICILAR = frozenset({
+    "gmail.com", "googlemail.com", "hotmail.com", "hotmail.com.tr", "outlook.com", "outlook.com.tr", "live.com",
+    "msn.com", "yahoo.com", "yahoo.com.tr", "icloud.com", "me.com", "mac.com", "yandex.com", "yandex.com.tr",
+    "proton.me", "protonmail.com", "aol.com", "gmx.com", "mail.com",
+})
 
 CLAUDE_MODEL = "claude-sonnet-5"
 
@@ -65,13 +72,26 @@ EPOSTA_KURALI = (
 )
 
 
-def claude_sistem(proje_adi: str = "") -> str:
+def kendi_sirket_kurali(kendi_sirket: list[str] | None) -> str:
+    """kendi_sirket: kullanıcının kendi şirketinin adları ve alan adları; boşsa kural yazılmaz."""
+    if not kendi_sirket:
+        return ""
+    return (
+        f"Kullanıcının kendi şirketi ({', '.join(kendi_sirket)}) alıcı, bilgilendirilen ya da paylaşılan taraf olarak "
+        "ASLA yazılmaz; \"… ile paylaşıldı\", \"… de bilgilendirildi\" gibi kendi şirketine yapılan atıfları cümleden çıkar "
+        "(olgu çıkarmama kuralının tek istisnası budur)."
+    )
+
+
+def claude_sistem(proje_adi: str = "", kendi_sirket: list[str] | None = None) -> str:
     urun = f"ürün adı her zaman {proje_adi}. " if proje_adi else ""
+    kendi = kendi_sirket_kurali(kendi_sirket)
     return (
         "Bir müzik edisyon şirketinde çalışan bir danışmanın günlük raporu için maddeler yazıyorsun. "
         "Teknik terimleri (trigram, indeks, rollup, N+1, commit, endpoint vb.) yöneticinin anlayacağı iş diline çevir; "
         "her girdi için TEK cümle, geçmiş zaman, abartı yok, uydurma yok. "
         + EPOSTA_KURALI + " "
+        + (kendi + " " if kendi else "")
         + urun
         + "Yalnız JSON dizi döndür: [{\"id\":..., \"metin\":...}]"
     )
@@ -169,6 +189,35 @@ def kurum_adi(gorunen_ad: str, adres: str, sozluk: dict[str, str] | None = None)
     return gorunen_ad.strip().strip('"') or alan or adres
 
 
+def adres_alani(adres: str) -> str:
+    return adres.rpartition("@")[2].strip().lower()
+
+
+def kendi_alanlari(adresler: list[str], ekler: list[str] | None = None, sozluk: dict[str, str] | None = None) -> list[str]:
+    """Kullanıcının kendi şirketinin alan adları: giriş ve Gmail adreslerinin alan adları (herkese açık sağlayıcılar
+    hariç), sözlükte 'şirket içi' eşlenenler ve elle eklenenler. Alt alan adları eşleşmede kendiliğinden kapsanır."""
+    otomatik = [adres_alani(a) for a in adresler if a and "@" in a]
+    otomatik = [a for a in otomatik if a and a not in GENEL_SAGLAYICILAR]
+    sirket_ici = [k for k, v in (KURUMLAR if sozluk is None else sozluk).items() if _kucult(v.strip()) == SIRKET_ICI]
+    return list(dict.fromkeys(otomatik + sirket_ici + list(ekler or [])))
+
+
+def kendi_mi(adres: str, kendi_alanlar: list[str]) -> bool:
+    alan = adres_alani(adres)
+    return any(_alan_eslesir(alan, k) for k in kendi_alanlar)
+
+
+def kendi_sirket_adlari(kendi_alanlar: list[str], sozluk: dict[str, str] | None = None) -> list[str]:
+    """Prompt'lar için: kendi alan adlarının sözlükteki kurum adları ('şirket içi' hariç) ve alan adlarının kendisi."""
+    adlar = []
+    for alan in kendi_alanlar:
+        for anahtar, kurum in (KURUMLAR if sozluk is None else sozluk).items():
+            if _alan_eslesir(alan, anahtar) and _kucult(kurum.strip()) != SIRKET_ICI:
+                adlar.append(kurum.strip())
+        adlar.append(alan)
+    return list(dict.fromkeys(adlar))
+
+
 def istanbul_zamani(date_basligi: str | None) -> datetime | None:
     """E-posta Date başlığı → Istanbul saatiyle zaman; okunamazsa None."""
     if not date_basligi:
@@ -187,13 +236,19 @@ def bugun_mu(date_basligi: str | None, bugun: date) -> bool:
     return zaman is not None and zaman.date() == bugun
 
 
-def _alicilar(ham: str | None, kendi_adres: str, sozluk: dict[str, str] | None = None) -> list[str]:
+def _alicilar(
+    ham: str | None, kendi_adres: str, sozluk: dict[str, str] | None = None, kendi_alanlar: list[str] | None = None,
+) -> list[str]:
+    """Alıcı kurumları; kendi_alanlar verilirse kendi şirketindeki alıcılar EKIP_ICI olarak döner."""
     kurumlar = []
     for ad, adres in getaddresses([ham or ""]):
         adres = adres.strip()
         if not adres or adres.lower() == kendi_adres.lower() or NOREPLY.search(adres):
             continue
-        kurum = kurum_adi(basligi_coz(ad), adres, sozluk)
+        if kendi_alanlar is not None and kendi_mi(adres, kendi_alanlar):
+            kurum = EKIP_ICI
+        else:
+            kurum = kurum_adi(basligi_coz(ad), adres, sozluk)
         if kurum not in kurumlar:
             kurumlar.append(kurum)
     return kurumlar
@@ -202,6 +257,8 @@ def _alicilar(ham: str | None, kendi_adres: str, sozluk: dict[str, str] | None =
 def _hedef(kurumlar: tuple[str, ...]) -> str:
     if kurumlar == (SIRKET_ICI,):
         return "Şirket içi"
+    if kurumlar == (EKIP_ICI,):
+        return "Ekip içi"
     adlar = list(kurumlar)
     if len(adlar) == 1:
         return yonelme_eki(adlar[0])
@@ -240,13 +297,28 @@ def konu_metni(kurum: str, konu: str, adet: int, digerleri: list[str]) -> str:
     return metin + (f" (ayrıca {', '.join(digerleri)})" if digerleri else "")
 
 
+def _dis_kurumlar(kime: list[str], bilgi: list[str], ilk_dolu: bool = False) -> list[str]:
+    """Kendi şirketi (EKIP_ICI) çıkarılır: önce To'daki, sonra Cc'deki kendi-olmayan kurumlar.
+    ilk_dolu: To'da kendi-olmayan varsa Cc'ye bakılmaz. Hiç kendi-olmayan yoksa ve kendi şirketinden alıcı
+    varsa [EKIP_ICI], hiç alıcı yoksa []."""
+    disi_kime = [k for k in kime if k != EKIP_ICI]
+    disi_bilgi = [k for k in bilgi if k != EKIP_ICI]
+    kurumlar = disi_kime if ilk_dolu and disi_kime else list(dict.fromkeys(disi_kime + disi_bilgi))
+    if kurumlar:
+        return kurumlar
+    return [EKIP_ICI] if EKIP_ICI in kime + bilgi else []
+
+
 def epostalari_maddele(
     mailler: list[dict], kendi_adres: str, bugun: date, sozluk: dict[str, str] | None = None, gruplama: str = "konu",
+    kendi_alanlar: list[str] | None = None, ekip_ici_atla: bool = True,
 ) -> list[dict]:
     """mailler: {"date","subject","from","to","cc"} ham başlık değerleri.
-    gruplama 'konu': gün + ilk To kurumu + temizlenmiş konu başına bir madde; 'alici': alıcı kurum(lar) başına bir madde."""
+    gruplama 'konu': gün + ilk To kurumu + temizlenmiş konu başına bir madde; 'alici': alıcı kurum(lar) başına bir madde.
+    kendi_alanlar verilirse (E2) bu alanlardaki alıcılar esas kurumda ve "(ayrıca …)" ekinde yer almaz; tüm alıcıları
+    kendi şirketinden olan mail "Ekip içi …" maddesi olur, ekip_ici_atla ise hiç madde üretmez."""
     if gruplama != "alici":
-        return _konu_basina_maddele(mailler, kendi_adres, bugun, sozluk)
+        return _konu_basina_maddele(mailler, kendi_adres, bugun, sozluk, kendi_alanlar, ekip_ici_atla)
     gruplar: dict[tuple[str, ...], list[str]] = {}
     son_zaman: dict[tuple[str, ...], datetime] = {}
     for m in mailler:
@@ -255,7 +327,13 @@ def epostalari_maddele(
             continue
         if NOREPLY.search(m.get("from") or ""):
             continue
-        kurumlar = _alicilar(m.get("to"), kendi_adres, sozluk) or _alicilar(m.get("cc"), kendi_adres, sozluk)
+        if kendi_alanlar is not None:
+            kurumlar = _dis_kurumlar(_alicilar(m.get("to"), kendi_adres, sozluk, kendi_alanlar),
+                                     _alicilar(m.get("cc"), kendi_adres, sozluk, kendi_alanlar), ilk_dolu=True)
+            if kurumlar == [EKIP_ICI] and ekip_ici_atla:
+                continue
+        else:
+            kurumlar = _alicilar(m.get("to"), kendi_adres, sozluk) or _alicilar(m.get("cc"), kendi_adres, sozluk)
         if len(kurumlar) > 1 and SIRKET_ICI in kurumlar:
             kurumlar.remove(SIRKET_ICI)
         if not kurumlar:
@@ -266,7 +344,10 @@ def epostalari_maddele(
     return tekille([madde("eposta", eposta_metni(k, konular), son_zaman[k]) for k, konular in gruplar.items()])
 
 
-def _konu_basina_maddele(mailler: list[dict], kendi_adres: str, bugun: date, sozluk: dict[str, str] | None) -> list[dict]:
+def _konu_basina_maddele(
+    mailler: list[dict], kendi_adres: str, bugun: date, sozluk: dict[str, str] | None,
+    kendi_alanlar: list[str] | None = None, ekip_ici_atla: bool = True,
+) -> list[dict]:
     gruplar: dict[tuple[str, str], dict] = {}
     for m in mailler:
         zaman = istanbul_zamani(m.get("date"))
@@ -274,8 +355,14 @@ def _konu_basina_maddele(mailler: list[dict], kendi_adres: str, bugun: date, soz
             continue
         if NOREPLY.search(m.get("from") or ""):
             continue
-        kime = _alicilar(m.get("to"), kendi_adres, sozluk)
-        kurumlar = list(dict.fromkeys(kime + _alicilar(m.get("cc"), kendi_adres, sozluk)))
+        kime = _alicilar(m.get("to"), kendi_adres, sozluk, kendi_alanlar)
+        bilgi = _alicilar(m.get("cc"), kendi_adres, sozluk, kendi_alanlar)
+        if kendi_alanlar is not None:
+            kurumlar = _dis_kurumlar(kime, bilgi)
+            if kurumlar == [EKIP_ICI] and ekip_ici_atla:
+                continue
+        else:
+            kurumlar = list(dict.fromkeys(kime + bilgi))
         if len(kurumlar) > 1 and SIRKET_ICI in kurumlar:
             kurumlar.remove(SIRKET_ICI)
         if not kurumlar:
@@ -433,6 +520,7 @@ def imap_tarihi(gun: date) -> str:
 
 def gmail_tara(
     kullanici: str, sifre: str, bugun: date, sozluk: dict[str, str] | None = None, gruplama: str = "konu",
+    kendi_alanlar: list[str] | None = None, ekip_ici_atla: bool = True,
 ) -> list[dict]:
     """Gönderilen e-posta maddeleri (kaynak 'eposta') + kendine atılan not maddeleri (kaynak 'not')."""
     def oku(M: imaplib.IMAP4_SSL) -> list[dict]:
@@ -457,7 +545,8 @@ def gmail_tara(
                 _, govde = M.fetch(m["imap_id"], "(BODY.PEEK[])")
                 ham = next((g[1] for g in govde if isinstance(g, tuple)), b"")
                 m["govde"] = duz_metin_govde(email.message_from_bytes(ham))
-        return epostalari_maddele(gonderilen, kullanici, bugun, sozluk, gruplama) + notlari_maddele(notlar, kullanici, bugun)
+        return epostalari_maddele(gonderilen, kullanici, bugun, sozluk, gruplama, kendi_alanlar, ekip_ici_atla) \
+            + notlari_maddele(notlar, kullanici, bugun)
 
     return _gmail_oturumu(kullanici, sifre, oku)
 
@@ -599,7 +688,8 @@ def _id_metin_eslesmesi(metin: str) -> dict[str, str]:
 
 
 def claude_cevir(
-    maddeler: list[dict], api_anahtari: str, istemci: httpx.Client | None = None, proje_adi: str = ""
+    maddeler: list[dict], api_anahtari: str, istemci: httpx.Client | None = None, proje_adi: str = "",
+    kendi_sirket: list[str] | None = None,
 ) -> tuple[list[dict], str | None]:
     """Maddeleri tek çağrıda iş diline çevirir. Hata olursa ham maddeler + hata mesajı döner."""
     if not maddeler:
@@ -609,7 +699,7 @@ def claude_cevir(
         "model": CLAUDE_MODEL,
         "max_tokens": 1500,
         "thinking": {"type": "disabled"},
-        "system": claude_sistem(proje_adi),
+        "system": claude_sistem(proje_adi, kendi_sirket),
         "messages": [{
             "role": "user",
             "content": (
@@ -636,7 +726,7 @@ KATEGORI_KURALI = (
 )
 
 
-def duzelt_sistemi(proje_adi: str = "", kategorili: bool = False) -> str:
+def duzelt_sistemi(proje_adi: str = "", kategorili: bool = False, kendi_sirket: list[str] | None = None) -> str:
     urun = f"Yazılım ürününün adı {proje_adi}; yazılımdan söz ederken bu adı kullan. " if proje_adi else ""
     return (
         "Bir müzik edisyon şirketinde çalışan bir danışmanın yöneticisine WhatsApp'tan gönderdiği günlük raporun "
@@ -651,7 +741,8 @@ def duzelt_sistemi(proje_adi: str = "", kategorili: bool = False) -> str:
         "Kişi, kurum, ürün adları ve sayılar aynen korunur.\n"
         "- Teknik terimleri yöneticinin anlayacağı iş diline çevir. " + urun + "\n"
         "- " + EPOSTA_KURALI + "\n"
-        "- 'devam' türündeki maddelerde işin adı ve aşaması tek cümlede birleşir (örn. \"… için yanıt bekleniyor.\").\n"
+        + ("- " + kendi_sirket_kurali(kendi_sirket) + "\n" if kendi_sirket else "")
+        + "- 'devam' türündeki maddelerde işin adı ve aşaması tek cümlede birleşir (örn. \"… için yanıt bekleniyor.\").\n"
         "- 'surekli' türündeki maddeler her gün tekrarlanan işlerdir: son raporlardaki cümlelerle aynı olmayan "
         "ama aynı anlama gelen, doğal bir ifade yaz. Metinde | ile ayrılmış seçenekler varsa hepsi aynı işin "
         "farklı söylenişidir.\n"
@@ -663,15 +754,15 @@ def duzelt_sistemi(proje_adi: str = "", kategorili: bool = False) -> str:
 
 def claude_duzelt(
     girdiler: list[dict], son_raporlar: list[str], api_anahtari: str, proje_adi: str = "",
-    istemci: httpx.Client | None = None,
+    istemci: httpx.Client | None = None, kendi_sirket: list[str] | None = None,
 ) -> dict[int, str]:
     """girdiler: {id, tur, metin, asama?}. Dönen: id → düzeltilmiş metin. Hata → ClaudeHatasi."""
-    return claude_duzelt_kategorili(girdiler, son_raporlar, api_anahtari, proje_adi, istemci)[0]
+    return claude_duzelt_kategorili(girdiler, son_raporlar, api_anahtari, proje_adi, istemci, kendi_sirket=kendi_sirket)[0]
 
 
 def claude_duzelt_kategorili(
     girdiler: list[dict], son_raporlar: list[str], api_anahtari: str, proje_adi: str = "",
-    istemci: httpx.Client | None = None, kategoriler: list[dict] | None = None,
+    istemci: httpx.Client | None = None, kategoriler: list[dict] | None = None, kendi_sirket: list[str] | None = None,
 ) -> tuple[dict[int, str], dict[int, int]]:
     """Tek çağrı. kategoriler [{id, ad}] verilirse "kategori_sec": true girdiler için önerilen kategori de döner.
     Dönen: (id → düzeltilmiş metin, id → kategori_id). Kategori id'lerinin geçerliliğini çağıran denetler."""
@@ -687,7 +778,7 @@ def claude_duzelt_kategorili(
         "model": CLAUDE_MODEL,
         "max_tokens": 2000,
         "thinking": {"type": "disabled"},
-        "system": duzelt_sistemi(proje_adi, bool(kategoriler)),
+        "system": duzelt_sistemi(proje_adi, bool(kategoriler), kendi_sirket),
         "messages": [{
             "role": "user",
             "content": baglam + "Düzeltilecek maddeler:\n" + json.dumps(girdiler, ensure_ascii=False),
@@ -781,7 +872,8 @@ def raporu_uret(
     ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | frozenset | dict[str, str | None] = frozenset(),
     tarih: date | None = None,
 ) -> dict:
-    """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu, eposta_gruplama (çözülmüş).
+    """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu, eposta_gruplama,
+    kendi_alanlar, ekip_ici_atla, kendi_sirket (çözülmüş).
     haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez. Sözlükse id → kayıtlı metin: metni
     değişen (ör. aynı konuya yeni mail gelen) madde yeniden çevrilir; değer None ise hiç gönderilmez.
     tarih: taranan gün (Istanbul); verilmezse bugün."""
@@ -795,6 +887,7 @@ def raporu_uret(
             bulunan = gmail_tara(
                 ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], bugun, ayarlar.get("alan_sozlugu"),
                 ayarlar.get("eposta_gruplama") or "konu",
+                kendi_alanlar=ayarlar.get("kendi_alanlar"), ekip_ici_atla=ayarlar.get("ekip_ici_atla", True),
             )
             sonuc["eposta"] = [m for m in bulunan if m["kaynak"] != "not"]
             sonuc["not"] = [m for m in bulunan if m["kaynak"] == "not"]
@@ -822,7 +915,8 @@ def raporu_uret(
 
     yeniler = [m for m in sonuc["eposta"] + sonuc["medusa"] if not kayitli(m)]
     if api_anahtari and yeniler:
-        cevrilmis, hata = claude_cevir(yeniler, api_anahtari, proje_adi=ayarlar.get("proje_adi") or "")
+        cevrilmis, hata = claude_cevir(yeniler, api_anahtari, proje_adi=ayarlar.get("proje_adi") or "",
+                                       kendi_sirket=ayarlar.get("kendi_sirket"))
         if not hata:  # metin ham kalır; çeviri metin_ai'ye gider
             metinler = {m["id"]: m["metin"] for m in cevrilmis}
             for anahtar in ("eposta", "medusa"):

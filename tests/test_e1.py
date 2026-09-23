@@ -126,8 +126,8 @@ def ortam(monkeypatch):
     Temel.metadata.create_all(motor)
     api.onbellegi_temizle()
     MAILLER.clear()
-    monkeypatch.setattr(servisler, "gmail_tara", lambda k, s, bugun, sozluk=None, gruplama="konu":
-                        servisler.epostalari_maddele(MAILLER, k, bugun, sozluk, gruplama))
+    monkeypatch.setattr(servisler, "gmail_tara", lambda k, s, bugun, sozluk=None, gruplama="konu", **kw:
+                        servisler.epostalari_maddele(MAILLER, k, bugun, sozluk, gruplama, **kw))
     monkeypatch.setattr(servisler, "github_tara", lambda *a, **k: [])
     yield
 

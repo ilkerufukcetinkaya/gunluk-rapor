@@ -19,6 +19,11 @@ main{gap:16px}
 .durum.hata{color:var(--danger)}
 .ayrinti{background:var(--sub); display:flex; flex-direction:column; gap:8px}
 .kayitli{color:var(--ink-2); font-size:12px; margin:0}
+.kendiRozetler{display:flex; flex-wrap:wrap; gap:6px}
+.kendiRozetler:empty{display:none}
+.kendiRozet{font-size:12px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:3px 10px}
+.tikSatiri{display:flex; align-items:center; gap:12px; margin-top:4px}
+.tikSatiri label{flex:1; font-size:14.5px; font-weight:600}
 #sozluk{font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:13.5px; min-height:150px}
 #testSonuc{font-size:13px; white-space:pre-wrap; margin:0}
 #testSonuc.ok{color:var(--ok-ink)}
@@ -119,6 +124,14 @@ input[type=time]{width:124px; font-weight:600; flex:none}
             <option value="konu">Her konu ayrı madde (önerilen)</option>
             <option value="alici">Alıcı başına tek madde</option>
           </select>
+          <label class="alan" for="kendi_alanlar">Kendi şirketimin alan adları</label>
+          <div class="kendiRozetler" id="kendiOtomatik" aria-label="Otomatik eklenenler"></div>
+          <input type="text" id="kendi_alanlar" name="kendi_alanlar" placeholder="ör. ilsvision.com" spellcheck="false" autocapitalize="off">
+          <p class="kayitli">Bu alan adlarındaki (ve alt alan adlarındaki) alıcılar e-posta maddelerine yazılmaz. Gri olanlar otomatik; ekleri virgülle ayırın.</p>
+          <div class="tikSatiri">
+            <label for="ekip_ici_atla">Ekip içi e-postaları rapora alma</label>
+            <input type="checkbox" class="sw" id="ekip_ici_atla">
+          </div>
           <p class="ipucu">Telefondan hızlı not: kendine 'rapor: ...' konulu e-posta at, akşam listede olur.</p>
         </div>
         <div class="row orta kaynak">
@@ -301,6 +314,9 @@ function doldur(a){
   sonAyar = a;
   ALANLAR.forEach(k => $(k).value = a[k] || '');
   $('eposta_gruplama').value = a.eposta_gruplama === 'alici' ? 'alici' : 'konu';
+  $('kendiOtomatik').replaceChildren(...(a.kendi_alanlar_otomatik || []).map(x => el('span', 'kendiRozet', x)));
+  $('kendi_alanlar').value = (a.kendi_alanlar || []).join(', ');
+  $('ekip_ici_atla').checked = a.ekip_ici_atla !== false;
   $('sozluk').value = Object.entries(a.alan_sozlugu || {}).map(([k, v]) => `${k}=${v}`).join('\n');
   $('gmail_sifre').value = ''; $('github_token').value = '';
   $('gmail_sifre').placeholder = a.gmail_sifre_kayitli ? 'kayıtlı ••••' : '';
@@ -335,6 +351,8 @@ async function kaydet(){
   const govde = { alan_sozlugu: $('sozluk').value, kaynaklar: Object.fromEntries(KAYNAK_ANAHTARLARI.map(k => [k.dataset.kaynak, k.checked])) };
   ALANLAR.forEach(k => govde[k] = $(k).value);
   govde.eposta_gruplama = $('eposta_gruplama').value;
+  govde.kendi_alanlar = $('kendi_alanlar').value;
+  govde.ekip_ici_atla = $('ekip_ici_atla').checked;
   if ($('gmail_sifre').value.trim()) govde.gmail_sifre = $('gmail_sifre').value;
   if ($('github_token').value.trim()) govde.github_token = $('github_token').value;
   govde.hatirlatma_saat = $('hatirlatma_saat').value || '17:00';

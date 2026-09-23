@@ -410,7 +410,7 @@ def test_sema_guncelle_hatirlatma_iki_kez(tmp_path):
         "user_settings.hatirlatma_saat", "user_settings.hatirlatma_gunler", "user_settings.hatirlatma_push",
         "user_settings.hatirlatma_eposta", "user_settings.hatirlatma_eposta_adres",
         "user_settings.kaynaklar", "user_settings.kurulum_tamam", "users.davet_eposta_tarihi", "user_settings.eposta_gruplama",
-        "user_settings.rapor_bicimi", "user_settings.karistir",
+        "user_settings.rapor_bicimi", "user_settings.karistir", "user_settings.kendi_alanlar", "user_settings.ekip_ici_atla",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:
