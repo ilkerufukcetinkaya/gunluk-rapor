@@ -79,6 +79,8 @@ class KullaniciAyari(Temel):
     # {"gmail": bool, "github": bool, "medusa": bool}; boşsa ayarı girilmiş kaynaklar açık sayılır.
     kaynaklar: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     kurulum_tamam: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 'konu': her konu ayrı madde; 'alici': alıcı kurum başına tek madde
+    eposta_gruplama: Mapped[str] = mapped_column(String(10), default="konu")
     guncelleme: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi, onupdate=simdi)
 
 
@@ -204,6 +206,7 @@ EK_KOLONLAR = [
     ("user_settings", "kurulum_tamam", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
     ("hatirlatma_gonderimleri", "hata_metni", "TEXT", "TEXT"),
     ("users", "davet_eposta_tarihi", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
+    ("user_settings", "eposta_gruplama", "VARCHAR(10) NOT NULL DEFAULT 'konu'", "VARCHAR(10) NOT NULL DEFAULT 'konu'"),
 ]
 # Sonradan eklenen tablolar; users tablosu olan şemada eksikse oluşturulur.
 EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim"]

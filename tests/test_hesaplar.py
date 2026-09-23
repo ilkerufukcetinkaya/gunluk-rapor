@@ -490,7 +490,8 @@ def test_bulunanlara_eposta_ve_commit_saati_yazilir(monkeypatch):
 
     with istemci() as c:
         giris(c)
-        c.put("/api/ayarlar", json={"gmail_kullanici": "a@ornek.com", "gmail_sifre": "s", "github_token": "t", "github_repo": "ben/proje"})
+        c.put("/api/ayarlar", json={"gmail_kullanici": "a@ornek.com", "gmail_sifre": "s", "github_token": "t", "github_repo": "ben/proje",
+                                   "eposta_gruplama": "alici"})
         bulunan = c.get("/api/bugun?yenile=1").json()["bulunan"]
 
     saat = lambda z: datetime.fromisoformat(z).astimezone(servisler.ISTANBUL).strftime("%H:%M")  # noqa: E731

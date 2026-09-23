@@ -48,7 +48,7 @@ def test_ayni_aliciya_uc_mail_gruplanir():
         mail("Mehmet <mehmet@msg.org.tr>", "B"),
         mail("crd@msg.org.tr", "Fwd: C"),
     ]
-    sonuc = servisler.epostalari_maddele(mailler, BEN, BUGUN)
+    sonuc = servisler.epostalari_maddele(mailler, BEN, BUGUN, gruplama="alici")
     assert [m["metin"] for m in sonuc] == ["MSG'ye 3 e-posta gönderildi (konular: A; B; C)"]
     assert sonuc[0]["kaynak"] == "eposta"
     assert sonuc[0]["id"] == servisler.madde_id("eposta", sonuc[0]["metin"])
@@ -151,7 +151,7 @@ def test_eposta_kaynak_zaman_gruplanan_maddede_en_son_saat():
         mail("c@msg.org.tr", "C", "Wed, 16 Sep 2026 10:00:00 +0300"),
         mail("a@imro.ie", "UTC'de dün", "Tue, 15 Sep 2026 21:30:00 +0000"),
     ]
-    sonuc = {m["metin"].split("'")[0]: m for m in servisler.epostalari_maddele(mailler, BEN, BUGUN)}
+    sonuc = {m["metin"].split("'")[0]: m for m in servisler.epostalari_maddele(mailler, BEN, BUGUN, gruplama="alici")}
     msg, imro = sonuc["MSG"], sonuc["IMRO"]
     assert msg["kaynak_zaman"].tzinfo == servisler.ISTANBUL
     assert msg["kaynak_zaman"].strftime("%Y-%m-%d %H:%M") == "2026-09-16 14:37"

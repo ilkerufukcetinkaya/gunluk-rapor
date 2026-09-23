@@ -99,6 +99,11 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <label class="alan" for="gmail_sifre">Uygulama şifresi <small>— Google hesabı › Güvenlik › Uygulama şifreleri</small></label>
           <input type="password" id="gmail_sifre" name="gmail_sifre" autocomplete="new-password">
           <p class="kayitli" id="gmail_sifre_durum"></p>
+          <label class="alan" for="eposta_gruplama">Gönderilen e-postalar</label>
+          <select id="eposta_gruplama" name="eposta_gruplama">
+            <option value="konu">Her konu ayrı madde (önerilen)</option>
+            <option value="alici">Alıcı başına tek madde</option>
+          </select>
           <p class="ipucu">Telefondan hızlı not: kendine 'rapor: ...' konulu e-posta at, akşam listede olur.</p>
         </div>
         <div class="row orta kaynak">
@@ -260,6 +265,7 @@ let ilkDoldurma = true;
 function doldur(a){
   sonAyar = a;
   ALANLAR.forEach(k => $(k).value = a[k] || '');
+  $('eposta_gruplama').value = a.eposta_gruplama === 'alici' ? 'alici' : 'konu';
   $('sozluk').value = Object.entries(a.alan_sozlugu || {}).map(([k, v]) => `${k}=${v}`).join('\n');
   $('gmail_sifre').value = ''; $('github_token').value = '';
   $('gmail_sifre').placeholder = a.gmail_sifre_kayitli ? 'kayıtlı ••••' : '';
@@ -291,6 +297,7 @@ function doldur(a){
 async function kaydet(){
   const govde = { alan_sozlugu: $('sozluk').value, kaynaklar: Object.fromEntries(KAYNAK_ANAHTARLARI.map(k => [k.dataset.kaynak, k.checked])) };
   ALANLAR.forEach(k => govde[k] = $(k).value);
+  govde.eposta_gruplama = $('eposta_gruplama').value;
   if ($('gmail_sifre').value.trim()) govde.gmail_sifre = $('gmail_sifre').value;
   if ($('github_token').value.trim()) govde.github_token = $('github_token').value;
   govde.hatirlatma_saat = $('hatirlatma_saat').value || '17:00';

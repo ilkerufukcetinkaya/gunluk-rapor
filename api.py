@@ -114,11 +114,17 @@ def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
         "alan_sozlugu": servisler.KURUMLAR if a.alan_sozlugu is None else a.alan_sozlugu,
         "kaynaklar": kaynak_durumu(a),
         "kurulum_tamam": bool(a.kurulum_tamam),
+        "eposta_gruplama": eposta_gruplama(a),
     }
+
+
+def eposta_gruplama(a: KullaniciAyari) -> str:
+    return a.eposta_gruplama if a.eposta_gruplama in servisler.GRUPLAMALAR else "konu"
 
 
 def cozulmus_ayarlar(a: KullaniciAyari) -> dict:
     return {
+        "eposta_gruplama": eposta_gruplama(a),
         "kaynaklar": kaynak_durumu(a),
         "gmail_kullanici": a.gmail_kullanici or "",
         "gmail_sifre": guvenlik.coz(a.gmail_sifre_enc),
@@ -402,16 +408,30 @@ def onbellegi_temizle() -> None:
     _onbellek.clear()
 
 
+def eposta_eskilerini_gizle(mevcut: dict, sonuc: dict) -> None:
+    """Bu taramada artık üretilmeyen bugünkü e-posta maddeleri (ör. E1 öncesi alıcı başına gruplu madde ya da
+    gruplama ayarı değişince eski biçim) gizlenir, silinmez; kullanıcının düzenlediğine dokunulmaz.
+    Gmail hata verdiyse ya da hiç e-posta bulunmadıysa hiçbir şey gizlenmez."""
+    if not sonuc["eposta"] or any(h["kaynak"] == "gmail" for h in sonuc["hatalar"]):
+        return
+    guncel = {m["id"] for m in sonuc["eposta"]}
+    for kaynak_id, m in mevcut.items():
+        if m.kaynak == "eposta" and kaynak_id not in guncel and not m.kullanici_duzenledi:
+            m.gizli = True
+
+
 def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool = False) -> dict:
     """Kullanıcı başına günde bir tarama (kilit + önbellek); bulunanları maddelere yazar, önbellek özetini döner."""
     anahtar = (kullanici.id, tarih.isoformat())
     with _kullanici_kilidi(kullanici.id):
         if yenile or anahtar not in _onbellek:
-            kayitli = set(db.scalars(select(Madde.kaynak_id).where(
+            mevcut = {m.kaynak_id: m for m in db.scalars(select(Madde).where(
                 Madde.user_id == kullanici.id, Madde.tur == "bulunan", Madde.tarih == tarih,
-            )))
+            ))}
+            # kullanıcının düzenlediği madde Claude'a hiç gitmez; metni değişen düzenlenmemiş madde yeniden çevrilir
+            haric = {k: None if m.kullanici_duzenledi else m.metin for k, m in mevcut.items()}
             sonuc = servisler.raporu_uret(
-                cozulmus_ayarlar(ayar_satiri(db, kullanici)), os.environ.get("ANTHROPIC_API_KEY", ""), kayitli,
+                cozulmus_ayarlar(ayar_satiri(db, kullanici)), os.environ.get("ANTHROPIC_API_KEY", ""), haric,
             )
             notlar = set(db.scalars(select(Madde.kaynak_id).where(
                 Madde.user_id == kullanici.id, Madde.tur == "bugun", Madde.tarih == tarih, Madde.kaynak == "not",
@@ -429,17 +449,26 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
                 not_sirasi += 1
             sira = sonraki_sira(db, kullanici, "bulunan", tarih)
             for m in sonuc["eposta"] + sonuc["medusa"]:
-                if m["id"] in kayitli:
-                    continue
                 zaman = m.get("kaynak_zaman")
-                db.add(Madde(
+                eski = mevcut.get(m["id"])
+                if eski is not None:
+                    # aynı konuya gün içinde yeni mail: madde güncellenir, çoğalmaz; kullanıcı düzenlediyse dokunulmaz
+                    if not eski.kullanici_duzenledi and eski.metin != m["metin"]:
+                        eski.metin = m["metin"]
+                        eski.metin_ai = m.get("metin_ai")
+                        eski.ai_tarih = tarih if m.get("metin_ai") else None
+                    if zaman and not eski.kullanici_duzenledi:
+                        eski.kaynak_zaman = utc(zaman)
+                    continue
+                mevcut[m["id"]] = Madde(
                     user_id=kullanici.id, tur="bulunan", metin=m["metin"], tarih=tarih,
                     kaynak=m["kaynak"], kaynak_id=m["id"], tikli=True, sira=sira,
                     metin_ai=m.get("metin_ai"), ai_tarih=tarih if m.get("metin_ai") else None,
                     kaynak_zaman=utc(zaman) if zaman else None,
-                ))
-                kayitli.add(m["id"])
+                )
+                db.add(mevcut[m["id"]])
                 sira += 1
+            eposta_eskilerini_gizle(mevcut, sonuc)
             db.commit()
             for eski in [k for k in _onbellek if k[0] == kullanici.id and k != anahtar]:
                 del _onbellek[eski]
@@ -714,6 +743,7 @@ class AyarGuncelle(BaseModel):
     hatirlatma_eposta: bool | None = None
     hatirlatma_eposta_adres: str | None = None
     kaynaklar: dict[str, bool] | None = None
+    eposta_gruplama: Literal["konu", "alici"] | None = None
 
 
 def sozlugu_ayristir(deger: str | dict[str, str]) -> dict[str, str]:
@@ -765,6 +795,9 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
     gunler = veri.pop("hatirlatma_gunler", None)
     if gunler is not None:
         a.hatirlatma_gunler = ",".join(map(str, gunleri_ayristir(gunler)))
+    gruplama = veri.pop("eposta_gruplama", None)
+    if gruplama is not None:
+        a.eposta_gruplama = gruplama
     for alan in ("hatirlatma_push", "hatirlatma_eposta"):
         deger = veri.pop(alan, None)
         if deger is not None:

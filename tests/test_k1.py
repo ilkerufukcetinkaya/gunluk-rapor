@@ -117,7 +117,7 @@ def test_sema_guncelle_eski_semada_kolon_tablo_ve_geri_doldurma(tmp_path):
 
     assert veritabani.sema_guncelle(eski) == [
         "claude_kullanim", "user_settings.kaynaklar", "user_settings.kurulum_tamam",
-        "hatirlatma_gonderimleri.hata_metni", "users.davet_eposta_tarihi",
+        "hatirlatma_gonderimleri.hata_metni", "users.davet_eposta_tarihi", "user_settings.eposta_gruplama",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.begin() as b:

@@ -59,12 +59,19 @@ SUREKLI_SABLONLAR = [
 ]
 
 
+EPOSTA_KURALI = (
+    "E-posta maddelerinde konu başlığını anlamını koruyarak cümlede tut; birden çok maddeyi birleştirme; "
+    "sayı ekleme ya da çıkarma yapma."
+)
+
+
 def claude_sistem(proje_adi: str = "") -> str:
     urun = f"ürün adı her zaman {proje_adi}. " if proje_adi else ""
     return (
         "Bir müzik edisyon şirketinde çalışan bir danışmanın günlük raporu için maddeler yazıyorsun. "
         "Teknik terimleri (trigram, indeks, rollup, N+1, commit, endpoint vb.) yöneticinin anlayacağı iş diline çevir; "
         "her girdi için TEK cümle, geçmiş zaman, abartı yok, uydurma yok. "
+        + EPOSTA_KURALI + " "
         + urun
         + "Yalnız JSON dizi döndür: [{\"id\":..., \"metin\":...}]"
     )
@@ -213,8 +220,33 @@ def eposta_metni(kurumlar: tuple[str, ...], konular: list[str]) -> str:
     return f"{hedef} {len(konular)} e-posta gönderildi (konular: {'; '.join(farkli)})"
 
 
-def epostalari_maddele(mailler: list[dict], kendi_adres: str, bugun: date, sozluk: dict[str, str] | None = None) -> list[dict]:
-    """mailler: {"date","subject","from","to","cc"} ham başlık değerleri."""
+GRUPLAMALAR = ("konu", "alici")
+
+
+def konu_anahtari(konu: str) -> str:
+    """Re:/Fwd:/YNT:/İLT: önekleri, büyük/küçük harf ve boşluk farkı yok sayılır."""
+    return re.sub(r"\s+", " ", _kucult(konu_temizle(konu))).strip()
+
+
+def konu_maddesi_id(kurum: str, konu: str, bugun: date) -> str:
+    return hashlib.sha1((kurum + konu_anahtari(konu) + bugun.isoformat()).encode("utf-8")).hexdigest()[:10]
+
+
+def konu_metni(kurum: str, konu: str, adet: int, digerleri: list[str]) -> str:
+    hedef = _hedef((kurum,))
+    ne = f"{adet} e-posta" if adet > 1 else "e-posta"
+    metin = f"{hedef} '{konu}' konulu {ne} gönderildi" if konu else (
+        f"{hedef} konusuz {adet} e-posta gönderildi" if adet > 1 else f"{hedef} konusuz bir e-posta gönderildi")
+    return metin + (f" (ayrıca {', '.join(digerleri)})" if digerleri else "")
+
+
+def epostalari_maddele(
+    mailler: list[dict], kendi_adres: str, bugun: date, sozluk: dict[str, str] | None = None, gruplama: str = "konu",
+) -> list[dict]:
+    """mailler: {"date","subject","from","to","cc"} ham başlık değerleri.
+    gruplama 'konu': gün + ilk To kurumu + temizlenmiş konu başına bir madde; 'alici': alıcı kurum(lar) başına bir madde."""
+    if gruplama != "alici":
+        return _konu_basina_maddele(mailler, kendi_adres, bugun, sozluk)
     gruplar: dict[tuple[str, ...], list[str]] = {}
     son_zaman: dict[tuple[str, ...], datetime] = {}
     for m in mailler:
@@ -232,6 +264,35 @@ def epostalari_maddele(mailler: list[dict], kendi_adres: str, bugun: date, sozlu
         gruplar.setdefault(anahtar, []).append(konu_temizle(basligi_coz(m.get("subject"))))
         son_zaman[anahtar] = max(zaman, son_zaman.get(anahtar, zaman))  # grupta en son mailin saati
     return tekille([madde("eposta", eposta_metni(k, konular), son_zaman[k]) for k, konular in gruplar.items()])
+
+
+def _konu_basina_maddele(mailler: list[dict], kendi_adres: str, bugun: date, sozluk: dict[str, str] | None) -> list[dict]:
+    gruplar: dict[tuple[str, str], dict] = {}
+    for m in mailler:
+        zaman = istanbul_zamani(m.get("date"))
+        if zaman is None or zaman.date() != bugun:
+            continue
+        if NOREPLY.search(m.get("from") or ""):
+            continue
+        kime = _alicilar(m.get("to"), kendi_adres, sozluk)
+        kurumlar = list(dict.fromkeys(kime + _alicilar(m.get("cc"), kendi_adres, sozluk)))
+        if len(kurumlar) > 1 and SIRKET_ICI in kurumlar:
+            kurumlar.remove(SIRKET_ICI)
+        if not kurumlar:
+            continue  # kendine gönderilen veya yalnız noreply adreslerine giden
+        esas = kurumlar[0]  # ilk To alıcısının kurumu; To boşsa ilk Cc
+        konu = konu_temizle(basligi_coz(m.get("subject")))
+        g = gruplar.setdefault((esas, konu_anahtari(konu)), {"konu": konu, "ilk": zaman, "son": zaman, "adet": 0, "diger": []})
+        g["adet"] += 1
+        if zaman < g["ilk"]:  # konu yazımı gündeki ilk mailden alınır; tarama sırasından bağımsız
+            g["konu"], g["ilk"] = konu, zaman
+        g["son"] = max(g["son"], zaman)
+        g["diger"] += [k for k in kurumlar[1:] if k not in g["diger"]]
+    return [
+        {"id": konu_maddesi_id(esas, g["konu"], bugun), "metin": konu_metni(esas, g["konu"], g["adet"], g["diger"]),
+         "kaynak": "eposta", "kaynak_zaman": g["son"]}
+        for (esas, _), g in gruplar.items()
+    ]
 
 
 NOT_ONEKI = re.compile(r"^\s*(rapor|not)\s*:\s*", re.IGNORECASE)
@@ -366,7 +427,9 @@ def gmail_test(kullanici: str, sifre: str) -> str:
     return "Gmail: bağlandı, Gönderilmiş klasörü bulundu"
 
 
-def gmail_tara(kullanici: str, sifre: str, bugun: date, sozluk: dict[str, str] | None = None) -> list[dict]:
+def gmail_tara(
+    kullanici: str, sifre: str, bugun: date, sozluk: dict[str, str] | None = None, gruplama: str = "konu",
+) -> list[dict]:
     """Gönderilen e-posta maddeleri (kaynak 'eposta') + kendine atılan not maddeleri (kaynak 'not')."""
     def oku(M: imaplib.IMAP4_SSL) -> list[dict]:
         dun = bugun - timedelta(days=1)
@@ -390,7 +453,7 @@ def gmail_tara(kullanici: str, sifre: str, bugun: date, sozluk: dict[str, str] |
                 _, govde = M.fetch(m["imap_id"], "(BODY.PEEK[])")
                 ham = next((g[1] for g in govde if isinstance(g, tuple)), b"")
                 m["govde"] = duz_metin_govde(email.message_from_bytes(ham))
-        return epostalari_maddele(gonderilen, kullanici, bugun, sozluk) + notlari_maddele(notlar, kullanici, bugun)
+        return epostalari_maddele(gonderilen, kullanici, bugun, sozluk, gruplama) + notlari_maddele(notlar, kullanici, bugun)
 
     return _gmail_oturumu(kullanici, sifre, oku)
 
@@ -575,6 +638,7 @@ def duzelt_sistemi(proje_adi: str = "") -> str:
         "- Olgu ekleme, çıkarma, yorum katma; \"tamamlandı\" gibi durum bilgileri de cümlede kalır. "
         "Kişi, kurum, ürün adları ve sayılar aynen korunur.\n"
         "- Teknik terimleri yöneticinin anlayacağı iş diline çevir. " + urun + "\n"
+        "- " + EPOSTA_KURALI + "\n"
         "- 'devam' türündeki maddelerde işin adı ve aşaması tek cümlede birleşir (örn. \"… için yanıt bekleniyor.\").\n"
         "- 'surekli' türündeki maddeler her gün tekrarlanan işlerdir: son raporlardaki cümlelerle aynı olmayan "
         "ama aynı anlama gelen, doğal bir ifade yaz. Metinde | ile ayrılmış seçenekler varsa hepsi aynı işin "
@@ -675,9 +739,12 @@ def surekli_varyant(metin: str, tarih: date) -> str:
 
 # ---------------------------------------------------------------- birleştirme
 
-def raporu_uret(ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | frozenset = frozenset()) -> dict:
-    """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu (çözülmüş).
-    haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez."""
+def raporu_uret(
+    ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | frozenset | dict[str, str | None] = frozenset(),
+) -> dict:
+    """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu, eposta_gruplama (çözülmüş).
+    haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez. Sözlükse id → kayıtlı metin: metni
+    değişen (ör. aynı konuya yeni mail gelen) madde yeniden çevrilir; değer None ise hiç gönderilmez."""
     bugun = istanbul_bugun()
     sonuc = {"tarih": bugun.isoformat(), "eposta": [], "medusa": [], "not": [], "hatalar": []}
     # Kapalı kaynak sessizce atlanır; açık ama ayarı eksik olan uyarı yazar.
@@ -685,7 +752,10 @@ def raporu_uret(ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | f
 
     if acik.get("gmail") and ayarlar.get("gmail_kullanici") and ayarlar.get("gmail_sifre"):
         try:
-            bulunan = gmail_tara(ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], bugun, ayarlar.get("alan_sozlugu"))
+            bulunan = gmail_tara(
+                ayarlar["gmail_kullanici"], ayarlar["gmail_sifre"], bugun, ayarlar.get("alan_sozlugu"),
+                ayarlar.get("eposta_gruplama") or "konu",
+            )
             sonuc["eposta"] = [m for m in bulunan if m["kaynak"] != "not"]
             sonuc["not"] = [m for m in bulunan if m["kaynak"] == "not"]
         except KaynakHatasi as e:
@@ -705,7 +775,12 @@ def raporu_uret(ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | f
     elif acik.get("github"):
         sonuc["hatalar"].append({"kaynak": "github", "mesaj": "GitHub ayarı girilmemiş (Ayarlar)"})
 
-    yeniler = [m for m in sonuc["eposta"] + sonuc["medusa"] if m["id"] not in haric_idler]
+    def kayitli(m: dict) -> bool:
+        if m["id"] not in haric_idler:
+            return False
+        return not isinstance(haric_idler, dict) or haric_idler[m["id"]] in (None, m["metin"])
+
+    yeniler = [m for m in sonuc["eposta"] + sonuc["medusa"] if not kayitli(m)]
     if api_anahtari and yeniler:
         cevrilmis, hata = claude_cevir(yeniler, api_anahtari, proje_adi=ayarlar.get("proje_adi") or "")
         if not hata:  # metin ham kalır; çeviri metin_ai'ye gider

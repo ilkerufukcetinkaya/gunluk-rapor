@@ -409,7 +409,7 @@ def test_sema_guncelle_hatirlatma_iki_kez(tmp_path):
         "push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim",
         "user_settings.hatirlatma_saat", "user_settings.hatirlatma_gunler", "user_settings.hatirlatma_push",
         "user_settings.hatirlatma_eposta", "user_settings.hatirlatma_eposta_adres",
-        "user_settings.kaynaklar", "user_settings.kurulum_tamam", "users.davet_eposta_tarihi",
+        "user_settings.kaynaklar", "user_settings.kurulum_tamam", "users.davet_eposta_tarihi", "user_settings.eposta_gruplama",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:
