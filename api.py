@@ -34,6 +34,7 @@ EPOSTA_BICIMI = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SAAT_BICIMI = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 ALAN_BICIMI = re.compile(r"^[\w-]+(\.[\w-]+)+$")
 VARSAYILAN_SAAT = time(17, 0)
+VARSAYILAN_OTOMATIK_SAAT = time(18, 30)
 VARSAYILAN_GUNLER = "1,2,3,4,5"
 TEMEL_KAYNAKLAR = ("gmail", "github", "medusa")
 GOOGLE_KAYNAKLARI = ("takvim", "drive")  # yalnız Google bağlantısıyla (ve kapsamı verilmişse) açılabilir
@@ -107,6 +108,17 @@ def hatirlatma_ayari(a: KullaniciAyari) -> dict:
         "push": a.hatirlatma_push is not False,
         "eposta": a.hatirlatma_eposta is not False,
         "adres": a.hatirlatma_eposta_adres or "",
+    }
+
+
+def otomatik_ayari(a: KullaniciAyari) -> dict:
+    """O1 ayarları; günler hatırlatmanınkiyle aynıdır."""
+    return {
+        "acik": a.otomatik_gonder is True,
+        "saat": a.otomatik_saat or VARSAYILAN_OTOMATIK_SAAT,
+        "patron_eposta": a.patron_eposta or "",
+        "patron_adi": a.patron_adi or "",
+        "kopya_bana": a.otomatik_kopya_bana is not False,
     }
 
 
@@ -260,8 +272,13 @@ def acik_bulunan_kaynaklari(a: KullaniciAyari) -> set[str]:
 
 def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
     """Şifre ve token hiçbir zaman dönmez; yalnız kayıtlı olup olmadıkları."""
-    h = hatirlatma_ayari(a)
+    h, o = hatirlatma_ayari(a), otomatik_ayari(a)
     return {
+        "otomatik_gonder": o["acik"],
+        "otomatik_saat": o["saat"].strftime("%H:%M"),
+        "patron_eposta": o["patron_eposta"],
+        "patron_adi": o["patron_adi"],
+        "otomatik_kopya_bana": o["kopya_bana"],
         "hatirlatma_saat": h["saat"].strftime("%H:%M"),
         "hatirlatma_gunler": h["gunler"],
         "hatirlatma_push": h["push"],
@@ -630,9 +647,7 @@ def durum(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullani
         .order_by(Madde.tur, Madde.sira, Madde.id)
     ).all()
     ifadeler = bugunku_ifadeler(db, kullanici.id, tarih)
-    son_kopya = db.scalar(select(Rapor.olusturma).where(
-        Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == tarih,
-    ))
+    rapor = db.scalar(select(Rapor).where(Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == tarih))
     onbellek = _onbellek.get((kullanici.id, tarih.isoformat())) or {}
     acik = acik_bulunan_kaynaklari(a)
     kacirilan = kacirilan_gun(db, kullanici, a, bugun_) if tarih == bugun_ else None
@@ -649,7 +664,9 @@ def durum(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullani
         "rapor_metni": gunun_rapor_metni(db, kullanici, tarih, duzen),
         "ayarlar": ayar_ozeti(a, kullanici),
         "ai_anahtari": bool(ai_anahtari()),
-        "son_kopya": zaman_iso(son_kopya),
+        "son_kopya": zaman_iso(rapor.olusturma) if rapor else None,
+        "gonderim": (rapor.gonderim or "elle") if rapor else None,  # 'otomatik': patrona e-postayla gitti
+        "otomatik": otomatik_ozeti(db, kullanici, a, tarih) if tarih == bugun_ else None,
         "tarama_zamani": onbellek.get("tarama_zamani"),
     }
 
@@ -1198,7 +1215,32 @@ def rapor_json(r: Rapor) -> dict:
         "ilk_satir": next((x.strip() for x in satirlar if x.strip()), ""),
         "madde_sayisi": sum(1 for x in satirlar if x.lstrip().startswith("•")),
         "olusturma": zaman_iso(r.olusturma),
+        "gonderim": r.gonderim or "elle",
     }
+
+
+def rapor_yaz(db: Session, user_id: int, tarih: date, tur: str, metin: str, hafta: date | None = None,
+              gonderim: str | None = None) -> Rapor:
+    """(kullanıcı, gün, tür) başına tek satır; son yazan kazanır. gonderim verilmezse eski değer korunur."""
+    kosul = (Rapor.user_id == user_id, Rapor.tarih == tarih, Rapor.tur == tur)
+    with _kullanici_kilidi(user_id, "rapor"):
+        for deneme in range(2):
+            rapor = db.scalar(select(Rapor).where(*kosul))
+            if rapor is None:
+                rapor = Rapor(user_id=user_id, tarih=tarih, tur=tur, hafta_baslangic=hafta, metin=metin)
+                db.add(rapor)
+            rapor.metin = metin
+            rapor.olusturma = simdi()  # son kopyalanan kazanır
+            if gonderim:
+                rapor.gonderim = gonderim
+            try:
+                db.commit()
+                return rapor
+            except IntegrityError:
+                db.rollback()
+                if deneme:
+                    raise
+    return rapor
 
 
 @router.post("/raporlar")
@@ -1214,23 +1256,7 @@ def rapor_kaydet(
         tarih = hafta
     else:
         hafta, tarih = None, gun_sec(govde.tarih or tarih)
-    kosul = (Rapor.user_id == kullanici.id, Rapor.tarih == tarih, Rapor.tur == govde.tur)
-    with _kullanici_kilidi(kullanici.id, "rapor"):
-        for deneme in range(2):
-            rapor = db.scalar(select(Rapor).where(*kosul))
-            if rapor is None:
-                rapor = Rapor(user_id=kullanici.id, tarih=tarih, tur=govde.tur, hafta_baslangic=hafta, metin=metin)
-                db.add(rapor)
-            rapor.metin = metin
-            rapor.olusturma = simdi()  # son kopyalanan kazanır
-            try:
-                db.commit()
-                break
-            except IntegrityError:
-                db.rollback()
-                if deneme:
-                    raise
-    return rapor_json(rapor)
+    return rapor_json(rapor_yaz(db, kullanici.id, tarih, govde.tur, metin, hafta))
 
 
 @router.get("/raporlar")
@@ -1489,6 +1515,11 @@ class AyarGuncelle(BaseModel):
     karistir: bool | None = None
     kendi_alanlar: str | list[str] | None = None
     ekip_ici_atla: bool | None = None
+    otomatik_gonder: bool | None = None
+    otomatik_saat: str | None = None
+    patron_eposta: str | None = None
+    patron_adi: str | None = None
+    otomatik_kopya_bana: bool | None = None
 
 
 def kendi_alanlari_ayristir(deger: str | list[str]) -> list[str]:
@@ -1546,12 +1577,13 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
     if "alan_sozlugu" in veri:
         deger = veri.pop("alan_sozlugu")
         a.alan_sozlugu = None if deger is None else sozlugu_ayristir(deger)
-    saat = veri.pop("hatirlatma_saat", None)
-    if saat is not None:
-        eslesme = SAAT_BICIMI.match(saat.strip())
-        if not eslesme:
-            raise HTTPException(status_code=422, detail="Hatırlatma saati SS:DD biçiminde olmalı")
-        a.hatirlatma_saat = time(int(eslesme.group(1)), int(eslesme.group(2)))
+    for alan, ad in (("hatirlatma_saat", "Hatırlatma saati"), ("otomatik_saat", "Otomatik gönderim saati")):
+        saat = veri.pop(alan, None)
+        if saat is not None:
+            eslesme = SAAT_BICIMI.match(saat.strip())
+            if not eslesme:
+                raise HTTPException(status_code=422, detail=f"{ad} SS:DD biçiminde olmalı")
+            setattr(a, alan, time(int(eslesme.group(1)), int(eslesme.group(2))))
     gunler = veri.pop("hatirlatma_gunler", None)
     if gunler is not None:
         a.hatirlatma_gunler = ",".join(map(str, gunleri_ayristir(gunler)))
@@ -1561,7 +1593,8 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
     if "kendi_alanlar" in veri:
         deger = veri.pop("kendi_alanlar")
         a.kendi_alanlar = kendi_alanlari_ayristir(deger) if deger is not None else None
-    for alan in ("hatirlatma_push", "hatirlatma_eposta", "rapor_bicimi", "karistir", "ekip_ici_atla"):
+    for alan in ("hatirlatma_push", "hatirlatma_eposta", "rapor_bicimi", "karistir", "ekip_ici_atla",
+                 "otomatik_gonder", "otomatik_kopya_bana"):
         deger = veri.pop(alan, None)
         if deger is not None:
             setattr(a, alan, deger)
@@ -1570,6 +1603,13 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
         if adres and not EPOSTA_BICIMI.match(adres):
             raise HTTPException(status_code=422, detail="Hatırlatma e-posta adresi geçerli değil")
         a.hatirlatma_eposta_adres = adres
+    if "patron_eposta" in veri:
+        adres = (veri.pop("patron_eposta") or "").strip().lower() or None
+        if adres and not EPOSTA_BICIMI.match(adres):
+            raise HTTPException(status_code=422, detail="Patron e-posta adresi geçerli değil")
+        a.patron_eposta = adres
+    if "patron_adi" in veri:
+        a.patron_adi = re.sub(r"\s+", " ", veri.pop("patron_adi") or "").strip()[:120] or None
     for alan, deger in veri.items():
         deger = (deger or "").strip() or None
         if alan == "github_repo" and deger and not REPO_BICIMI.match(deger):
@@ -1577,6 +1617,8 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
         if alan == "gmail_kullanici" and deger:
             deger = deger.lower()
         setattr(a, alan, deger)
+    if a.otomatik_gonder and not a.patron_eposta:  # commit yok; istek bitince oturum geri alınır
+        raise HTTPException(status_code=422, detail="Patron e-postası gerekli")
     db.commit()
     return ayar_ozeti(a, kullanici)
 
@@ -1925,7 +1967,7 @@ def hatirlatma_epostasi(ozet: str, bulunanlar: list[Madde], tarih: date, google:
     return "\n".join(satirlar + [app_url(), "", "Bu hatırlatma, raporu kopyaladığın gün gelmez."])
 
 
-KANAL_ADI = {"push": "push", "eposta": "e-posta"}
+KANAL_ADI = {"push": "push", "eposta": "e-posta", "otomatik": "patrona e-posta", "otomatik_uyari": "ön uyarı"}
 
 
 def son_hatirlatmalar(db: Session) -> dict[int, dict]:
@@ -1948,9 +1990,9 @@ def son_hatirlatmalar(db: Session) -> dict[int, dict]:
     return ozet
 
 
-def kanal_talep_et(db: Session, user_id: int, tarih: date, kanal: str) -> HatirlatmaGonderimi | None:
+def kanal_talep_et(db: Session, user_id: int, tarih: date, kanal: str, durum: str = "gonderiliyor") -> HatirlatmaGonderimi | None:
     """Gönderimden önce satırı yazar; aynı gün başka bir ping bu kanalı aldıysa None."""
-    kayit = HatirlatmaGonderimi(user_id=user_id, tarih=tarih, kanal=kanal, durum="gonderiliyor")
+    kayit = HatirlatmaGonderimi(user_id=user_id, tarih=tarih, kanal=kanal, durum=durum)
     db.add(kayit)
     try:
         db.commit()
@@ -1972,6 +2014,15 @@ def kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
     sonuc = _kullaniciya_hatirlat(db, k, an)
     log.info("hatirlat user=%s push=%s eposta=%s neden=%s",
              sonuc["user_id"], sonuc["push"], sonuc["eposta"], sonuc["neden"] or "-")
+    try:
+        otomatik = otomatik_denetle(db, k, an)
+    except Exception as e:  # hatırlatmanın sonucu korunur
+        db.rollback()
+        otomatik = f"beklenmeyen hata ({e.__class__.__name__})"
+        log.warning("otomatik user=%s neden=%s", k.id, otomatik)
+    if otomatik is not None:  # yalnız otomatik gönderimi açık kullanıcılarda
+        sonuc["otomatik"] = otomatik
+        log.info("otomatik user=%s sonuc=%s", k.id, otomatik)
     return sonuc
 
 
@@ -2124,3 +2175,262 @@ def hatirlat(request: Request, token: str = "", db: Session = Depends(oturum)) -
         return {"zaman": son_hatirlat_ping, "kullanicilar": sonuclar, "kalan": 0}
     finally:
         _hatirlat_kilidi.release()
+
+
+# ---------------------------------------------------------------- O1: unutursan otomatik e-posta teslimi
+
+OTOMATIK_UYARI_ONCESI = timedelta(minutes=15)
+OTOMATIK_ALT_SATIR = "Bu rapor Günlük Rapor ile gönderildi."
+OTOMATIK_KAYIT_NEDENI = {
+    "iptal": "bugün iptal edildi", "gonderildi": "bugün gönderildi", "gonderiliyor": "gönderim sürüyor",
+    "hata": "bugün denendi, hata verdi",
+}
+
+
+def patron_hedefi(o: dict, varsayilan: str = "patronuna") -> str:
+    """'Ahmet Bey' → "Ahmet Bey'e"; ad yoksa varsayılan."""
+    return servisler.yonelme_eki(o["patron_adi"]) if o["patron_adi"] else varsayilan
+
+
+def otomatik_kaydi(db: Session, user_id: int, tarih: date) -> HatirlatmaGonderimi | None:
+    return db.scalar(select(HatirlatmaGonderimi).where(
+        HatirlatmaGonderimi.user_id == user_id, HatirlatmaGonderimi.tarih == tarih, HatirlatmaGonderimi.kanal == "otomatik",
+    ))
+
+
+def otomatik_kaydini_devral(db: Session, kayit_id: int, eski: tuple[str, ...], yeni: str) -> bool:
+    """Satırın durumu hâlâ `eski`lerden biriyse tek UPDATE ile `yeni`ye geçirir (aynı anda iki istek tek kazanır)."""
+    tablo = HatirlatmaGonderimi.__table__
+    n = db.execute(tablo.update().where(tablo.c.id == kayit_id, tablo.c.durum.in_(eski)).values(
+        durum=yeni, hata_metni=None)).rowcount
+    db.commit()
+    return bool(n)
+
+
+def otomatik_ozeti(db: Session, k: Kullanici, a: KullaniciAyari, tarih: date) -> dict:
+    """Bugün sayfası için: bilgi satırı, mavi şerit ve başarısız gönderim uyarısı."""
+    o = otomatik_ayari(a)
+    kayit = otomatik_kaydi(db, k.id, tarih)
+    return {
+        "acik": o["acik"] and bool(o["patron_eposta"]),
+        "saat": o["saat"].strftime("%H:%M"),
+        "patron_adi": o["patron_adi"],
+        "hedef": patron_hedefi(o),
+        "gun": tarih.isoweekday() in hatirlatma_ayari(a)["gunler"],
+        "durum": kayit.durum if kayit else None,  # None | gonderiliyor | gonderildi | hata | iptal
+        "hata": (kayit.hata_metni or "") if kayit else "",
+    }
+
+
+def otomatik_hazirlik(db: Session, k: Kullanici, tarih: date) -> int:
+    """Bulunanlar taranır (günde bir, önbellekli; tarama düşerse mevcut maddelerle devam edilir).
+    Rapora girecek tikli madde sayısını döner."""
+    try:
+        bugun_taramasi(db, k, tarih)
+    except Exception as e:
+        db.rollback()
+        log.warning("otomatik tarama yapilamadi user=%s neden=%s", k.id, e.__class__.__name__)
+    return sum(1 for m in rapor_adaylari(db, k, tarih, ayar_satiri(db, k)) if m.tikli)
+
+
+def otomatik_rapor_metni(db: Session, k: Kullanici, tarih: date, duzelt: bool = True) -> str:
+    """Kopyala'nın üreteceği metin. duzelt: önce /api/duzelt gibi günün paketi düzeltilir (kota dahil);
+    anahtar yoksa, kota doluysa ya da Claude hata verirse ham metinle devam edilir."""
+    anahtar = ai_anahtari() if duzelt else ""
+    if anahtar:
+        try:
+            with _kullanici_kilidi(k.id, "duzelt"):
+                sonuc = duzeltmeyi_uygula(db, k, duzeltme_paketi(db, k, tarih), tarih, anahtar)
+            neden = sonuc.get("atlandi") or "; ".join(sonuc["hatalar"])
+            if neden:
+                log.info("otomatik duzeltme user=%s neden=%s", k.id, neden[:200])
+        except Exception as e:
+            db.rollback()
+            log.warning("otomatik duzeltme user=%s beklenmeyen hata (%s)", k.id, e.__class__.__name__)
+    return gunun_rapor_metni(db, k, tarih)
+
+
+def otomatik_eposta(k: Kullanici, tarih: date, metin: str, test: bool = False) -> tuple[str, str]:
+    """(konu, gövde): gövde, Kopyala metninin kalın işaretsiz hâli ve tek satırlık alt not."""
+    konu = f"Günlük Rapor – {k.ad} – {tarih.strftime('%d.%m.%Y')}"
+    return (f"[TEST] {konu}" if test else konu), f"{servisler.kalin_isaretsiz(metin)}\n\n{OTOMATIK_ALT_SATIR}"
+
+
+def otomatik_gonder(db: Session, k: Kullanici, tarih: date, kayit: HatirlatmaGonderimi, bildir: bool = True) -> str | None:
+    """kayit: 'gonderiliyor' ön kaydı (çift gönderim kilidi). Başarıda None; hatada neden yazılır, bildir ise push'la
+    kullanıcıya haber verilir. Kayıt kaldığı için cron aynı gün yeniden denemez."""
+    a = ayar_satiri(db, k)
+    o = otomatik_ayari(a)
+    try:
+        metin = otomatik_rapor_metni(db, k, tarih)
+        konu, govde = otomatik_eposta(k, tarih, metin)
+        ayarlar = cozulmus_ayarlar(a)
+        hata = servisler.eposta_gonder(
+            o["patron_eposta"], konu, govde, yanit_adresi=k.eposta, kopya=k.eposta if o["kopya_bana"] else None,
+            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"],
+        )
+    except Exception as e:
+        db.rollback()
+        hata = f"beklenmeyen hata ({e.__class__.__name__})"
+    if hata:
+        kanal_hatasi_yaz(kayit, k.id, "otomatik", hata)
+        db.commit()
+        if bildir:
+            try:
+                push_cihazlarina_gonder(db, k.id, {
+                    "baslik": "Günlük Rapor", "govde": f"Otomatik gönderim başarısız: {hata} — elle gönder", "url": app_url(),
+                })
+            except Exception:
+                db.rollback()
+        return hata
+    rapor_yaz(db, k.id, tarih, "gunluk", metin, gonderim="otomatik")
+    kayit.durum = "gonderildi"
+    db.commit()
+    return None
+
+
+def otomatik_uyarisi(db: Session, k: Kullanici, a: KullaniciAyari, o: dict, tarih: date) -> str:
+    """15 dk önce bir kez: push (cihaz varsa) + e-posta hatırlatması açıksa e-posta. Bağlantı mavi şeridi açar."""
+    kayit = kanal_talep_et(db, k.id, tarih, "otomatik_uyari")
+    if kayit is None:
+        return "ön uyarı gönderildi"
+    cumle = f"Raporun {servisler.saatte_eki(o['saat'].strftime('%H:%M'))} {patron_hedefi(o, 'patrona')} e-postayla gidecek."
+    adres = f"{app_url()}/?otomatik=uyari"
+    parcalar, hatalar, ulasti = [], [], False
+    try:
+        basarili, toplam, ayrinti = push_cihazlarina_gonder(db, k.id, {"baslik": "Günlük Rapor", "govde": cumle, "url": adres})
+        if toplam:
+            parcalar.append(f"push {basarili}/{toplam}")
+            ulasti = ulasti or bool(basarili)
+            hatalar += [c["mesaj"] for c in ayrinti if c["durum"] != "ok"]
+    except Exception as e:
+        db.rollback()
+        hatalar.append(f"push: beklenmeyen hata ({e.__class__.__name__})")
+    h = hatirlatma_ayari(a)
+    if h["eposta"]:
+        ayarlar = cozulmus_ayarlar(a)
+        govde = "\n".join([cumle, "", f"Şimdi gönder ya da bugün iptal et: {adres}", "",
+                           "Rapor bu saate kadar kopyalanırsa hiçbir şey gönderilmez."])
+        try:
+            hata = servisler.eposta_gonder(
+                h["adres"] or k.eposta, f"{cumle[:-1]} – {tarih.strftime('%d.%m.%Y')}", govde, yanit_adresi=k.eposta,
+                gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"],
+            )
+        except Exception as e:
+            hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
+        parcalar.append("e-posta " + ("hata" if hata else "gönderildi"))
+        ulasti = ulasti or not hata
+        if hata:
+            hatalar.append(hata)
+    if ulasti:
+        kayit.durum = "gonderildi"
+    else:
+        kanal_hatasi_yaz(kayit, k.id, "otomatik_uyari", "; ".join(hatalar) or "bildirim açılmış cihaz yok, e-posta hatırlatması kapalı")
+    db.commit()
+    return "ön uyarı: " + (", ".join(parcalar) or "ulaşılacak kanal yok")
+
+
+def otomatik_denetle(db: Session, k: Kullanici, an: datetime) -> str | None:
+    """Cron ping'i başına: otomatik gönderim kapalıysa None; değilse ne yapıldığını ya da neden yapılmadığını döner."""
+    a = ayar_satiri(db, k)
+    o = otomatik_ayari(a)
+    if not (o["acik"] and o["patron_eposta"]):
+        return None
+    tarih = an.date()
+    if tarih.isoweekday() not in hatirlatma_ayari(a)["gunler"]:
+        return "bugün gönderim günü değil"
+    gonderim_ani = datetime.combine(tarih, o["saat"], tzinfo=an.tzinfo)
+    uyari_ani = gonderim_ani - OTOMATIK_UYARI_ONCESI
+    if an < uyari_ani:
+        return f"saat {uyari_ani.strftime('%H:%M')} olmadı"
+    if db.scalar(select(Rapor.id).where(Rapor.user_id == k.id, Rapor.tur == "gunluk", Rapor.tarih == tarih)):
+        return "bugünün raporu kopyalanmış"
+    kayitlar = {g.kanal: g for g in db.scalars(select(HatirlatmaGonderimi).where(
+        HatirlatmaGonderimi.user_id == k.id, HatirlatmaGonderimi.tarih == tarih,
+        HatirlatmaGonderimi.kanal.in_(("otomatik", "otomatik_uyari")),
+    ))}
+    if "otomatik" in kayitlar:
+        return OTOMATIK_KAYIT_NEDENI.get(kayitlar["otomatik"].durum, kayitlar["otomatik"].durum)
+    uyari_vakti = an < gonderim_ani  # saat geçtiyse (ping kaçtıysa) uyarı atlanır, doğrudan gönderilir
+    if uyari_vakti and "otomatik_uyari" in kayitlar:
+        return "ön uyarı gönderildi"
+    if not otomatik_hazirlik(db, k, tarih):
+        return "gönderilecek tikli madde yok"
+    if uyari_vakti:
+        return otomatik_uyarisi(db, k, a, o, tarih)
+    kayit = kanal_talep_et(db, k.id, tarih, "otomatik")
+    if kayit is None:
+        return "gönderim sürüyor"
+    hata = otomatik_gonder(db, k, tarih, kayit)
+    return f"hata: {hata}" if hata else "gönderildi"
+
+
+class OtomatikGun(BaseModel):
+    tarih: date | None = None
+
+
+def otomatik_gunu(tarih: date | None) -> date:
+    bugun_ = bugun()
+    if tarih is not None and tarih != bugun_:
+        raise HTTPException(status_code=422, detail="Yalnız bugünün otomatik gönderimi değiştirilebilir")
+    return bugun_
+
+
+@router.post("/otomatik/iptal")
+def otomatik_iptal(
+    govde: OtomatikGun | None = None, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
+) -> dict:
+    """Bugünün otomatik gönderimini iptal eder: kanal='otomatik' satırı 'iptal' olarak yazılır."""
+    tarih = otomatik_gunu(govde.tarih if govde else None)
+    if kanal_talep_et(db, kullanici.id, tarih, "otomatik", durum="iptal") is None:
+        kayit = otomatik_kaydi(db, kullanici.id, tarih)
+        if kayit is None or not (kayit.durum == "iptal" or otomatik_kaydini_devral(db, kayit.id, ("hata",), "iptal")):
+            raise HTTPException(status_code=409, detail="Rapor zaten e-postayla gönderildi")
+    log.info("otomatik iptal user=%s", kullanici.id)
+    return {"ok": True, "otomatik": otomatik_ozeti(db, kullanici, ayar_satiri(db, kullanici), tarih)}
+
+
+@router.post("/otomatik/simdi")
+def otomatik_simdi(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Kullanıcı eylemi: aynı gönderim hemen. İptal edilmiş ya da hata vermiş gün yeniden gönderilebilir."""
+    tarih = bugun()
+    a = ayar_satiri(db, kullanici)
+    if not otomatik_ayari(a)["patron_eposta"]:
+        raise HTTPException(status_code=422, detail="Patron e-postası gerekli")
+    if db.scalar(select(Rapor.id).where(Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == tarih)):
+        raise HTTPException(status_code=409, detail="Bugünün raporu zaten gönderildi")
+    if not otomatik_hazirlik(db, kullanici, tarih):
+        raise HTTPException(status_code=422, detail="Gönderilecek tikli madde yok")
+    kayit = kanal_talep_et(db, kullanici.id, tarih, "otomatik")
+    if kayit is None:
+        kayit = otomatik_kaydi(db, kullanici.id, tarih)
+        if kayit is None or not otomatik_kaydini_devral(db, kayit.id, ("iptal", "hata"), "gonderiliyor"):
+            raise HTTPException(status_code=409, detail="Rapor zaten e-postayla gönderildi")
+        db.refresh(kayit)
+    hata = otomatik_gonder(db, kullanici, tarih, kayit, bildir=False)
+    log.info("otomatik simdi user=%s sonuc=%s", kullanici.id, hata[:200] if hata else "gönderildi")
+    if hata:
+        raise HTTPException(status_code=502, detail=f"Gönderilemedi: {hata}")
+    rapor = db.scalar(select(Rapor).where(Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == tarih))
+    return {"ok": True, "rapor": rapor_json(rapor), "otomatik": otomatik_ozeti(db, kullanici, a, tarih)}
+
+
+@router.post("/otomatik/test")
+def otomatik_test(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Yalnız kullanıcının kendisine, patrona gidecek biçimde (konu başında [TEST]). Claude kotası harcanmaz;
+    rapor kaydedilmez."""
+    tarih = bugun()
+    if not otomatik_hazirlik(db, kullanici, tarih):
+        raise HTTPException(status_code=422, detail="Gönderilecek tikli madde yok")
+    konu, govde = otomatik_eposta(kullanici, tarih, otomatik_rapor_metni(db, kullanici, tarih, duzelt=False), test=True)
+    ayarlar = cozulmus_ayarlar(ayar_satiri(db, kullanici))
+    try:
+        hata = servisler.eposta_gonder(
+            kullanici.eposta, konu, govde, yanit_adresi=kullanici.eposta,
+            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"])
+    except Exception as e:
+        hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
+    log.info("otomatik test user=%s sonuc=%s", kullanici.id, hata[:200] if hata else "gönderildi")
+    if hata:
+        return {"ok": False, "neden": hata}
+    return {"ok": True, "adres": kullanici.eposta}

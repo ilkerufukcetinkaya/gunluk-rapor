@@ -35,13 +35,14 @@
 </div>
 
 <script>
-// Üst bardaki durum rozeti: bugünkü rapor kopyalandıysa yeşil, değilse hatırlatma saatiyle sarı.
-window.durumRozeti = (sonKopya, saat) => {
+// Üst bardaki durum rozeti: bugünkü rapor kopyalandıysa (ya da otomatik e-postayla gittiyse) yeşil,
+// değilse hatırlatma saatiyle sarı.
+window.durumRozeti = (sonKopya, saat, gonderim) => {
   const r = document.getElementById('durumRozeti'); if (!r) return;
   const tamam = !!sonKopya;
   r.classList.toggle('tamam', tamam);
   r.textContent = tamam
-    ? 'Gönderildi ' + new Date(sonKopya).toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' })
+    ? (gonderim === 'otomatik' ? 'E-postayla gönderildi ' : 'Gönderildi ') + new Date(sonKopya).toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' })
     : 'Henüz gönderilmedi' + (saat ? ' · ' + saat : '');
   r.hidden = false;
 };
@@ -52,7 +53,8 @@ if (matchMedia('(min-width:761px)').matches) (async () => {
     const [liste, ayar] = await Promise.all([al('/api/raporlar?tur=gunluk&limit=1'), al('/api/ayarlar')]);
     const bugun = new Date().toLocaleDateString('sv-SE', { timeZone:'Europe/Istanbul' });
     const son = liste.raporlar[0];
-    window.durumRozeti(son && son.tarih === bugun ? son.olusturma : null, ayar.hatirlatma_saat);
+    const bugunku = son && son.tarih === bugun ? son : null;
+    window.durumRozeti(bugunku && bugunku.olusturma, ayar.hatirlatma_saat, bugunku && bugunku.gonderim);
   } catch {}
 })();
 {% endif %}

@@ -91,6 +91,13 @@ input[type=time]{width:124px; font-weight:600; flex:none}
 .yontem summary svg{transition:transform .15s; color:var(--ink-3)}
 .yontem[open] summary svg{transform:rotate(90deg)}
 .yontem .icerik{display:flex; flex-direction:column; gap:8px; padding:0 12px 12px}
+/* unutursam patrona e-posta: açma onayı */
+.onayArka{position:fixed; inset:0; z-index:60; background:rgba(18,21,26,.45); display:flex; align-items:center; justify-content:center; padding:16px}
+.onayKutu{background:var(--paper); border-radius:20px; box-shadow:0 24px 60px -20px rgba(18,21,26,.45); width:100%; max-width:420px; padding:20px; display:flex; flex-direction:column; gap:16px}
+.onayKutu p{margin:0; font-size:14.5px; line-height:1.5; overflow-wrap:anywhere}
+.onayKutu .actions button{height:46px; font-size:14.5px; border-radius:12px}
+#otomatikSonuc{font-size:13px; white-space:pre-wrap; margin:0}
+#otomatikSonuc:empty{display:none}
 @media (min-width:761px){
   .ikiDugme button{height:42px}
 }
@@ -290,11 +297,48 @@ input[type=time]{width:124px; font-weight:600; flex:none}
       </section>
     </div>
 
+    <div>
+      <div class="sec"><h2>Unutursam patronuma e-postayla gönder</h2></div>
+      <section class="card" id="otomatikKart">
+        <div class="row orta">
+          <div class="kim"><label class="lbl" for="otomatik_gonder">Otomatik gönder</label><div class="meta">Rapor bu saate kadar kopyalanmazsa tikli maddeler düzeltilip patronuna e-postayla gider. WhatsApp'a otomatik gönderim mümkün değil.</div></div>
+          <input type="checkbox" class="sw" id="otomatik_gonder">
+        </div>
+        <div class="row orta">
+          <div class="kim"><label class="lbl" for="otomatik_saat">Saat</label><div class="meta">Günler hatırlatmayla aynı · 15 dk önce uyarı gelir</div></div>
+          <input type="time" id="otomatik_saat" name="otomatik_saat" value="18:30" required>
+        </div>
+        <div class="row dikey">
+          <label class="alan" for="patron_eposta">Patronun e-postası</label>
+          <input type="email" id="patron_eposta" name="patron_eposta" placeholder="patron@sirket.com">
+          <label class="alan" for="patron_adi">Adı <small>— isteğe bağlı, bildirimlerde geçer</small></label>
+          <input type="text" id="patron_adi" name="patron_adi" placeholder="Ahmet Bey">
+        </div>
+        <div class="row orta">
+          <div class="kim"><label class="lbl" for="otomatik_kopya_bana">Kopyası bana gelsin</label><div class="meta" id="kopyaHedef">Giriş e-postanıza</div></div>
+          <input type="checkbox" class="sw" id="otomatik_kopya_bana">
+        </div>
+        <div class="row dikey">
+          <button class="secondary" type="button" id="otomatikTest">Test gönder (yalnız bana)</button>
+          <p id="otomatikSonuc" aria-live="polite"></p>
+        </div>
+      </section>
+    </div>
+
     <p class="hint" style="padding:0 6px">Bu ayarlar yalnız sizin hesabınız için geçerlidir. Şifre ve token kaydedildikten sonra bir daha gösterilmez.</p>
     <button class="primary" type="submit" id="kaydet">Kaydet</button>
   </form>
 </main>
 <div class="toast" id="toast"></div>
+<div class="onayArka" id="otomatikOnay" hidden>
+  <div class="onayKutu" role="dialog" aria-modal="true" aria-labelledby="otomatikOnayMetni">
+    <p id="otomatikOnayMetni"></p>
+    <div class="actions">
+      <button class="secondary" type="button" id="otomatikVazgec">Vazgeç</button>
+      <button class="primary" type="button" id="otomatikAc">Aç</button>
+    </div>
+  </div>
+</div>
 <template id="ikonlar">{{ i.ikon('tutamak', 16, 2.6) }}{{ i.ikon('ileri', 16, 2.2) }}</template>
 
 <script src="/static/vendor/Sortable.min.js"></script>
@@ -415,6 +459,12 @@ function doldur(a){
   $('hatirlatma_eposta_adres').value = a.hatirlatma_eposta_adres || '';
   $('hatirlatma_eposta_adres').placeholder = a.giris_eposta || '';
   $('epostaHedef').textContent = a.hatirlatma_eposta_adres || a.giris_eposta || 'Giriş e-postanıza';
+  $('otomatik_gonder').checked = !!a.otomatik_gonder;
+  $('otomatik_saat').value = a.otomatik_saat || '18:30';
+  $('patron_eposta').value = a.patron_eposta || '';
+  $('patron_adi').value = a.patron_adi || '';
+  $('otomatik_kopya_bana').checked = a.otomatik_kopya_bana !== false;
+  $('kopyaHedef').textContent = a.giris_eposta || 'Giriş e-postanıza';
   // E-posta hatırlatması Gmail ayarına bağlı değil; sistem kendi adresinden gönderir.
   if (a.eposta_gonderen) $('epostaGonderen').textContent = a.eposta_gonderen;
   const gmailYok = !(a.gmail_kullanici && a.gmail_sifre_kayitli);
@@ -447,6 +497,11 @@ async function kaydet(){
   govde.hatirlatma_push = $('hatirlatma_push').checked;
   govde.hatirlatma_eposta = $('hatirlatma_eposta').checked;
   govde.hatirlatma_eposta_adres = $('hatirlatma_eposta_adres').value;
+  govde.otomatik_gonder = $('otomatik_gonder').checked;
+  govde.otomatik_saat = $('otomatik_saat').value || '18:30';
+  govde.patron_eposta = $('patron_eposta').value;
+  govde.patron_adi = $('patron_adi').value;
+  govde.otomatik_kopya_bana = $('otomatik_kopya_bana').checked;
   govde.karistir = $('karistir').checked;
   govde.rapor_bicimi = seciliBicim();
   const kaynakDegisti = !sonAyar || !!govde.gmail_sifre || !!govde.github_token
@@ -735,6 +790,42 @@ $('epostaDene').onclick = async () => {
     $('epostaSonuc').textContent = s.ok ? 'Test e-postası gönderildi.' : `Gönderilemedi: ${s.neden}`;
   } catch (err) { $('epostaSonuc').textContent = err.message; }
   finally { $('epostaDene').disabled = false; }
+};
+
+// --- unutursam patronuma e-postayla gönder: açarken onay, anahtar hemen kaydedilir ---
+function otomatikOnayi(adres){
+  return new Promise(sonuc => {
+    const arka = $('otomatikOnay');
+    $('otomatikOnayMetni').textContent = `Raporunu belirlediğin saate kadar kopyalamazsan, tikli maddeler ${adres} adresine senin adına e-postayla gönderilecek. Açılsın mı?`;
+    arka.hidden = false; $('otomatikAc').focus();
+    const bitir = deger => { arka.hidden = true; document.removeEventListener('keydown', tus); sonuc(deger); };
+    const tus = e => { if (e.key === 'Escape') bitir(false); };
+    document.addEventListener('keydown', tus);
+    $('otomatikAc').onclick = () => bitir(true);
+    $('otomatikVazgec').onclick = () => bitir(false);
+    arka.onclick = e => { if (e.target === arka) bitir(false); };
+  });
+}
+$('otomatik_gonder').onchange = async () => {
+  const sw = $('otomatik_gonder'), acilacak = sw.checked;
+  if (acilacak){
+    const adres = $('patron_eposta').value.trim();
+    if (!adres){ sw.checked = false; hataGoster('Patron e-postası gerekli'); $('patron_eposta').focus(); return; }
+    if (!(await otomatikOnayi(adres))){ sw.checked = false; sw.focus(); return; }
+  }
+  sw.disabled = true;
+  try { await kaydet(); toast(acilacak ? 'Otomatik gönderim açıldı' : 'Otomatik gönderim kapatıldı'); }
+  catch (err) { sw.checked = !acilacak; hataGoster(err.message); }
+  finally { sw.disabled = false; }
+};
+
+$('otomatikTest').onclick = async () => {
+  $('otomatikTest').disabled = true; $('otomatikSonuc').textContent = 'Gönderiliyor…';
+  try {
+    const s = await istek('/api/otomatik/test', { method:'POST' });
+    $('otomatikSonuc').textContent = s.ok ? `Test e-postası ${s.adres} adresine gönderildi.` : `Gönderilemedi: ${s.neden}`;
+  } catch (err) { $('otomatikSonuc').textContent = err.message; }
+  finally { $('otomatikTest').disabled = false; }
 };
 
 cihazlariYukle().catch(err => hataGoster(err.message));

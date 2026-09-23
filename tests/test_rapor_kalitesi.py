@@ -423,12 +423,13 @@ def test_sema_guncelle_eski_semada_iki_kez(tmp_path):
     eklenen = veritabani.sema_guncelle(eski)
     assert eklenen == [
         "items.metin_ai", "items.ai_tarih", "items.kullanici_duzenledi", "items.ai_kullan", "items.kaynak_zaman",
-        "reports.tur", "reports.hafta_baslangic", "items.kategori_id", "items.onemli", "uq_reports_user_tarih_tur",
+        "reports.tur", "reports.hafta_baslangic", "items.kategori_id", "items.onemli", "reports.gonderim",
+        "uq_reports_user_tarih_tur",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:
         assert b.execute(text("SELECT metin, metin_ai, kullanici_duzenledi, ai_kullan FROM items")).one() == ("canlı satır", None, 0, 1)
-        assert b.execute(text("SELECT metin, tur, hafta_baslangic FROM reports")).one() == ("eski rapor", "gunluk", None)
+        assert b.execute(text("SELECT metin, tur, hafta_baslangic, gonderim FROM reports")).one() == ("eski rapor", "gunluk", None, "elle")
     eski.dispose()
 
     # güncel şemada hiçbir şey eklenmez

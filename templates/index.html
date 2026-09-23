@@ -119,6 +119,9 @@ body.duzenleAcik .raporAraclar [data-eylem=karistir]{display:none}
 .dahaFazla{display:block; margin-top:8px; font:inherit; font-size:13.5px; font-weight:600; color:var(--bubble-ink); opacity:.75; background:none; border:0; padding:0; cursor:pointer}
 .raporAlt{display:none}
 .raporBaslik .meta{margin-top:2px}
+.otomatikBilgi{font-size:12.5px; margin:10px 2px 0}
+.otomatikBilgi .link{font-size:12.5px; margin-left:4px}
+.otomatikBilgi.hata{color:var(--danger)}
 .kopyalaKucuk{width:36px; height:36px; border:0; border-radius:10px; background:var(--field); color:var(--ink); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none}
 
 /* sesle ekleme paneli: telefonda alttan açılan sayfa, masaüstünde ortada kutu */
@@ -216,6 +219,7 @@ body.sesAcik{overflow:hidden}
   .raporAlt{display:flex; gap:10px; padding:14px}
   .raporAlt .secondary{flex:1}
   .raporAlt .primary{flex:1.4}
+  .raporKart .otomatikBilgi{margin:-4px 18px 14px}
   .raporAraclar{padding:0 18px 10px}
   main > .serit{margin-bottom:18px}
   .raporPanel > .sec{align-items:center}
@@ -257,6 +261,7 @@ body.sesAcik{overflow:hidden}
   <p class="serit mavi" id="gecmisSerit" hidden><span id="gecmisMetin"></span><button class="link" type="button" data-eylem="bugune">Bugüne dön</button></p>
   <p class="serit sari" id="googleSerit" hidden><span id="googleMetin"></span><a class="link" id="googleEylem" href="/oauth/google/basla">Şimdi yenile</a></p>
   <p class="serit sari" id="kacirilanSerit" hidden><span id="kacirilanMetin"></span><button class="link" type="button" data-eylem="kacirilanAc">Aç ›</button><button class="link kapat" type="button" data-eylem="kacirilanKapat" aria-label="Kapat" title="Kapat">{{ i.ikon('carpi', 14, 2.4) }}</button></p>
+  <p class="serit mavi" id="otomatikSerit" hidden><span id="otomatikSeritMetin"></span><button class="link" type="button" data-eylem="otomatikSimdi">Şimdi gönder</button><button class="link" type="button" data-eylem="otomatikIptal">Bugün iptal</button></p>
   <div class="bugun">
     <div class="solKolon">
       <div class="tarihSatiri">
@@ -363,6 +368,7 @@ body.sesAcik{overflow:hidden}
           <button class="secondary" type="button" data-eylem="duzelt"><span class="etiket">Claude ile düzelt</span></button>
           <button class="primary" type="button" data-eylem="wa"><span class="wa-ikon">{{ i.ikon('wa', 17) }}</span><span class="etiket">WhatsApp'ta aç</span></button>
         </div>
+        <p class="hint otomatikBilgi" id="otomatikBilgi" hidden><span id="otomatikBilgiMetin"></span><button class="link" type="button" data-eylem="otomatikIptal">Bugün iptal</button></p>
       </div>
     </aside>
   </div>
@@ -424,7 +430,9 @@ function saatteEki(saat){
 const S = {
   tarih: new URLSearchParams(location.search).get('tarih') || null, bugunTarih:null, kacirilan:null,
   elle:[], surekli:[], devam:[], bugun:{ yarin:null }, metin:{ yarin:'' }, bulunan:[], ayarlar:{}, aiAnahtari:false,
-  sonKopya:null, taramaZamani:null,
+  sonKopya:null, gonderim:null, taramaZamani:null,
+  // otomatik: bugünün "unutursan e-postayla gönder" durumu; otomatikUyari: ön uyarı bağlantısıyla (?otomatik=uyari) açıldı
+  otomatik:null, otomatikUyari: new URLSearchParams(location.search).get('otomatik') === 'uyari',
   duzen:{ kategoriler:[], bolumler:[], duz:{ yapilanlar:[], devam:[] }, ozel:false, genel:null }, duzenleModu:false,
 };
 const KULLANICI_ID = {{ kullanici.id }};
@@ -612,8 +620,42 @@ function renderStatus(){
   const saat = bugunMu() ? (S.ayarlar.hatirlatma_saat || '17:00') : '';
   const cip = $('saatCip');
   cip.classList.toggle('tamam', !!S.sonKopya);
-  cip.textContent = S.sonKopya ? `Gönderildi ${saatBicimi(S.sonKopya)}` : (saat || 'Gönderilmedi');
-  window.durumRozeti(S.sonKopya, saat);
+  const gonderildi = S.gonderim === 'otomatik' ? 'E-postayla gönderildi' : 'Gönderildi';
+  cip.textContent = S.sonKopya ? `${gonderildi} ${saatBicimi(S.sonKopya)}` : (saat || 'Gönderilmedi');
+  window.durumRozeti(S.sonKopya, saat, S.gonderim);
+  renderOtomatik();
+}
+// "Unutursan e-postayla gönder": bekliyorsa rapor panelinin altında ince bilgi, ön uyarı bağlantısıyla gelindiyse mavi şerit.
+function renderOtomatik(){
+  const o = bugunMu() && !S.sonKopya ? S.otomatik : null;
+  const bekliyor = !!(o && o.acik && o.gun && !o.durum);
+  $('otomatikSerit').hidden = !(bekliyor && S.otomatikUyari);
+  if (bekliyor) $('otomatikSeritMetin').textContent = `${saatteEki(o.saat)} otomatik gönderilecek ·`;
+  let metin = '';
+  if (bekliyor) metin = `Kopyalamazsan ${saatteEki(o.saat)} ${o.hedef} e-postayla gider ·`;
+  else if (o && o.durum === 'hata') metin = `Otomatik gönderim başarısız: ${o.hata} — elle gönder`;
+  else if (o && o.acik && o.durum === 'iptal') metin = 'Bugünkü otomatik gönderim iptal edildi';
+  const bilgi = $('otomatikBilgi');
+  bilgi.hidden = !metin;
+  bilgi.classList.toggle('hata', !!(o && o.durum === 'hata'));
+  $('otomatikBilgiMetin').textContent = metin;
+  bilgi.querySelector('button').hidden = !bekliyor;
+}
+async function otomatikIptal(){
+  hepsiniBul('otomatikIptal').forEach(b => b.disabled = true);
+  try {
+    const r = await api('/api/otomatik/iptal', 'POST', {});
+    S.otomatik = r.otomatik; renderStatus(); toast('Bugün otomatik gönderilmeyecek');
+  } catch (e) { toast('Olmadı: ' + e.message); await durumuYukle(); }
+  finally { hepsiniBul('otomatikIptal').forEach(b => b.disabled = false); }
+}
+async function otomatikSimdi(){
+  hepsiniBul('otomatikSimdi').forEach(b => b.disabled = true);
+  try {
+    await api('/api/otomatik/simdi', 'POST');
+    toast('E-postayla gönderildi');
+  } catch (e) { toast(e.message); }
+  finally { hepsiniBul('otomatikSimdi').forEach(b => b.disabled = false); await durumuYukle(); }
 }
 
 const tool = (tools, ad, title, fn, cls) => {
@@ -898,7 +940,7 @@ async function hazirRapor(dugme){
 async function raporuKaydet(metin){
   try {
     const r = await api('/api/raporlar', 'POST', { metin, tur:'gunluk', tarih: S.tarih });
-    S.sonKopya = r.olusturma; renderStatus();
+    S.sonKopya = r.olusturma; S.gonderim = r.gonderim; renderStatus();
   } catch (e) { toast('Geçmişe kaydedilemedi: ' + e.message); }
 }
 
@@ -1009,7 +1051,7 @@ async function durumuYukle(){
   try {
     const d = await api(yolT('/api/durum'));
     S.tarih = d.tarih; S.bugunTarih = d.bugun; S.kacirilan = d.kacirilan_gun; S.duzen = d.duzen;
-    S.ayarlar = d.ayarlar; S.aiAnahtari = d.ai_anahtari; S.sonKopya = d.son_kopya; S.taramaZamani = d.tarama_zamani || null;
+    S.ayarlar = d.ayarlar; S.aiAnahtari = d.ai_anahtari; S.sonKopya = d.son_kopya; S.gonderim = d.gonderim; S.otomatik = d.otomatik; S.taramaZamani = d.tarama_zamani || null;
     S.surekli = d.maddeler.filter(m => m.tur === 'surekli');
     S.devam = d.maddeler.filter(m => m.tur === 'devam');
     S.bulunan = d.maddeler.filter(m => m.tur === 'bulunan' && bulunanAcik(m));
@@ -1269,7 +1311,7 @@ async function gunGit(tarih){
   const g = gunluk.yarin;  // bekleyen "Yarın" yazımı önce eski güne gider
   if (g.t){ clearTimeout(g.t); g.t = null; gunlukYaz('yarin'); }
   await g.zincir;
-  Object.assign(S, { tarih, elle:[], bulunan:[], bulunanYuklendi:false, taramaZamani:null, sonKopya:null, kacirilan:null });
+  Object.assign(S, { tarih, elle:[], bulunan:[], bulunanYuklendi:false, taramaZamani:null, sonKopya:null, gonderim:null, otomatik:null, kacirilan:null });
   S.bugun.yarin = null; S.metin.yarin = ''; onizlemeAcik = false; acikPaneller.clear(); duzeltDurum('');
   $('foundErrors').innerHTML = '';
   history.replaceState(null, '', tarih === S.bugunTarih ? location.pathname : `?tarih=${tarih}`);
@@ -1344,6 +1386,8 @@ hepsiniBul('duzelt').forEach(b => b.onclick = duzeltCalistir);
 hepsiniBul('kopyala').forEach(b => b.onclick = e => copyReport(e.currentTarget));
 hepsiniBul('wa').forEach(b => b.onclick = e => openWa(e.currentTarget));
 hepsiniBul('ses').forEach(b => b.onclick = () => sesPaneliAc(b));
+hepsiniBul('otomatikIptal').forEach(b => b.onclick = otomatikIptal);
+hepsiniBul('otomatikSimdi').forEach(b => b.onclick = otomatikSimdi);
 
 render();
 (async () => { await eskiVeriyiTasi(); await durumuYukle(); loadFound(false); })();

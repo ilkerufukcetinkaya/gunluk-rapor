@@ -93,6 +93,12 @@ class KullaniciAyari(Temel):
     google_baglanti: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # onay anı
     google_durum: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'bagli' | 'yenile' | None
     google_kapsamlar: Mapped[list | None] = mapped_column(JSON, nullable=True)  # verilen scope adresleri
+    # O1: rapor otomatik_saat'e kadar kopyalanmazsa tikli maddeler patron_eposta'ya gider (günler = hatirlatma_gunler).
+    otomatik_gonder: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    otomatik_saat: Mapped[time] = mapped_column(Time, default=time(18, 30))
+    patron_eposta: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    patron_adi: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    otomatik_kopya_bana: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     guncelleme: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi, onupdate=simdi)
 
 
@@ -190,6 +196,7 @@ class Rapor(Temel):
     olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
     tur: Mapped[str] = mapped_column(String(10), default="gunluk")
     hafta_baslangic: Mapped[date | None] = mapped_column(Date, nullable=True)
+    gonderim: Mapped[str] = mapped_column(String(10), default="elle", server_default="elle")  # 'elle' | 'otomatik'
 
 
 class PushAbonelik(Temel):
@@ -214,7 +221,8 @@ class HatirlatmaGonderimi(Temel):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     tarih: Mapped[date] = mapped_column(Date)
-    kanal: Mapped[str] = mapped_column(String(10))  # 'push' | 'eposta'
+    # 'push' | 'eposta' | 'otomatik' (patrona e-posta; durum 'iptal' olabilir) | 'otomatik_uyari' (15 dk önce)
+    kanal: Mapped[str] = mapped_column(String(20))
     durum: Mapped[str] = mapped_column(String(20), default="gonderiliyor")
     hata_metni: Mapped[str | None] = mapped_column(Text, nullable=True)  # durum 'hata' ise kısa neden
     olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
@@ -263,6 +271,16 @@ EK_KOLONLAR = [
     ("user_settings", "google_baglanti", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
     ("user_settings", "google_durum", "VARCHAR(10)", "VARCHAR(10)"),
     ("user_settings", "google_kapsamlar", "JSON", "JSON"),
+    ("user_settings", "otomatik_gonder", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("user_settings", "otomatik_saat", "TIME NOT NULL DEFAULT '18:30'", "TIME NOT NULL DEFAULT '18:30:00'"),
+    ("user_settings", "patron_eposta", "VARCHAR(254)", "VARCHAR(254)"),
+    ("user_settings", "patron_adi", "VARCHAR(120)", "VARCHAR(120)"),
+    ("user_settings", "otomatik_kopya_bana", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("reports", "gonderim", "VARCHAR(10) NOT NULL DEFAULT 'elle'", "VARCHAR(10) NOT NULL DEFAULT 'elle'"),
+]
+# Uzatılan VARCHAR kolonları (tablo, kolon, yeni uzunluk); sqlite uzunluğu zorlamadığı için yalnız Postgres'te.
+EK_GENISLETMELER = [
+    ("hatirlatma_gonderimleri", "kanal", 20),  # 'otomatik_uyari' 14 karakter
 ]
 # Sonradan eklenen tablolar; başvurduğu tabloların hepsi olan şemada eksikse oluşturulur.
 EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim", "kategoriler", "rapor_duzeni"]
@@ -336,6 +354,16 @@ def sema_guncelle(motor_=None) -> list[str]:
                 _kaynaklari_geri_doldur(b, sqlite)
             elif (tablo, kolon) == ("user_settings", "kurulum_tamam"):
                 _kurulumu_geri_doldur(b, sqlite)
+        for tablo, kolon, uzunluk in EK_GENISLETMELER:
+            if sqlite or tablo not in tablolar:
+                continue
+            mevcut = b.scalar(text(
+                "SELECT character_maximum_length FROM information_schema.columns WHERE table_schema = current_schema() "
+                "AND table_name = :t AND column_name = :k"
+            ), {"t": tablo, "k": kolon})
+            if mevcut is not None and mevcut < uzunluk:
+                b.execute(text(f"ALTER TABLE {tablo} ALTER COLUMN {kolon} TYPE VARCHAR({uzunluk})"))
+                eklenen.append(f"{tablo}.{kolon}({uzunluk})")
         for ad, tablo, ddl in EK_INDEKSLER:
             if tablo not in tablolar:
                 continue

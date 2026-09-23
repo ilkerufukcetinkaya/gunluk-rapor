@@ -1457,11 +1457,13 @@ def gonderen_adresi() -> str:
 
 
 def _resend_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None, anahtar: str,
-                   istemci: httpx.Client | None = None) -> str | None:
+                   istemci: httpx.Client | None = None, kopya: str | None = None) -> str | None:
     """Render free planı giden SMTP portlarını kapatıyor; sistem e-postaları HTTPS ile gider."""
     govde = {"from": gonderen_adresi(), "to": [kime], "subject": konu, "text": metin}
     if yanit_adresi:
         govde["reply_to"] = yanit_adresi
+    if kopya:
+        govde["cc"] = [kopya]
     istemci = istemci or httpx.Client(timeout=20)
     try:
         yanit = istemci.post(
@@ -1482,7 +1484,7 @@ def _resend_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None, a
 
 
 def _smtp_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, metin: str,
-                 yanit_adresi: str | None) -> str | None:
+                 yanit_adresi: str | None, kopya: str | None = None) -> str | None:
     """Yerel geliştirme yedeği: kullanıcının kendi Gmail'inden SMTP ile gönderir."""
     if not (gmail_kullanici and gmail_sifre):
         return "E-posta gönderilemedi (RESEND_API_KEY tanımlı değil, Gmail yedeği de yok)"
@@ -1492,6 +1494,8 @@ def _smtp_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, m
     mesaj["Subject"] = konu
     if yanit_adresi:
         mesaj["Reply-To"] = yanit_adresi
+    if kopya:
+        mesaj["Cc"] = kopya
     mesaj.set_content(metin, charset="utf-8")
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as sunucu:
@@ -1510,13 +1514,26 @@ def _smtp_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, m
 
 def eposta_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None = None,
                   gmail_kullanici: str = "", gmail_sifre: str = "",
-                  istemci: httpx.Client | None = None) -> str | None:
-    """Başarıda None, hatada kısa Türkçe neden döner; yükseltmez.
+                  istemci: httpx.Client | None = None, kopya: str | None = None) -> str | None:
+    """Başarıda None, hatada kısa Türkçe neden döner; yükseltmez. kopya: tek cc adresi.
     RESEND_API_KEY varsa HTTPS ile Resend, yoksa Gmail SMTP yedeği (yerel geliştirme)."""
     anahtar = (os.environ.get("RESEND_API_KEY") or "").strip()
     if anahtar:
-        return _resend_gonder(kime, konu, metin, yanit_adresi, anahtar, istemci)
-    return _smtp_gonder(gmail_kullanici, gmail_sifre, kime, konu, metin, yanit_adresi)
+        return _resend_gonder(kime, konu, metin, yanit_adresi, anahtar, istemci, kopya)
+    return _smtp_gonder(gmail_kullanici, gmail_sifre, kime, konu, metin, yanit_adresi, kopya)
+
+
+def kalin_isaretsiz(metin: str) -> str:
+    """WhatsApp metnini düz e-postaya çevirir: '*Başlık:*' → 'Başlık:'. Başlıklar olduğu gibi kalır."""
+    return re.sub(r"(?<![\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])", r"\1", metin)
+
+
+def saatte_eki(saat: str) -> str:
+    """'18:30' → "18:30'da", '09:12' → "09:12'de", '17:00' → "17:00'de" (arayüzdeki saatteEki ile aynı kural)."""
+    s, d = (int(x) for x in saat.split(":"))
+    n = d or s
+    ek = ("", "de", "de", "te", "te", "te", "da", "de", "de", "da")[n % 10] if n % 10 else ("da", "da", "de", "da", "ta", "de")[n // 10]
+    return f"{saat}'{ek}"
 
 
 # ---------------------------------------------------------------- davet / şifre sıfırlama e-postası

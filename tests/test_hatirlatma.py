@@ -413,6 +413,8 @@ def test_sema_guncelle_hatirlatma_iki_kez(tmp_path):
         "user_settings.rapor_bicimi", "user_settings.karistir", "user_settings.kendi_alanlar", "user_settings.ekip_ici_atla",
         "user_settings.google_refresh_enc", "user_settings.google_eposta", "user_settings.google_baglanti",
         "user_settings.google_durum", "user_settings.google_kapsamlar",
+        "user_settings.otomatik_gonder", "user_settings.otomatik_saat", "user_settings.patron_eposta",
+        "user_settings.patron_adi", "user_settings.otomatik_kopya_bana",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:

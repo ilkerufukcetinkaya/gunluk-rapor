@@ -205,7 +205,9 @@ function gunlukSatir(r){
   const g = el('div', 'gun'); g.append(el('b', '', String(gun(r.tarih).getUTCDate())), el('span', '', kisaGun(r.tarih)));
   const orta = el('div', 'orta');
   const ilk = (maddeler(r.metin)[0] || r.ilk_satir).replace(/^•\s*/, '').replace(/\*/g, '');
-  orta.append(el('div', 'ilk', ilk), el('div', 'meta', `${r.madde_sayisi} madde` + (r.olusturma ? ` · ${saatBicimi(r.olusturma)}` : '')));
+  const meta = el('div', 'meta', `${r.madde_sayisi} madde` + (r.olusturma ? ` · ${saatBicimi(r.olusturma)}` : ''));
+  if (r.gonderim === 'otomatik') meta.append(el('span', 'sistemRozet', 'e-posta'));  // unutulan gün patrona otomatik gitti
+  orta.append(el('div', 'ilk', ilk), meta);
   const chev = ikon('ileri'); chev.classList.add('chev');
   ozet.append(g, orta, chev);
   li.appendChild(ozet);
