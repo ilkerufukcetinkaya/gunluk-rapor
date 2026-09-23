@@ -528,7 +528,7 @@ def test_eposta_dene_gonderir():
     mesaj = SahteSmtp.gonderilen[0]
     assert mesaj["Subject"] == "Günlük rapor — e-posta testi"
     assert mesaj["To"] == "a@ornek.com" and mesaj["From"].addresses[0].addr_spec == "a@gmail.com"
-    assert mesaj["From"].addresses[0].display_name == "A · Günlük Rapor"  # O1-ek
+    assert mesaj["From"].addresses[0].display_name == "A - Günlük Rapor"  # O1-ek2
 
 
 def test_eposta_dene_kayitli_hatirlatma_adresine_gider():
@@ -571,7 +571,7 @@ def test_resend_basarida_none_doner_ve_istegi_kurar(resend):
     assert istek["url"] == "https://api.resend.com/emails"
     assert istek["headers"]["Authorization"] == "Bearer re_test_anahtar"
     assert istek["govde"] == {
-        "from": "rapor@medusarights.com", "to": ["kime@ornek.com"],
+        "from": "Günlük Rapor <rapor@medusarights.com>", "to": ["kime@ornek.com"],
         "subject": "Konu", "text": "Gövde", "reply_to": "ben@ornek.com",
     }
 
@@ -586,7 +586,7 @@ def test_resend_gonderen_varsayilani_ve_ortam_degiskeni(resend, monkeypatch):
     assert servisler.gonderen_adresi() == "rapor@medusarights.com"
     monkeypatch.setenv("EPOSTA_GONDEREN", "baska@ornek.com")
     servisler.eposta_gonder("kime@ornek.com", "Konu", "Gövde")
-    assert resend.istekler[0]["govde"]["from"] == "baska@ornek.com"
+    assert resend.istekler[0]["govde"]["from"] == "Günlük Rapor <baska@ornek.com>"
 
 
 def test_resend_422_kisa_turkce_neden_doner(resend):
@@ -605,7 +605,7 @@ def test_anahtar_yoksa_smtp_yedegi_calisir():
         "kime@ornek.com", "Konu", "Gövde", yanit_adresi="ben@ornek.com",
         gmail_kullanici="a@gmail.com", gmail_sifre="uyg-sifre") is None
     mesaj = SahteSmtp.gonderilen[0]
-    assert mesaj["From"] == "a@gmail.com" and mesaj["Reply-To"] == "ben@ornek.com"
+    assert mesaj["From"].addresses[0].addr_spec == "a@gmail.com" and mesaj["Reply-To"] == "ben@ornek.com"
 
 
 def test_anahtar_da_gmail_de_yoksa_neden_doner():
@@ -619,7 +619,7 @@ def test_hatirlatma_resend_ile_gider_ve_yanit_adresi_tasir(push, saat, resend):
     assert r["eposta"] == "gönderildi"
     govde = resend.istekler[0]["govde"]
     assert govde["to"] == ["a@ornek.com"] and govde["reply_to"] == "a@ornek.com"
-    assert govde["from"] == '"A · Günlük Rapor" <rapor@medusarights.com>'  # O1-ek: adres aynı, görünen ad eklendi
+    assert govde["from"] == 'A - Günlük Rapor <rapor@medusarights.com>'  # O1-ek2: tırnaksız
     assert "Günlük rapor hatırlatması – 16.09.2026" == govde["subject"]
     assert SahteSmtp.gonderilen == []  # SMTP'ye hiç düşülmez
 

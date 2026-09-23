@@ -1677,14 +1677,11 @@ def gonderen_adresi() -> str:
 
 
 def gonderen_basligi(adres: str, ad: str | None = None) -> str:
-    """From başlığı: '"Ayşe Yılmaz · Günlük Rapor" <rapor@…>'; ad boşsa yalnız adres (adres hiç değişmez).
-    Görünen ad her zaman RFC 5322 quoted-string olarak yazılır: \\ ve " kaçışlanır; satır sonu ve denetim
-    karakterleri atılır (başlık enjeksiyonu olmasın)."""
-    ad = re.sub(r"\s+", " ", "".join(h if h.isprintable() else " " for h in (ad or ""))).strip()
-    if not ad:
-        return adres
-    gorunen = f"{ad} · {GONDEREN_EKI}".replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{gorunen}" <{adres}>'
+    """From başlığı, tırnaksız: 'Ayşe Yılmaz - Günlük Rapor <rapor@…>'; ad boşsa 'Günlük Rapor <rapor@…>'.
+    Resend tırnaklı görünen adı reddettiği için özel karakterler kaçışlanmaz, atılır (başlık enjeksiyonu da olmaz)."""
+    ad = re.sub(r'[",<>;:@\\()\[\]]', " ", "".join(h if h.isprintable() else " " for h in (ad or "")))
+    ad = re.sub(r"\s+", " ", ad).strip()[:60].strip()
+    return f"{ad} - {GONDEREN_EKI} <{adres}>" if ad else f"{GONDEREN_EKI} <{adres}>"
 
 
 def _resend_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None, anahtar: str,
@@ -1712,7 +1709,26 @@ def _resend_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None, a
         neden = yanit.json().get("message") or yanit.text
     except Exception:
         neden = yanit.text
+    varsayilan = gonderen_basligi(gonderen_adresi())
+    if yanit.status_code == 422 and "from" in (neden or "").lower() and govde["from"] != varsayilan:
+        # Güvenlik ağı: görünen ad reddedilirse bir kez varsayılan gönderenle denenir
+        return _resend_gonder_varsayilan(govde, varsayilan, anahtar, istemci, f"Resend 422: {(neden or '').strip()[:120]}")
     return f"Resend {yanit.status_code}: {(neden or '').strip()[:120]}"
+
+
+def _resend_gonder_varsayilan(govde: dict, varsayilan: str, anahtar: str, istemci: httpx.Client,
+                              ilk_hata: str) -> str | None:
+    try:
+        yanit = istemci.post(
+            "https://api.resend.com/emails", json={**govde, "from": varsayilan},
+            headers={"Authorization": f"Bearer {anahtar}", "content-type": "application/json"},
+        )
+    except Exception:
+        return ilk_hata
+    if 200 <= yanit.status_code < 300:
+        log.warning("gönderen adı reddedildi, varsayılana düşüldü")
+        return None
+    return ilk_hata
 
 
 def _smtp_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, metin: str,
@@ -1749,7 +1765,7 @@ def eposta_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None = N
                   istemci: httpx.Client | None = None, kopya: str | None = None,
                   gonderen_adi: str | None = None) -> str | None:
     """Başarıda None, hatada kısa Türkçe neden döner; yükseltmez. kopya: tek cc adresi.
-    gonderen_adi: From'da görünen ad ("<ad> · Günlük Rapor"); adres değişmez.
+    gonderen_adi: From'da görünen ad ("<ad> - Günlük Rapor"); adres değişmez.
     RESEND_API_KEY varsa HTTPS ile Resend, yoksa Gmail SMTP yedeği (yerel geliştirme)."""
     anahtar = (os.environ.get("RESEND_API_KEY") or "").strip()
     if anahtar:

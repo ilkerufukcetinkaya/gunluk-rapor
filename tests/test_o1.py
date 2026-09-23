@@ -200,7 +200,7 @@ def test_1830_gonderim_bir_kez_ikinci_ping_tekrar_gondermez(push, saat):
     saat(CARSAMBA, 18, 30)
     assert cron()[uid]["otomatik"] == "gönderildi"
     [g] = patrona_gidenler()
-    assert g["from"] == '"Ayşe Yılmaz · Günlük Rapor" <rapor@medusarights.com>'  # O1-ek: adres aynı, görünen ad eklendi
+    assert g["from"] == 'Ayşe Yılmaz - Günlük Rapor <rapor@medusarights.com>'  # O1-ek2: tırnaksız
     assert g["subject"] == "Günlük Rapor – Ayşe Yılmaz – 16.09.2026"
     assert g["cc"] == ["a@ornek.com"] and g["reply_to"] == "a@ornek.com"
     assert push.cagrilar == []  # başarıda push yok

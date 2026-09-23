@@ -157,22 +157,23 @@ def _from_ayristir(deger: str):
     return HeaderRegistry()("From", deger).addresses
 
 
-@pytest.mark.parametrize("ad", ['Ayşe Yılmaz', 'Ali "Kral" Veli', "Ters\\Bölü, <x>", "Satır\r\nBcc: kotu@ornek.com"])
-def test_gonderen_basligi_rfc5322_tirnaklama(ad):
+@pytest.mark.parametrize("ad, gorunen", [
+    ("Ayşe Yılmaz", "Ayşe Yılmaz"),
+    ('Ali "Kral" Veli', "Ali Kral Veli"),
+    ("Ters\\Bölü, <x>", "Ters Bölü x"),
+    ("Satır\r\nBcc: kotu@ornek.com", "Satır Bcc kotu ornek.com"),
+])
+def test_gonderen_basligi_tirnaksiz_ve_temiz(ad, gorunen):  # O1-ek2: Resend tırnaklı adı reddediyor
     deger = servisler.gonderen_basligi("rapor@ornek.com", ad)
-    assert deger.startswith('"') and deger.endswith('" <rapor@ornek.com>') and "\n" not in deger and "\r" not in deger
+    assert deger == f"{gorunen} - Günlük Rapor <rapor@ornek.com>" and '"' not in deger and "\n" not in deger
     [adres] = _from_ayristir(deger)  # tek adres: virgül, <> ve satır sonu yeni alıcı açmaz
-    assert adres.addr_spec == "rapor@ornek.com"
-    assert adres.display_name == " ".join(ad.split()) + " · Günlük Rapor"
-    m = EmailMessage()
-    m["From"], m["To"] = deger, "x@ornek.com"
-    m.set_content("x")
-    assert b"Bcc:" not in m.as_bytes().split(b"\n\n")[0].replace(b"From:", b"").split(b"\nTo:")[1]
+    assert adres.addr_spec == "rapor@ornek.com" and adres.display_name == f"{gorunen} - Günlük Rapor"
 
 
-def test_gonderen_adi_yoksa_yalniz_adres():
-    assert servisler.gonderen_basligi("rapor@ornek.com", "") == "rapor@ornek.com"
-    assert servisler.gonderen_basligi("rapor@ornek.com", None) == "rapor@ornek.com"
+def test_gonderen_adi_yoksa_varsayilan():
+    for ad in ("", None, "  , <> ;  "):
+        assert servisler.gonderen_basligi("rapor@ornek.com", ad) == "Günlük Rapor <rapor@ornek.com>"
+    assert len(servisler.gonderen_basligi("r@o.com", "A" * 100)) == len("A" * 60 + " - Günlük Rapor <r@o.com>")
 
 
 def test_otomatik_test_ve_hatirlatma_testi_kullanici_adiyla(saat):
@@ -183,8 +184,8 @@ def test_otomatik_test_ve_hatirlatma_testi_kullanici_adiyla(saat):
     assert c.post("/api/hatirlat/eposta-dene").json()["ok"] is True
     for g in SahteResend.istekler:
         [adres] = _from_ayristir(g["from"])
-        assert adres.addr_spec == "rapor@ornek.com" and adres.display_name == 'Ayşe "Ay" Yılmaz · Günlük Rapor'
-    assert SahteResend.istekler[0]["from"] == '"Ayşe \\"Ay\\" Yılmaz · Günlük Rapor" <rapor@ornek.com>'
+        assert adres.addr_spec == "rapor@ornek.com" and adres.display_name == "Ayşe Ay Yılmaz - Günlük Rapor"
+    assert SahteResend.istekler[0]["from"] == 'Ayşe Ay Yılmaz - Günlük Rapor <rapor@ornek.com>'
 
 
 def test_davet_ve_sifirlama_yonetici_adiyla():
@@ -194,7 +195,7 @@ def test_davet_ve_sifirlama_yonetici_adiyla():
     with OturumYapici() as db:
         zid = db.scalar(select(Kullanici.id).where(Kullanici.eposta == "z@ornek.com"))
     assert c.post(f"/yonetim/{zid}/sifirla", data={"mail_gonder": "1"}).status_code == 200
-    assert [g["from"] for g in SahteResend.istekler] == ['"Mehmet Kaya · Günlük Rapor" <rapor@ornek.com>'] * 2
+    assert [g["from"] for g in SahteResend.istekler] == ['Mehmet Kaya - Günlük Rapor <rapor@ornek.com>'] * 2
 
 
 # ---------------------------------------------------------------- 3) ad eşlemeleri: kural
@@ -445,3 +446,40 @@ def test_sema_guncelle_ad_eslemeleri_kolonu(tmp_path):
     assert veritabani.sema_guncelle(eski) == ["user_settings.ad_eslemeleri"]
     assert veritabani.sema_guncelle(eski) == []
     assert "ad_eslemeleri" in {k["name"] for k in inspect(eski).get_columns("user_settings")}
+
+
+# ---------------------------------------------------------------- O1-ek2: Resend "from" 422 → varsayılana düşme
+
+class SiraliResend:
+    def __init__(self, yanitlar):
+        self.yanitlar, self.istekler = list(yanitlar), []
+
+    def post(self, url, json=None, headers=None):
+        self.istekler.append(json)
+        kod, mesaj = self.yanitlar.pop(0)
+        return httpx.Response(kod, json={"message": mesaj} if mesaj else {"id": "re_1"})
+
+
+def test_resend_from_422_varsayilanla_tekrar_dener(monkeypatch, caplog):
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setenv("EPOSTA_GONDEREN", "rapor@ornek.com")
+    sahte = SiraliResend([(422, "Invalid `from` field. The email address contains non-ASCII characters."), (200, None)])
+    with caplog.at_level("WARNING", logger="gunluk-rapor"):
+        assert servisler.eposta_gonder("k@ornek.com", "Konu", "Gövde", istemci=sahte, gonderen_adi="Ayşe Yılmaz") is None
+    assert [i["from"] for i in sahte.istekler] == ["Ayşe Yılmaz - Günlük Rapor <rapor@ornek.com>", "Günlük Rapor <rapor@ornek.com>"]
+    assert sahte.istekler[0] | {"from": ""} == sahte.istekler[1] | {"from": ""}
+    assert "gönderen adı reddedildi, varsayılana düşüldü" in caplog.text
+
+
+def test_resend_from_icermeyen_422_tekrar_denenmez(monkeypatch):
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    sahte = SiraliResend([(422, "Invalid `to` field."), (200, None)])
+    hata = servisler.eposta_gonder("k@ornek.com", "Konu", "Gövde", istemci=sahte, gonderen_adi="Ayşe")
+    assert hata == "Resend 422: Invalid `to` field." and len(sahte.istekler) == 1
+
+
+def test_resend_from_422_ikinci_deneme_de_basarisizsa_ilk_hata(monkeypatch):
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    sahte = SiraliResend([(422, "Invalid `from` field."), (422, "Invalid `from` field.")])
+    assert servisler.eposta_gonder("k@ornek.com", "K", "G", istemci=sahte, gonderen_adi="Ayşe") == "Resend 422: Invalid `from` field."
+    assert len(sahte.istekler) == 2
