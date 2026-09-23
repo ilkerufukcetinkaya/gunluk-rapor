@@ -406,10 +406,11 @@ def test_sema_guncelle_hatirlatma_iki_kez(tmp_path):
 
     eklenen = veritabani.sema_guncelle(eski)
     assert eklenen == [
-        "push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim",
+        "push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim", "kategoriler",
         "user_settings.hatirlatma_saat", "user_settings.hatirlatma_gunler", "user_settings.hatirlatma_push",
         "user_settings.hatirlatma_eposta", "user_settings.hatirlatma_eposta_adres",
         "user_settings.kaynaklar", "user_settings.kurulum_tamam", "users.davet_eposta_tarihi", "user_settings.eposta_gruplama",
+        "user_settings.rapor_bicimi", "user_settings.karistir",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:

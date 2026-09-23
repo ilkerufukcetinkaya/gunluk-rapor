@@ -427,13 +427,17 @@ def gmail_test(kullanici: str, sifre: str) -> str:
     return "Gmail: bağlandı, Gönderilmiş klasörü bulundu"
 
 
+def imap_tarihi(gun: date) -> str:
+    return f"{gun.day:02d}-{AYLAR[gun.month - 1]}-{gun.year}"
+
+
 def gmail_tara(
     kullanici: str, sifre: str, bugun: date, sozluk: dict[str, str] | None = None, gruplama: str = "konu",
 ) -> list[dict]:
     """Gönderilen e-posta maddeleri (kaynak 'eposta') + kendine atılan not maddeleri (kaynak 'not')."""
     def oku(M: imaplib.IMAP4_SSL) -> list[dict]:
-        dun = bugun - timedelta(days=1)
-        _, veri = M.search(None, "SINCE", f"{dun.day:02d}-{AYLAR[dun.month - 1]}-{dun.year}")
+        # IMAP tarihleri sunucu saatine göre: bir gün geriden başlanır, kesin süzgeç Date başlığının Istanbul günü.
+        _, veri = M.search(None, "SINCE", imap_tarihi(bugun - timedelta(days=1)), "BEFORE", imap_tarihi(bugun + timedelta(days=1)))
         kimlikler = veri[0].split() if veri and veri[0] else []
         mailler = []
         if kimlikler:
@@ -489,9 +493,11 @@ def github_test(token: str, repo: str, istemci: httpx.Client | None = None) -> s
 
 
 def github_tara(token: str, repo: str, bugun: date, istemci: httpx.Client | None = None) -> list[dict]:
+    """O günün Istanbul 00:00–24:00 aralığındaki commit'ler."""
     baslangic = datetime.combine(bugun, time.min, ISTANBUL).astimezone(timezone.utc)
+    bitis = datetime.combine(bugun + timedelta(days=1), time.min, ISTANBUL).astimezone(timezone.utc)
     istemci = istemci or httpx.Client(timeout=20)
-    params = {"since": baslangic.strftime("%Y-%m-%dT%H:%M:%SZ"), "per_page": 100}
+    params = {"since": baslangic.strftime("%Y-%m-%dT%H:%M:%SZ"), "until": bitis.strftime("%Y-%m-%dT%H:%M:%SZ"), "per_page": 100}
     commitler = []
     try:
         for sayfa in range(1, 6):
@@ -624,7 +630,13 @@ def claude_cevir(
     return [{**m, "metin": ceviri.get(m["id"], m["metin"])} for m in maddeler], None
 
 
-def duzelt_sistemi(proje_adi: str = "") -> str:
+KATEGORI_KURALI = (
+    "- \"kategori_sec\": true olan maddeler için verilen rapor kategorilerinden konuya en uygun olanın id'sini "
+    "\"kategori_id\" alanında döndür; emin değilsen \"kategori_id\" alanını hiç yazma.\n"
+)
+
+
+def duzelt_sistemi(proje_adi: str = "", kategorili: bool = False) -> str:
     urun = f"Yazılım ürününün adı {proje_adi}; yazılımdan söz ederken bu adı kullan. " if proje_adi else ""
     return (
         "Bir müzik edisyon şirketinde çalışan bir danışmanın yöneticisine WhatsApp'tan gönderdiği günlük raporun "
@@ -643,7 +655,9 @@ def duzelt_sistemi(proje_adi: str = "") -> str:
         "- 'surekli' türündeki maddeler her gün tekrarlanan işlerdir: son raporlardaki cümlelerle aynı olmayan "
         "ama aynı anlama gelen, doğal bir ifade yaz. Metinde | ile ayrılmış seçenekler varsa hepsi aynı işin "
         "farklı söylenişidir.\n"
-        "Yanıt olarak YALNIZ JSON dizi döndür, başka hiçbir şey yazma: [{\"id\": <sayı>, \"metin\": \"...\"}]"
+        + (KATEGORI_KURALI if kategorili else "")
+        + "Yanıt olarak YALNIZ JSON dizi döndür, başka hiçbir şey yazma: [{\"id\": <sayı>, \"metin\": \"...\""
+        + (", \"kategori_id\": <sayı, yalnız istenenlerde>" if kategorili else "") + "}]"
     )
 
 
@@ -652,17 +666,28 @@ def claude_duzelt(
     istemci: httpx.Client | None = None,
 ) -> dict[int, str]:
     """girdiler: {id, tur, metin, asama?}. Dönen: id → düzeltilmiş metin. Hata → ClaudeHatasi."""
+    return claude_duzelt_kategorili(girdiler, son_raporlar, api_anahtari, proje_adi, istemci)[0]
+
+
+def claude_duzelt_kategorili(
+    girdiler: list[dict], son_raporlar: list[str], api_anahtari: str, proje_adi: str = "",
+    istemci: httpx.Client | None = None, kategoriler: list[dict] | None = None,
+) -> tuple[dict[int, str], dict[int, int]]:
+    """Tek çağrı. kategoriler [{id, ad}] verilirse "kategori_sec": true girdiler için önerilen kategori de döner.
+    Dönen: (id → düzeltilmiş metin, id → kategori_id). Kategori id'lerinin geçerliliğini çağıran denetler."""
     if not girdiler:
-        return {}
+        return {}, {}
     baglam = (
         "Son günlük raporlar (sürekli işlerde bu cümleleri tekrar etme):\n"
         + "\n---\n".join(son_raporlar) + "\n\n"
     ) if son_raporlar else ""
+    if kategoriler:
+        baglam += "Rapor kategorileri:\n" + json.dumps(kategoriler, ensure_ascii=False) + "\n\n"
     istek = {
         "model": CLAUDE_MODEL,
         "max_tokens": 2000,
         "thinking": {"type": "disabled"},
-        "system": duzelt_sistemi(proje_adi),
+        "system": duzelt_sistemi(proje_adi, bool(kategoriler)),
         "messages": [{
             "role": "user",
             "content": baglam + "Düzeltilecek maddeler:\n" + json.dumps(girdiler, ensure_ascii=False),
@@ -671,10 +696,21 @@ def claude_duzelt(
     metin = _claude_cagir(istek, api_anahtari, istemci)
     try:
         eslesme = _id_metin_eslesmesi(metin)
+        dizi = _json_dizi_ayikla(metin)
     except (ValueError, KeyError, TypeError) as e:
         raise ClaudeHatasi(f"yanıt JSON değil ({e})") from e
     gecerli = {str(g["id"]) for g in girdiler}
-    return {int(k): v for k, v in eslesme.items() if k in gecerli}
+    isteyen = {str(g["id"]) for g in girdiler if g.get("kategori_sec")}
+    oneriler = {}
+    for x in dizi:
+        if not isinstance(x, dict) or str(x.get("id")) not in isteyen:
+            continue
+        k = x.get("kategori_id")
+        if isinstance(k, str) and k.strip().isdigit():
+            k = int(k)
+        if isinstance(k, int) and not isinstance(k, bool):
+            oneriler[int(x["id"])] = k
+    return {int(k): v for k, v in eslesme.items() if k in gecerli}, oneriler
 
 
 TR_AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
@@ -704,6 +740,8 @@ def haftalik_sistemi() -> str:
         "- Her gün tekrarlanan sürekli işlerin HEPSİNİ tek bir maddede topla (\"Hafta boyunca … ve … takip edildi\").\n"
         "- Zaman kipi -di'li geçmiş zamandır (\"gönderildi\", \"görüşüldü\"); \"-mıştır\" kullanma.\n"
         "- Hafta sonunda hâlâ devam eden işleri en sonda \"*Devam eden*\" başlığı altında ver.\n"
+        "- Günlük raporlar *Başlık:* biçiminde kategori başlıklarıyla yazılmışsa bu başlıkları konu gruplaması "
+        "için ipucu say.\n"
         "- Raporlarda olmayan hiçbir bilgiyi ekleme; isimler ve sayılar aynen kalır; geçmiş zaman.\n"
         "Yalnız özet metnini döndür, açıklama yazma."
     )
@@ -741,11 +779,13 @@ def surekli_varyant(metin: str, tarih: date) -> str:
 
 def raporu_uret(
     ayarlar: dict, api_anahtari: str = "", haric_idler: set[str] | frozenset | dict[str, str | None] = frozenset(),
+    tarih: date | None = None,
 ) -> dict:
     """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu, eposta_gruplama (çözülmüş).
     haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez. Sözlükse id → kayıtlı metin: metni
-    değişen (ör. aynı konuya yeni mail gelen) madde yeniden çevrilir; değer None ise hiç gönderilmez."""
-    bugun = istanbul_bugun()
+    değişen (ör. aynı konuya yeni mail gelen) madde yeniden çevrilir; değer None ise hiç gönderilmez.
+    tarih: taranan gün (Istanbul); verilmezse bugün."""
+    bugun = tarih or istanbul_bugun()
     sonuc = {"tarih": bugun.isoformat(), "eposta": [], "medusa": [], "not": [], "hatalar": []}
     # Kapalı kaynak sessizce atlanır; açık ama ayarı eksik olan uyarı yazar.
     acik = ayarlar.get("kaynaklar") or {"gmail": True, "github": True}

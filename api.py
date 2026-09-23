@@ -1,9 +1,11 @@
 """JSON uçları. Kullanıcı her zaman oturumdan gelir; tüm sorgular user_id ile süzülür."""
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import os
+import random
 import re
 import threading
 import time as saat_
@@ -20,7 +22,8 @@ import guvenlik
 import servisler
 from kimlik import aktif_kullanici
 from veritabani import (
-    ClaudeKullanim, GunlukIfade, HatirlatmaGonderimi, Kullanici, KullaniciAyari, Madde, PushAbonelik, Rapor, oturum, simdi,
+    ClaudeKullanim, GunlukIfade, HatirlatmaGonderimi, Kategori, Kullanici, KullaniciAyari, Madde, PushAbonelik, Rapor,
+    RaporDuzeni, oturum, simdi,
 )
 
 router = APIRouter(prefix="/api")
@@ -37,10 +40,27 @@ YAKINDA = {"medusa"}  # arayüzde "yakında"; açılamaz
 BULUNAN_KAYNAGI = {"eposta": "gmail", "medusa": "github"}
 GUNLUK_CLAUDE_SINIRI = 8
 KOTA_MESAJI = "Bugünkü düzeltme hakkı doldu, yarın devam"
+GECMIS_GUN = 30  # geçmiş gün düzenleme: bugün … 30 gün önce
+RAPOR_BICIMLERI = ("kategorili", "duz")
 
 
 def bugun() -> date:
     return servisler.istanbul_bugun()
+
+
+def gun_sec(tarih: str | date | None) -> date:
+    """Gün kapsamlı uçların ?tarih= değeri; boşsa bugün (Istanbul). Aralık dışı ya da okunamayan tarih 400."""
+    bugun_ = bugun()
+    if tarih is None or (isinstance(tarih, str) and not tarih.strip()):
+        return bugun_
+    if isinstance(tarih, str):
+        try:
+            tarih = date.fromisoformat(tarih.strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Tarih YYYY-AA-GG biçiminde olmalı") from None
+    if not bugun_ - timedelta(days=GECMIS_GUN) <= tarih <= bugun_:
+        raise HTTPException(status_code=400, detail=f"Yalnız bugün ve son {GECMIS_GUN} gün düzenlenebilir")
+    return tarih
 
 
 def ai_anahtari() -> str:
@@ -115,6 +135,8 @@ def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
         "kaynaklar": kaynak_durumu(a),
         "kurulum_tamam": bool(a.kurulum_tamam),
         "eposta_gruplama": eposta_gruplama(a),
+        "rapor_bicimi": rapor_bicimi(a),
+        "karistir": a.karistir is not False,
     }
 
 
@@ -226,12 +248,215 @@ def yapilanlari_bol(db: Session, kullanici: Kullanici, tarih: date) -> None:
     db.commit()
 
 
+# ---------------------------------------------------------------- rapor kategorileri ve günün düzeni
+
+def baslangic_kategorileri(a: KullaniciAyari) -> list[dict]:
+    return [
+        {"ad": "Yazışmalar", "kaynaklar": ["gmail"]},
+        {"ad": f"{a.proje_adi or 'Uygulama'} Çalışmaları"[:80], "kaynaklar": ["github", "medusa"]},
+        {"ad": "Genel İşler", "kaynaklar": []},
+        {"ad": "Devam Eden İşler", "kaynaklar": [], "sistem": "devam"},
+        {"ad": "Önemli Konular", "kaynaklar": [], "sistem": "onemli"},
+    ]
+
+
+def kategorileri_hazirla(db: Session, kullanici: Kullanici) -> list[Kategori]:
+    """Kullanıcının kategorileri (sıralı). Hiç yoksa başlangıç kategorileri bir kez açılır."""
+    sorgu = select(Kategori).where(Kategori.user_id == kullanici.id).order_by(Kategori.sira, Kategori.id)
+    kategoriler = db.scalars(sorgu).all()
+    if kategoriler:
+        return list(kategoriler)
+    with _kullanici_kilidi(kullanici.id, "kategori"):
+        if not db.scalar(select(func.count()).select_from(Kategori).where(Kategori.user_id == kullanici.id)):
+            for sira, k in enumerate(baslangic_kategorileri(ayar_satiri(db, kullanici)), start=1):
+                db.add(Kategori(user_id=kullanici.id, sira=sira, **k))
+            db.commit()
+    return list(db.scalars(sorgu).all())
+
+
+class KategoriBaglami:
+    """Etkin kategori kuralı için kullanıcının kategorileri üzerinde hazır aramalar."""
+
+    def __init__(self, kategoriler: list[Kategori]):
+        self.kategoriler = kategoriler
+        self.idler = {k.id for k in kategoriler}
+        self.sistem = {k.sistem: k.id for k in kategoriler if k.sistem}
+        self.secilebilir = {k.id for k in kategoriler if not k.sistem}
+        genel = next((k for k in kategoriler if not k.sistem and k.ad.strip().lower() == "genel işler"), None)
+        genel = genel or next((k for k in kategoriler if not k.sistem and not k.kaynaklar), None)
+        genel = genel or next((k for k in kategoriler if not k.sistem), None) or (kategoriler[0] if kategoriler else None)
+        self.genel = genel.id if genel else None
+
+    def kaynagin_kategorisi(self, modul: str) -> int | None:
+        return next((k.id for k in self.kategoriler if modul in (k.kaynaklar or [])), None)
+
+    def dogal(self, m: Madde) -> int | None:
+        """Günün düzeni hariç kural: önemli > devam > maddenin kategorisi > bulunanın kaynağı > Genel İşler."""
+        if m.onemli and "onemli" in self.sistem:
+            return self.sistem["onemli"]
+        if m.tur == "devam" and "devam" in self.sistem:
+            return self.sistem["devam"]
+        if m.kategori_id in self.idler:  # elle seçilen ya da Claude'un önerdiği
+            return m.kategori_id
+        if m.tur == "bulunan":
+            k = self.kaynagin_kategorisi(BULUNAN_KAYNAGI.get(m.kaynak, m.kaynak))
+            if k is not None:
+                return k
+        return self.genel
+
+    def etkin(self, m: Madde, duzen: RaporDuzeni | None) -> int | None:
+        if duzen is not None and duzen.kategori_id in self.idler:
+            return duzen.kategori_id
+        return self.dogal(m)
+
+
+def rapor_adaylari(db: Session, kullanici: Kullanici, tarih: date, a: KullaniciAyari) -> list[Madde]:
+    """O günün raporuna girebilecek maddeler (tik durumundan bağımsız): sürekli, devam, elle/not, açık kaynağın bulunanları."""
+    acik = acik_bulunan_kaynaklari(a)
+    maddeler = db.scalars(select(Madde).where(
+        Madde.user_id == kullanici.id, or_(Madde.tur.in_(("surekli", "devam")), Madde.tarih == tarih),
+    ).order_by(Madde.id)).all()
+    return [m for m in maddeler if m.tur in ("surekli", "devam")
+            or (m.tur == "bugun" and m.kaynak in ("elle", "not") and not m.gizli)
+            or (m.tur == "bulunan" and m.kaynak in acik and not m.gizli)]
+
+
+def _tohum(tarih: date, item_id: int, tuz: str = "") -> float:
+    ozet = hashlib.sha256(f"{tarih.isoformat()}:{item_id}:{tuz}".encode()).digest()
+    return int.from_bytes(ozet[:8], "big") / 2 ** 64
+
+
+def serpistir(temel: list[Madde], surekli: list[Madde], tarih: date) -> list[Madde]:
+    """Sürekli işleri tarih + madde id tohumlu yerlere dağıtır: gün içinde sabit, günden güne farklı."""
+    yerler = sorted(surekli, key=lambda m: (int(_tohum(tarih, m.id, "yer") * (len(temel) + 1)), _tohum(tarih, m.id)))
+    sonuc, i = [], 0
+    for yer in range(len(temel) + 1):
+        while i < len(yerler) and int(_tohum(tarih, yerler[i].id, "yer") * (len(temel) + 1)) == yer:
+            sonuc.append(yerler[i])
+            i += 1
+        if yer < len(temel):
+            sonuc.append(temel[yer])
+    return sonuc
+
+
+def kategori_ici_sira(maddeler: list[Madde], satirlar: dict[int, RaporDuzeni], tarih: date, karistir: bool) -> list[Madde]:
+    """Günün düzeninde sırası olanlar önce; kalanlarda bugün/bulunan eklenme sırasıyla, sürekli işler arada ya da sonda."""
+    elle = sorted((m for m in maddeler if m.id in satirlar), key=lambda m: (satirlar[m.id].sira, m.id))
+    kalan = [m for m in maddeler if m.id not in satirlar]
+    surekli = sorted((m for m in kalan if m.tur == "surekli"), key=lambda m: (m.sira, m.id))
+    temel = sorted((m for m in kalan if m.tur != "surekli"),
+                   key=lambda m: (m.tur == "devam", m.sira if m.tur == "devam" else 0, m.id))
+    return elle + (serpistir(temel, surekli, tarih) if karistir else temel + surekli)
+
+
+class GunDuzeni:
+    """Bir günün rapor düzeni: kategori sırasıyla bölümler, maddelerin etkin kategorisi ve düz biçim sırası."""
+
+    def __init__(self, db: Session, kullanici: Kullanici, tarih: date, a: KullaniciAyari | None = None):
+        a = a or ayar_satiri(db, kullanici)
+        self.tarih = tarih
+        self.bicim = rapor_bicimi(a)
+        self.kategoriler = kategorileri_hazirla(db, kullanici)
+        self.baglam = KategoriBaglami(self.kategoriler)
+        self.adaylar = rapor_adaylari(db, kullanici, tarih, a)
+        self.satirlar = {r.item_id: r for r in db.scalars(select(RaporDuzeni).where(
+            RaporDuzeni.user_id == kullanici.id, RaporDuzeni.tarih == tarih,
+        ))}
+        self.etkin = {m.id: self.baglam.etkin(m, self.satirlar.get(m.id)) for m in self.adaylar}
+        karistir = a.karistir is not False
+        self.bolumler: list[tuple[Kategori, list[Madde]]] = [
+            (k, kategori_ici_sira([m for m in self.adaylar if self.etkin[m.id] == k.id], self.satirlar, tarih, karistir))
+            for k in self.kategoriler
+        ]
+
+    @property
+    def ozel(self) -> bool:
+        return any(m.id in self.satirlar for m in self.adaylar)
+
+    def duz(self) -> tuple[list[Madde], list[Madde]]:
+        """(Yapılanlar, Devam eden). Eski sıra: elle, bulunan, sürekli; günün düzeninde sırası olanlar o sırayla öne geçer."""
+        def tur_sirasi(*turler: str) -> list[Madde]:
+            eski = [m for tur in turler for m in sorted((m for m in self.adaylar if m.tur == tur), key=lambda m: (m.sira, m.id))]
+            yer = {m.id: i for i, m in enumerate(eski)}
+            return sorted(eski, key=lambda m: (0, self.satirlar[m.id].sira) if m.id in self.satirlar else (1, yer[m.id]))
+        return tur_sirasi("bugun", "bulunan", "surekli"), tur_sirasi("devam")
+
+    def json(self) -> dict:
+        yapilanlar, devam = self.duz()
+        return {
+            "kategoriler": [k.sozluk() for k in self.kategoriler],
+            "bolumler": [{"kategori_id": k.id, "maddeler": [m.id for m in liste]} for k, liste in self.bolumler],
+            "duz": {"yapilanlar": [m.id for m in yapilanlar], "devam": [m.id for m in devam]},
+            "ozel": self.ozel,
+            "genel": self.baglam.genel,
+        }
+
+
+def rapor_bicimi(a: KullaniciAyari) -> str:
+    return a.rapor_bicimi if a.rapor_bicimi in RAPOR_BICIMLERI else "kategorili"
+
+
+def rapor_metni_olustur(
+    baslik: str, tarih: date, bicim: str, bolumler: list[tuple[str, list[str]]], duz: tuple[list[str], list[str]],
+    yarin: list[str],
+) -> str:
+    """WhatsApp metni. kategorili: her dolu bölüm '*Ad:*' + maddeler; duz: Yapılanlar / Devam eden. Yarın en sonda."""
+    satirlar = [f"*{baslik or 'Günlük Rapor'} – {tarih.strftime('%d.%m.%Y')}*", ""]
+    if bicim == "duz":
+        parcalar = [("Yapılanlar", duz[0]), ("Devam eden", duz[1]), ("Yarın", yarin)]
+    else:
+        parcalar = [(f"{ad}:", liste) for ad, liste in bolumler] + [("Yarın:", yarin)]
+    for ad, liste in parcalar:
+        if liste:
+            satirlar += [f"*{ad}*"] + [f"• {x}" for x in liste] + [""]
+    return "\n".join(satirlar).strip()
+
+
+def gunun_rapor_metni(db: Session, kullanici: Kullanici, tarih: date, duzen: GunDuzeni | None = None) -> str:
+    """Tikli maddelerden günün rapor metni; arayüzdeki önizlemeyle aynı kural."""
+    a = ayar_satiri(db, kullanici)
+    duzen = duzen or GunDuzeni(db, kullanici, tarih, a)
+    ifadeler = bugunku_ifadeler(db, kullanici.id, tarih)
+
+    def metin(m: Madde) -> str:
+        return madde_rapor_metni(m, ifadeler.get(m.id), tarih)
+
+    def kat_metin(m: Madde) -> str:  # kategorili biçimde devam eden işler "iş — aşama" olarak yazılır
+        return m.metin + (f" — {m.asama}" if m.asama else "") if m.tur == "devam" else metin(m)
+
+    yapilanlar, devam = duzen.duz()
+    yarin = db.scalar(select(Madde.metin).where(
+        Madde.user_id == kullanici.id, Madde.tur == "bugun", Madde.tarih == tarih, Madde.kaynak == "yarin",
+    ))
+    return rapor_metni_olustur(
+        a.rapor_basligi or "", tarih, duzen.bicim,
+        [(k.ad, [kat_metin(m) for m in liste if m.tikli]) for k, liste in duzen.bolumler],
+        ([metin(m) for m in yapilanlar if m.tikli], [metin(m) for m in devam if m.tikli]),
+        satirlara_bol(yarin or ""),
+    )
+
+
+def kacirilan_gun(db: Session, kullanici: Kullanici, a: KullaniciAyari, bugun_: date) -> date | None:
+    """Hatırlatma günlerine göre bir önceki iş günü (en fazla 7 gün geri); günlük raporu yoksa o gün."""
+    gunler = hatirlatma_ayari(a)["gunler"]
+    onceki = next((g for g in (bugun_ - timedelta(days=i) for i in range(1, 8)) if g.isoweekday() in gunler), None)
+    if onceki is None:
+        return None
+    if kullanici.olusturma and utc(kullanici.olusturma).astimezone(servisler.ISTANBUL).date() > onceki:
+        return None  # hesap o günden sonra açılmış
+    if db.scalar(select(Rapor.id).where(Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == onceki)):
+        return None
+    return onceki
+
+
 # ---------------------------------------------------------------- durum
 
 @router.get("/durum")
-def durum(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    tarih = bugun()
+def durum(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    bugun_, tarih = bugun(), gun_sec(tarih)
     yapilanlari_bol(db, kullanici, tarih)
+    a = ayar_satiri(db, kullanici)
+    duzen = GunDuzeni(db, kullanici, tarih, a)
     maddeler = db.scalars(
         select(Madde)
         .where(Madde.user_id == kullanici.id, or_(Madde.tur.in_(("surekli", "devam")), Madde.tarih == tarih))
@@ -242,12 +467,19 @@ def durum(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends
         Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == tarih,
     ))
     onbellek = _onbellek.get((kullanici.id, tarih.isoformat())) or {}
-    a = ayar_satiri(db, kullanici)
     acik = acik_bulunan_kaynaklari(a)
+    kacirilan = kacirilan_gun(db, kullanici, a, bugun_) if tarih == bugun_ else None
     return {
         "kullanici": {"ad": kullanici.ad, "rol": kullanici.rol},
         "tarih": tarih.isoformat(),
-        "maddeler": [madde_json(m, ifadeler, tarih) for m in maddeler if m.tur != "bulunan" or m.kaynak in acik],
+        "bugun": bugun_.isoformat(),
+        "kacirilan_gun": kacirilan.isoformat() if kacirilan else None,
+        "maddeler": [
+            {**madde_json(m, ifadeler, tarih), "etkin_kategori_id": duzen.etkin.get(m.id)}
+            for m in maddeler if m.tur != "bulunan" or m.kaynak in acik
+        ],
+        "duzen": duzen.json(),
+        "rapor_metni": gunun_rapor_metni(db, kullanici, tarih, duzen),
         "ayarlar": ayar_ozeti(a, kullanici),
         "ai_anahtari": bool(ai_anahtari()),
         "son_kopya": zaman_iso(son_kopya),
@@ -263,6 +495,7 @@ class MaddeYeni(BaseModel):
     asama: str | None = None
     tikli: bool = True
     kaynak: Literal["elle", "yapilanlar", "yarin"] | None = None
+    tarih: date | None = None  # bugün/yarın satırlarının günü; boşsa bugün
 
 
 class MaddeGuncelle(BaseModel):
@@ -270,6 +503,8 @@ class MaddeGuncelle(BaseModel):
     asama: str | None = None
     tikli: bool | None = None
     gizli: bool | None = None
+    kategori_id: int | None = None  # null: otomatik kurala dön
+    onemli: bool | None = None
 
 
 class AiSecimi(BaseModel):
@@ -284,7 +519,7 @@ class Siralama(BaseModel):
 
 @router.post("/maddeler", status_code=201)
 def madde_ekle(govde: MaddeYeni, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    tarih = bugun()
+    tarih = gun_sec(govde.tarih)
     if govde.tur == "bugun" and govde.kaynak == "elle":
         metin = govde.metin.strip()
         if not metin:
@@ -318,14 +553,41 @@ def madde_ekle(govde: MaddeYeni, kullanici: Kullanici = Depends(aktif_kullanici)
     return madde_json(madde, {}, tarih)
 
 
+def kullanici_kategorisi(db: Session, kullanici: Kullanici, kategori_id: int) -> Kategori:
+    kategori = db.get(Kategori, kategori_id)
+    if kategori is None or kategori.user_id != kullanici.id:
+        raise HTTPException(status_code=404, detail="Kategori bulunamadı")
+    return kategori
+
+
+def gunun_duzen_satiri(db: Session, kullanici: Kullanici, tarih: date, madde_id: int) -> RaporDuzeni | None:
+    return db.scalar(select(RaporDuzeni).where(
+        RaporDuzeni.user_id == kullanici.id, RaporDuzeni.tarih == tarih, RaporDuzeni.item_id == madde_id,
+    ))
+
+
 @router.patch("/maddeler/{madde_id}")
 def madde_guncelle(
-    madde_id: int, govde: MaddeGuncelle, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)
+    madde_id: int, govde: MaddeGuncelle, tarih: str | None = None,
+    kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
 ) -> dict:
     madde = kullanici_maddesi(db, kullanici, madde_id)
-    tarih = bugun()
+    tarih = gun_sec(tarih)
     serbest_metin = madde.tur == "bugun" and madde.kaynak in ("yarin", "yapilanlar")
-    for alan, deger in govde.model_dump(exclude_unset=True).items():
+    veri = govde.model_dump(exclude_unset=True)
+    if "kategori_id" in veri:
+        kategori_id = veri.pop("kategori_id")
+        if kategori_id is not None and kullanici_kategorisi(db, kullanici, kategori_id).sistem:
+            raise HTTPException(status_code=422, detail="Sistem kategorisi maddeye atanamaz")
+        madde.kategori_id = kategori_id
+        satir = gunun_duzen_satiri(db, kullanici, tarih, madde.id)
+        if satir is not None and satir.kategori_id is not None:  # o günün düzeninde kategori varsa o da izler
+            satir.kategori_id = kategori_id
+    if veri.get("onemli") is not None and bool(veri["onemli"]) != bool(madde.onemli):
+        satir = gunun_duzen_satiri(db, kullanici, tarih, madde.id)
+        if satir is not None:  # yıldız, günün düzenindeki elle kategoriden önce gelsin
+            satir.kategori_id = None
+    for alan, deger in veri.items():
         if deger is None:
             continue
         if alan == "metin" and not serbest_metin:
@@ -349,10 +611,11 @@ def madde_guncelle(
 
 @router.patch("/maddeler/{madde_id}/ai")
 def madde_ai(
-    madde_id: int, govde: AiSecimi, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)
+    madde_id: int, govde: AiSecimi, tarih: str | None = None,
+    kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
 ) -> dict:
     madde = kullanici_maddesi(db, kullanici, madde_id)
-    tarih = bugun()
+    tarih = gun_sec(tarih)
     hatalar: list[str] = []
     if govde.yenile:
         anahtar = ai_anahtari()
@@ -381,6 +644,7 @@ def madde_sil(madde_id: int, kullanici: Kullanici = Depends(aktif_kullanici), db
     if madde.kaynak == "not":  # silinirse sonraki taramada geri gelirdi; gizlenir
         madde.gizli = True
     else:
+        db.execute(delete(RaporDuzeni).where(RaporDuzeni.item_id == madde.id))
         db.delete(madde)
     db.commit()
     return {"ok": True}
@@ -431,7 +695,7 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
             # kullanıcının düzenlediği madde Claude'a hiç gitmez; metni değişen düzenlenmemiş madde yeniden çevrilir
             haric = {k: None if m.kullanici_duzenledi else m.metin for k, m in mevcut.items()}
             sonuc = servisler.raporu_uret(
-                cozulmus_ayarlar(ayar_satiri(db, kullanici)), os.environ.get("ANTHROPIC_API_KEY", ""), haric,
+                cozulmus_ayarlar(ayar_satiri(db, kullanici)), os.environ.get("ANTHROPIC_API_KEY", ""), haric, tarih,
             )
             notlar = set(db.scalars(select(Madde.kaynak_id).where(
                 Madde.user_id == kullanici.id, Madde.tur == "bugun", Madde.tarih == tarih, Madde.kaynak == "not",
@@ -470,7 +734,9 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
                 sira += 1
             eposta_eskilerini_gizle(mevcut, sonuc)
             db.commit()
-            for eski in [k for k in _onbellek if k[0] == kullanici.id and k != anahtar]:
+            # geçmiş günler de önbellekte kalır; düzenlenebilir aralığın dışına düşenler atılır
+            sinir = (bugun() - timedelta(days=GECMIS_GUN)).isoformat()
+            for eski in [k for k in _onbellek if k[0] == kullanici.id and k[1] < sinir]:
                 del _onbellek[eski]
             _onbellek[anahtar] = {
                 "hatalar": sonuc["hatalar"],
@@ -482,9 +748,9 @@ def bugun_taramasi(db: Session, kullanici: Kullanici, tarih: date, yenile: bool 
 
 @router.get("/bugun")
 def bugun_bulunanlar(
-    yenile: int = 0, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)
+    yenile: int = 0, tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)
 ) -> dict:
-    tarih = bugun()
+    tarih = gun_sec(tarih)
     onbellek = bugun_taramasi(db, kullanici, tarih, bool(yenile))
     bulunanlar = db.scalars(select(Madde).where(
         Madde.user_id == kullanici.id, Madde.tur == "bulunan", Madde.tarih == tarih,
@@ -558,31 +824,43 @@ def aylik_claude_cagrilari(db: Session, tarih: date) -> dict[int, int]:
 
 
 def duzeltmeyi_uygula(db: Session, kullanici: Kullanici, paket: list[Madde], tarih: date, anahtar: str) -> dict:
-    """Tek Claude çağrısı; hata olursa hiçbir maddeye yazılmaz. Günlük sınır dolduysa çağrılmaz, ham metin kalır."""
+    """Tek Claude çağrısı; hata olursa hiçbir maddeye yazılmaz. Günlük sınır dolduysa çağrılmaz, ham metin kalır.
+    tarih düzeltilen gündür; kota her zaman çağrının yapıldığı günün (bugünün) sayacından düşer.
+    Kategorisi olmayan elle/not maddeleri için Claude'dan kategori önerisi de istenir (aynı çağrıda)."""
     if not paket:
         return {"duzeltilen": 0, "gonderilen": 0, "hatalar": []}
-    hak = claude_hakki_al(db, kullanici.id, tarih)
+    hak = claude_hakki_al(db, kullanici.id, bugun())
     if hak is None:
         return {"atlandi": "günlük sınır", "duzeltilen": 0, "gonderilen": len(paket), "hatalar": []}
+    secilebilir = [k for k in kategorileri_hazirla(db, kullanici) if not k.sistem]
     girdiler = []
     for m in paket:
         girdi = {"id": m.id, "tur": m.tur, "metin": m.metin}
         if m.tur == "devam" and m.asama:
             girdi["asama"] = m.asama
+        if secilebilir and m.tur == "bugun" and m.kaynak in ("elle", "not") and m.kategori_id is None:
+            girdi["kategori_sec"] = True
         girdiler.append(girdi)
+    kategori_listesi = [{"id": k.id, "ad": k.ad} for k in secilebilir] if any(g.get("kategori_sec") for g in girdiler) else None
     son_raporlar = list(db.scalars(select(Rapor.metin).where(
         Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih < tarih,
     ).order_by(Rapor.tarih.desc()).limit(3)))
     proje_adi = ayar_satiri(db, kullanici).proje_adi or ""
     servisler.kullanimi_sifirla()
     try:
-        sonuc = servisler.claude_duzelt(girdiler, son_raporlar, anahtar, proje_adi)
+        sonuc, oneriler = servisler.claude_duzelt_kategorili(
+            girdiler, son_raporlar, anahtar, proje_adi, kategoriler=kategori_listesi)
     except servisler.ClaudeHatasi as e:
         return {"duzeltilen": 0, "gonderilen": len(paket), "hatalar": [f"Claude: {e}; ham metin kullanılıyor"]}
     except Exception as e:
         return {"duzeltilen": 0, "gonderilen": len(paket), "hatalar": [f"Claude: beklenmeyen hata ({e.__class__.__name__}); ham metin kullanılıyor"]}
     finally:
         claude_kullanimini_yaz(db, hak)
+    gecerli_kategori = {k.id for k in secilebilir}
+    istenen = {g["id"] for g in girdiler if g.get("kategori_sec")}
+    for m in paket:  # sistem ya da başkasının kategorisi yok sayılır
+        if m.id in istenen and oneriler.get(m.id) in gecerli_kategori:
+            m.kategori_id = oneriler[m.id]
     duzeltilen = 0
     for m in paket:
         metin = sonuc.get(m.id)
@@ -604,11 +882,11 @@ def duzeltmeyi_uygula(db: Session, kullanici: Kullanici, paket: list[Madde], tar
 
 
 @router.post("/duzelt")
-def duzelt(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+def duzelt(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    tarih = gun_sec(tarih)
     anahtar = ai_anahtari()
     if not anahtar:
         return {"atlandi": "anahtar yok", "duzeltilen": 0, "gonderilen": 0, "hatalar": []}
-    tarih = bugun()
     with _kullanici_kilidi(kullanici.id, "duzelt"):
         paket = duzeltme_paketi(db, kullanici, tarih)
         sonuc = duzeltmeyi_uygula(db, kullanici, paket, tarih, anahtar)
@@ -622,6 +900,7 @@ class RaporYeni(BaseModel):
     metin: str
     tur: Literal["gunluk", "haftalik"] = "gunluk"
     hafta_baslangic: date | None = None
+    tarih: date | None = None  # günlük raporun günü; ?tarih= ile de verilebilir, boşsa bugün
 
 
 class HaftalikIstek(BaseModel):
@@ -647,7 +926,10 @@ def rapor_json(r: Rapor) -> dict:
 
 
 @router.post("/raporlar")
-def rapor_kaydet(govde: RaporYeni, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+def rapor_kaydet(
+    govde: RaporYeni, tarih: str | None = None,
+    kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
+) -> dict:
     metin = govde.metin.strip()
     if not metin:
         raise HTTPException(status_code=422, detail="Rapor metni boş olamaz")
@@ -655,7 +937,7 @@ def rapor_kaydet(govde: RaporYeni, kullanici: Kullanici = Depends(aktif_kullanic
         hafta = pazartesi_mi(govde.hafta_baslangic)
         tarih = hafta
     else:
-        hafta, tarih = None, bugun()
+        hafta, tarih = None, gun_sec(govde.tarih or tarih)
     kosul = (Rapor.user_id == kullanici.id, Rapor.tarih == tarih, Rapor.tur == govde.tur)
     with _kullanici_kilidi(kullanici.id, "rapor"):
         for deneme in range(2):
@@ -726,6 +1008,189 @@ def haftalik_ozet(govde: HaftalikIstek, kullanici: Kullanici = Depends(aktif_kul
     return {"metin": metin, "hafta_baslangic": pazartesi.isoformat(), "rapor_sayisi": len(raporlar)}
 
 
+# ---------------------------------------------------------------- günün rapor düzeni (sıra + kategori)
+
+class DuzenSatiri(BaseModel):
+    item_id: int
+    kategori_id: int | None = None
+
+
+class DuzenYaz(BaseModel):
+    tarih: date | None = None
+    sirali: list[DuzenSatiri]
+
+
+class DuzenKaristir(BaseModel):
+    tarih: date | None = None
+
+
+def duzen_yanit(db: Session, kullanici: Kullanici, tarih: date) -> dict:
+    duzen = GunDuzeni(db, kullanici, tarih)
+    return {"tarih": tarih.isoformat(), **duzen.json(), "etkin": {str(k): v for k, v in duzen.etkin.items()},
+            "rapor_metni": gunun_rapor_metni(db, kullanici, tarih, duzen)}
+
+
+def duzeni_yaz(db: Session, kullanici: Kullanici, tarih: date, satirlar: list[tuple[int, int | None]]) -> None:
+    """Günün düzenini baştan yazar: (madde, elle kategori) sırayla; kategori None ise kural belirler."""
+    db.execute(delete(RaporDuzeni).where(RaporDuzeni.user_id == kullanici.id, RaporDuzeni.tarih == tarih))
+    for sira, (item_id, kategori_id) in enumerate(satirlar, start=1):
+        db.add(RaporDuzeni(user_id=kullanici.id, tarih=tarih, item_id=item_id, kategori_id=kategori_id, sira=sira))
+    db.commit()
+
+
+@router.get("/rapor-duzeni")
+def rapor_duzeni_getir(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    return duzen_yanit(db, kullanici, gun_sec(tarih))
+
+
+@router.post("/rapor-duzeni")
+def rapor_duzeni_yaz(govde: DuzenYaz, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Düzenle modunda sürükle-bırak sonrası günün tam sırası. Kategori, maddenin kuralla bulunan kategorisinden
+    farklıysa saklanır; aynıysa saklanmaz ki sonradan yıldız ya da seçici kuralı işlesin."""
+    tarih = gun_sec(govde.tarih)
+    idler = [s.item_id for s in govde.sirali]
+    if len(set(idler)) != len(idler):
+        raise HTTPException(status_code=422, detail="Bir madde sırada iki kez geçemez")
+    maddeler = {m.id: m for m in db.scalars(select(Madde).where(Madde.user_id == kullanici.id, Madde.id.in_(idler)))}
+    if len(maddeler) != len(idler):
+        raise HTTPException(status_code=404, detail="Madde bulunamadı")
+    baglam = KategoriBaglami(kategorileri_hazirla(db, kullanici))
+    with _kullanici_kilidi(kullanici.id, "duzen"):
+        satirlar = []
+        for s in govde.sirali:
+            if s.kategori_id is not None and s.kategori_id not in baglam.idler:
+                raise HTTPException(status_code=404, detail="Kategori bulunamadı")
+            elle = s.kategori_id if s.kategori_id is not None and s.kategori_id != baglam.dogal(maddeler[s.item_id]) else None
+            satirlar.append((s.item_id, elle))
+        duzeni_yaz(db, kullanici, tarih, satirlar)
+    return duzen_yanit(db, kullanici, tarih)
+
+
+@router.post("/rapor-duzeni/karistir")
+def rapor_duzeni_karistir(
+    govde: DuzenKaristir | None = None, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
+) -> dict:
+    """Her kategorinin içini yeniden rastgele sıralar; maddeler kategorilerinde kalır."""
+    tarih = gun_sec(govde.tarih if govde else None)
+    with _kullanici_kilidi(kullanici.id, "duzen"):
+        duzen = GunDuzeni(db, kullanici, tarih)
+        satirlar = []
+        for _, liste in duzen.bolumler:
+            liste = list(liste)
+            random.shuffle(liste)
+            satirlar += [(m.id, duzen.satirlar[m.id].kategori_id if m.id in duzen.satirlar else None) for m in liste]
+        duzeni_yaz(db, kullanici, tarih, satirlar)
+    return duzen_yanit(db, kullanici, tarih)
+
+
+@router.delete("/rapor-duzeni")
+def rapor_duzeni_sifirla(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    tarih = gun_sec(tarih)
+    db.execute(delete(RaporDuzeni).where(RaporDuzeni.user_id == kullanici.id, RaporDuzeni.tarih == tarih))
+    db.commit()
+    return duzen_yanit(db, kullanici, tarih)
+
+
+# ---------------------------------------------------------------- rapor kategorileri
+
+class KategoriYeni(BaseModel):
+    ad: str
+    kaynaklar: list[str] = []
+
+
+class KategoriGuncelle(BaseModel):
+    ad: str | None = None
+    kaynaklar: list[str] | None = None
+    sira: int | None = None
+
+
+class KategoriSirasi(BaseModel):
+    idler: list[int]
+
+
+def kategori_adi(ad: str) -> str:
+    ad = re.sub(r"\s+", " ", ad or "").strip()
+    if not ad:
+        raise HTTPException(status_code=422, detail="Kategori adı boş olamaz")
+    if len(ad) > 80:
+        raise HTTPException(status_code=422, detail="Kategori adı en fazla 80 karakter olabilir")
+    return ad
+
+
+def kategori_kaynaklari(kaynaklar: list[str]) -> list[str]:
+    bilinmeyen = set(kaynaklar) - set(KAYNAKLAR)
+    if bilinmeyen:
+        raise HTTPException(status_code=422, detail=f"Bilinmeyen kaynak: {', '.join(sorted(bilinmeyen))}")
+    return list(dict.fromkeys(kaynaklar))
+
+
+def kategori_listesi(db: Session, kullanici: Kullanici) -> dict:
+    return {"kategoriler": [k.sozluk() for k in kategorileri_hazirla(db, kullanici)]}
+
+
+@router.get("/kategoriler")
+def kategorileri_getir(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    return kategori_listesi(db, kullanici)
+
+
+@router.post("/kategoriler", status_code=201)
+def kategori_ekle(govde: KategoriYeni, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    kategorileri_hazirla(db, kullanici)
+    sira = (db.scalar(select(func.max(Kategori.sira)).where(Kategori.user_id == kullanici.id)) or 0) + 1
+    kategori = Kategori(user_id=kullanici.id, ad=kategori_adi(govde.ad), kaynaklar=kategori_kaynaklari(govde.kaynaklar), sira=sira)
+    db.add(kategori)
+    db.commit()
+    return kategori.sozluk()
+
+
+@router.patch("/kategoriler/{kategori_id}")
+def kategori_guncelle(
+    kategori_id: int, govde: KategoriGuncelle, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
+) -> dict:
+    """Sistem kategorisinin yalnız adı ve sırası değişir."""
+    kategori = kullanici_kategorisi(db, kullanici, kategori_id)
+    if govde.ad is not None:
+        kategori.ad = kategori_adi(govde.ad)
+    if govde.kaynaklar is not None:
+        kaynaklar = kategori_kaynaklari(govde.kaynaklar)
+        if kategori.sistem and kaynaklar:
+            raise HTTPException(status_code=422, detail="Sistem kategorisine kaynak bağlanamaz")
+        kategori.kaynaklar = kaynaklar
+    if govde.sira is not None:
+        kategori.sira = govde.sira
+    db.commit()
+    return kategori.sozluk()
+
+
+@router.delete("/kategoriler/{kategori_id}")
+def kategori_sil(kategori_id: int, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Maddeler kategorisiz kalır (kurala göre Genel İşler'e düşer); sistem kategorisi silinemez."""
+    kategori = kullanici_kategorisi(db, kullanici, kategori_id)
+    if kategori.sistem:
+        raise HTTPException(status_code=400, detail="Sistem kategorisi silinemez")
+    # sqlite ON DELETE SET NULL'u zorlamadığı için elle
+    db.execute(Madde.__table__.update().where(Madde.user_id == kullanici.id, Madde.kategori_id == kategori.id).values(kategori_id=None))
+    db.execute(RaporDuzeni.__table__.update().where(
+        RaporDuzeni.user_id == kullanici.id, RaporDuzeni.kategori_id == kategori.id).values(kategori_id=None))
+    db.delete(kategori)
+    db.commit()
+    return kategori_listesi(db, kullanici)
+
+
+@router.post("/kategoriler/sira")
+def kategori_sirala(govde: KategoriSirasi, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Verilen sıra başa, listede olmayanlar mevcut sıralarıyla sona."""
+    kategoriler = kategorileri_hazirla(db, kullanici)
+    bizim = {k.id: k for k in kategoriler}
+    if len(set(govde.idler)) != len(govde.idler) or any(i not in bizim for i in govde.idler):
+        raise HTTPException(status_code=404, detail="Kategori bulunamadı")
+    sirali = [bizim[i] for i in govde.idler] + [k for k in kategoriler if k.id not in set(govde.idler)]
+    for sira, k in enumerate(sirali, start=1):
+        k.sira = sira
+    db.commit()
+    return kategori_listesi(db, kullanici)
+
+
 # ---------------------------------------------------------------- ayarlar
 
 class AyarGuncelle(BaseModel):
@@ -744,6 +1209,8 @@ class AyarGuncelle(BaseModel):
     hatirlatma_eposta_adres: str | None = None
     kaynaklar: dict[str, bool] | None = None
     eposta_gruplama: Literal["konu", "alici"] | None = None
+    rapor_bicimi: Literal["kategorili", "duz"] | None = None
+    karistir: bool | None = None
 
 
 def sozlugu_ayristir(deger: str | dict[str, str]) -> dict[str, str]:
@@ -798,7 +1265,7 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
     gruplama = veri.pop("eposta_gruplama", None)
     if gruplama is not None:
         a.eposta_gruplama = gruplama
-    for alan in ("hatirlatma_push", "hatirlatma_eposta"):
+    for alan in ("hatirlatma_push", "hatirlatma_eposta", "rapor_bicimi", "karistir"):
         deger = veri.pop(alan, None)
         if deger is not None:
             setattr(a, alan, deger)

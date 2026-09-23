@@ -52,6 +52,60 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
 .kaynakIpucu a{font-weight:600}
 .sec .taramaZamani{margin-top:2px}
 
+/* gün gezgini: ‹ › ve tarih seçici */
+.gunSatiri{display:flex; align-items:flex-end; justify-content:space-between; gap:12px}
+.tarihDugme{font:inherit; color:inherit; letter-spacing:inherit; background:none; border:0; padding:0; cursor:pointer; display:inline-flex; align-items:center; gap:6px; text-align:left}
+.tarihDugme svg{opacity:.55}
+.okcuklar{display:flex; gap:6px; flex:none}
+.okDugme{width:36px; height:36px; border:0; border-radius:10px; background:var(--dark-2); color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer}
+.okDugme:disabled{opacity:.35; cursor:default}
+.gunAdi .bugunIsaret{color:#5ee07a}
+.takvim{position:fixed; z-index:45; background:var(--paper); color:var(--ink); border-radius:16px; box-shadow:0 12px 40px -12px rgba(18,21,26,.35); padding:12px; width:288px}
+.takvim .ay{font-size:13px; font-weight:700; margin:2px 4px 8px}
+.takvim .izgara7{display:grid; grid-template-columns:repeat(7, 1fr); gap:4px}
+.takvim .gunBasi{font-size:11px; font-weight:600; color:var(--ink-3); text-align:center; padding:2px 0}
+.takvim button{font:inherit; font-size:13px; font-weight:500; height:34px; border:0; border-radius:10px; background:none; color:var(--ink); cursor:pointer}
+.takvim button:hover:not(:disabled){background:var(--field)}
+.takvim button:disabled{color:var(--check-off); cursor:default}
+.takvim button.bugunGun{box-shadow:inset 0 0 0 1.5px var(--accent); color:var(--accent); font-weight:700}
+.takvim button.secili{background:var(--btn); color:var(--btn-ink); box-shadow:none}
+.takvim .raporlu::after{content:""; display:block; width:4px; height:4px; border-radius:50%; background:var(--ok); margin:1px auto 0}
+
+/* kategori etiketi, seçici ve önemli işareti */
+.katEtiket{font:inherit; font-size:11.5px; font-weight:600; color:var(--ink-2); background:var(--field); border:0; border-radius:999px; padding:1px 8px; cursor:pointer; display:inline-flex; align-items:center; gap:3px}
+.katEtiket:hover{color:var(--ink); background:var(--count)}
+span.katEtiket{cursor:default}
+.onemRozet{font-size:11.5px; font-weight:700; color:var(--warn-ink); background:var(--warn-bg); border-radius:999px; padding:1px 8px}
+.arac.yildiz.on{color:var(--ongoing)}
+.arac.yildiz.on svg{fill:currentColor}
+.katMenu{position:fixed; z-index:45; background:var(--paper); border-radius:14px; box-shadow:0 12px 40px -12px rgba(18,21,26,.35); padding:6px; min-width:200px; max-width:calc(100vw - 32px)}
+.katMenu .menuBaslik{font-size:11.5px; font-weight:600; color:var(--ink-3); padding:6px 10px 4px}
+.katMenu button{font:inherit; font-size:14px; width:100%; display:flex; align-items:center; gap:8px; border:0; background:none; border-radius:10px; padding:9px 10px; cursor:pointer; color:var(--ink); text-align:left}
+.katMenu button:hover{background:var(--field)}
+.katMenu button .tikYer{width:16px; flex:none; color:var(--accent)}
+.katMenu button.soluk{color:var(--ink-2); font-size:13px}
+
+/* rapor paneli: biçim segmenti, düzenle/karıştır */
+.raporBaslik .segment button{padding:7px 10px; font-size:12px}
+.raporAraclar{display:flex; align-items:center; gap:16px; padding:0 6px 10px}
+.raporAraclar .kopyalaKucuk{margin-left:auto}
+.raporAraclar .link.acik{color:var(--ink)}
+.duzenleKutu{display:flex; flex-direction:column; gap:10px}
+.duzenleBant{display:none}
+.duzenleAraclar{display:flex; align-items:center; gap:16px; padding:0 2px}
+.duzenleAraclar .bittiMasa{margin-left:auto}
+.duzenleListe{display:flex; flex-direction:column; gap:10px}
+.katKart{background:var(--sub); border:1px solid var(--line); border-radius:16px; padding:10px 10px 6px}
+.katKart .katBaslik{display:flex; align-items:center; font-size:13px; font-weight:700; padding:0 4px 6px}
+.katListe{display:flex; flex-direction:column; gap:6px; min-height:44px; padding-bottom:4px; border-radius:12px}
+.katListe:empty{border:1.5px dashed var(--check-off)}
+.katListe:empty::after{content:"Buraya sürükleyebilirsin"; font-size:12.5px; color:var(--ink-3); padding:12px; text-align:center}
+.dRow{display:flex; align-items:flex-start; gap:8px; background:var(--paper); border-radius:12px; padding:8px 10px 8px 4px; font-size:13.5px; line-height:1.4; box-shadow:0 1px 1px rgba(18,21,26,.04)}
+.dRow .txt{font-size:13.5px; padding-top:4px}
+.dRow .tutamak{margin-top:-1px}
+body.duzenleAcik .raporKart .bubble, body.duzenleAcik .raporKart > .hint{display:none}
+body.duzenleAcik .raporAraclar [data-eylem=karistir]{display:none}
+
 /* rapor önizleme */
 .bubble{
   background:var(--bubble); color:var(--bubble-ink); border-radius:16px 16px 16px 4px;
@@ -67,7 +121,13 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
 
 @media (max-width:760px){
   main{padding-bottom:calc(170px + env(safe-area-inset-bottom))}
-  .raporBaslik .kopyalaKucuk{display:none}
+  .raporAraclar .kopyalaKucuk{display:none}
+  /* telefonda Düzenle tam ekran */
+  body.duzenleAcik{overflow:hidden}
+  body.duzenleAcik .duzenleKutu{position:fixed; inset:0; z-index:50; background:var(--bg); overflow:auto; gap:12px; padding:0 16px calc(24px + env(safe-area-inset-bottom))}
+  body.duzenleAcik .duzenleBant{display:flex; align-items:center; justify-content:space-between; margin:0 -16px; position:sticky; top:0; z-index:2}
+  .duzenleBant .bittiDugme{font:inherit; font-size:14px; font-weight:700; height:36px; padding:0 14px; border:0; border-radius:10px; background:var(--accent); color:#fff; cursor:pointer}
+  .duzenleAraclar .bittiMasa{display:none}
   .araclar{flex-direction:column; margin:-5px -8px -5px -6px}
   .arac{width:28px; height:28px}
   .sadeceMasaustu{display:none !important}
@@ -115,6 +175,13 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
   .raporAlt{display:flex; gap:10px; padding:14px}
   .raporAlt .secondary{flex:1}
   .raporAlt .primary{flex:1.4}
+  .raporAraclar{padding:0 18px 10px}
+  main > .serit{margin-bottom:18px}
+  .raporPanel > .sec{align-items:center}
+  .raporKart .duzenleKutu{flex:1; min-height:0; overflow:auto; margin:0 14px; padding-bottom:4px}
+  .tarihSatiri .gunSatiri{justify-content:flex-start; gap:16px}
+  .tarihSatiri .okDugme{background:var(--paper); color:var(--ink); box-shadow:var(--shadow)}
+  .tarihSatiri .gunAdi .bugunIsaret{color:var(--ok-ink)}
 }
 </style>
 </head>
@@ -127,7 +194,13 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
     <a class="marka" href="/"><i>{{ i.ikon('tik', 16, 2.6) }}</i>Rapor</a>
     <a class="avatar" href="/ayarlar" aria-label="Ayarlar">{{ kullanici.ad[:1]|upper }}</a>
   </div>
-  <div><div class="gunAdi" data-gun-adi></div><h1 data-tarih>Günlük rapor</h1></div>
+  <div class="gunSatiri">
+    <div><div class="gunAdi" data-gun-adi></div><h1><button type="button" class="tarihDugme" data-eylem="takvim" aria-haspopup="dialog" title="Gün seç"><span data-tarih>Günlük rapor</span>{{ i.ikon('asagi', 18, 2.4) }}</button></h1></div>
+    <div class="okcuklar">
+      <button type="button" class="okDugme" data-eylem="onceki" aria-label="Önceki gün" title="Önceki gün">{{ i.ikon('geri', 17, 2.4) }}</button>
+      <button type="button" class="okDugme" data-eylem="sonraki" aria-label="Sonraki gün" title="Sonraki gün">{{ i.ikon('ileri', 17, 2.4) }}</button>
+    </div>
+  </div>
   <div class="cipler">
     <div class="chip"><b data-say="yapilan">0</b>yapılan</div>
     <div class="chip" data-kaynak-cip="gmail" hidden><b data-say="eposta">0</b>e-posta</div>
@@ -138,10 +211,18 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
 
 <main>
   <p class="uyari" id="loadError" role="alert" hidden></p>
+  <p class="serit mavi" id="gecmisSerit" hidden><span id="gecmisMetin"></span><button class="link" type="button" data-eylem="bugune">Bugüne dön</button></p>
+  <p class="serit sari" id="kacirilanSerit" hidden><span id="kacirilanMetin"></span><button class="link" type="button" data-eylem="kacirilanAc">Aç ›</button><button class="link kapat" type="button" data-eylem="kacirilanKapat" aria-label="Kapat" title="Kapat">{{ i.ikon('carpi', 14, 2.4) }}</button></p>
   <div class="bugun">
     <div class="solKolon">
       <div class="tarihSatiri">
-        <div><div class="gunAdi" data-gun-adi></div><h1 data-tarih>Günlük rapor</h1></div>
+        <div class="gunSatiri">
+          <div><div class="gunAdi" data-gun-adi></div><h1><button type="button" class="tarihDugme" data-eylem="takvim" aria-haspopup="dialog" title="Gün seç"><span data-tarih>Günlük rapor</span>{{ i.ikon('asagi', 18, 2.4) }}</button></h1></div>
+          <div class="okcuklar">
+            <button type="button" class="okDugme" data-eylem="onceki" aria-label="Önceki gün" title="Önceki gün">{{ i.ikon('geri', 17, 2.4) }}</button>
+            <button type="button" class="okDugme" data-eylem="sonraki" aria-label="Sonraki gün" title="Sonraki gün">{{ i.ikon('ileri', 17, 2.4) }}</button>
+          </div>
+        </div>
         <div class="cipler">
           <div class="beyazCip"><b data-say="yapilan">0</b>yapılan</div>
           <div class="beyazCip" data-kaynak-cip="gmail" hidden><b data-say="eposta">0</b>e-posta</div>
@@ -152,7 +233,7 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
 
       <div class="izgara">
         <section class="blok">
-          <div class="sec"><div class="baslik"><h2>Bugün yapılanlar</h2><span class="cnt" id="doneCnt">0</span></div><button class="link" type="button" data-eylem="duzelt"><span class="etiket">Claude ile düzelt</span></button></div>
+          <div class="sec"><div class="baslik"><h2 id="yapilanBaslik">Bugün yapılanlar</h2><span class="cnt" id="doneCnt">0</span></div><button class="link" type="button" data-eylem="duzelt"><span class="etiket">Claude ile düzelt</span></button></div>
           <div class="card">
             <div class="liste" id="doneList"></div>
             <div class="ekle">
@@ -208,11 +289,29 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
     <aside class="blok raporPanel">
       <div class="sec raporBaslik">
         <div><h2>Rapor</h2><div class="meta">Tikli maddelerden canlı üretilir</div></div>
+        <div class="segment" id="bicimSec" role="group" aria-label="Rapor biçimi">
+          <button type="button" data-bicim="kategorili" aria-pressed="true" class="on">Başlıklı</button>
+          <button type="button" data-bicim="duz" aria-pressed="false">Başlıksız</button>
+        </div>
+      </div>
+      <div class="raporAraclar">
+        <button class="link" type="button" data-eylem="duzenle">{{ i.ikon('tutamak', 15, 2.4) }}Düzenle</button>
+        <button class="link" type="button" data-eylem="karistir">{{ i.ikon('karistir', 15, 2.2) }}Karıştır</button>
         <button class="kopyalaKucuk" type="button" data-eylem="kopyala" aria-label="Kopyala" title="Kopyala">{{ i.ikon('kopyala', 16) }}</button>
       </div>
       <div class="card raporKart">
         <p class="hint" id="duzeltDurum" role="status" hidden></p>
         <div class="bubble" id="preview"></div>
+        <div class="duzenleKutu" id="duzenleKutu" hidden>
+          <div class="bant duzenleBant"><h1>Düzenle</h1><button class="bittiDugme" type="button" data-eylem="duzenleBitti">Bitti</button></div>
+          <div class="duzenleAraclar">
+            <button class="link" type="button" data-eylem="karistir">{{ i.ikon('karistir', 15, 2.2) }}Karıştır</button>
+            <button class="link soluk" type="button" data-eylem="sifirla" id="sifirlaDugme">{{ i.ikon('yenile', 14, 2.2) }}Sırayı sıfırla</button>
+            <button class="link bittiMasa" type="button" data-eylem="duzenleBitti">Bitti</button>
+          </div>
+          <p class="hint">Tutamaktan tutup sürükle; bir maddeyi başka kategoriye de taşıyabilirsin. Sıra yalnız bu günün raporu için geçerli.</p>
+          <div class="duzenleListe" id="duzenleListe"></div>
+        </div>
         <div class="raporAlt">
           <button class="secondary" type="button" data-eylem="duzelt"><span class="etiket">Claude ile düzelt</span></button>
           <button class="primary" type="button" data-eylem="wa"><span class="wa-ikon">{{ i.ikon('wa', 17) }}</span><span class="etiket">WhatsApp'ta aç</span></button>
@@ -225,9 +324,14 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
 
 <template id="ikonlar">
   {{ i.ikon('tik', 15, 2.4) }}{{ i.ikon('zarf', 17) }}{{ i.ikon('dal', 17) }}{{ i.ikon('saat', 17) }}
-  {{ i.ikon('kalem', 15) }}{{ i.ikon('carpi', 15) }}{{ i.ikon('kivilcim', 11, 2.4) }}
+  {{ i.ikon('kalem', 15) }}{{ i.ikon('carpi', 15) }}{{ i.ikon('kivilcim', 11, 2.4) }}{{ i.ikon('yildiz', 15) }}
+  {{ i.ikon('tutamak', 16, 2.6) }}{{ i.ikon('asagi', 11, 2.6) }}
 </template>
 
+<div class="takvim" id="takvim" role="dialog" aria-label="Gün seç" hidden></div>
+<div class="katMenu" id="katMenu" role="menu" hidden></div>
+
+<script src="/static/vendor/Sortable.min.js"></script>
 <script>
 // Service worker yalnız bildirimler için; sayfa önbelleği yok.
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -243,7 +347,26 @@ function saatteEki(saat){
 }
 
 // Sunucudaki durumun sayfadaki kopyası. Her değişiklik önce burada yapılır, sonra ilgili uca yazılır.
-const S = { tarih:null, elle:[], surekli:[], devam:[], bugun:{ yarin:null }, metin:{ yarin:'' }, bulunan:[], ayarlar:{}, aiAnahtari:false, sonKopya:null, taramaZamani:null };
+// tarih: seçili gün (?tarih=); bugunTarih: sunucunun İstanbul günü. duzen: günün kategori bölümleri ve sırası.
+const S = {
+  tarih: new URLSearchParams(location.search).get('tarih') || null, bugunTarih:null, kacirilan:null,
+  elle:[], surekli:[], devam:[], bugun:{ yarin:null }, metin:{ yarin:'' }, bulunan:[], ayarlar:{}, aiAnahtari:false,
+  sonKopya:null, taramaZamani:null,
+  duzen:{ kategoriler:[], bolumler:[], duz:{ yapilanlar:[], devam:[] }, ozel:false, genel:null }, duzenleModu:false,
+};
+const KULLANICI_ID = {{ kullanici.id }};
+
+// Tarihler İstanbul gününe göre ISO (YYYY-AA-GG); saat dilimi kaymasın diye öğlen UTC ile hesaplanır.
+const gunNesnesi = iso => new Date(iso + 'T12:00:00Z');
+const isoGun = d => d.toISOString().slice(0, 10);
+const gunEkle = (iso, n) => { const d = gunNesnesi(iso); d.setUTCDate(d.getUTCDate() + n); return isoGun(d); };
+const gunYazisi = (iso, secenek) => gunNesnesi(iso).toLocaleDateString('tr-TR', { ...secenek, timeZone:'UTC' });
+const noktaliTarih = iso => gunYazisi(iso, { day:'2-digit', month:'2-digit', year:'numeric' });
+const GECMIS_GUN = 30;
+const enEskiGun = () => gunEkle(S.bugunTarih, -GECMIS_GUN);
+const bugunMu = () => !S.bugunTarih || S.tarih === S.bugunTarih;
+// Gün kapsamlı uçlara seçili gün eklenir.
+const yolT = yol => S.tarih ? `${yol}${yol.includes('?') ? '&' : '?'}tarih=${S.tarih}` : yol;
 
 const $ = id => document.getElementById(id);
 const hepsiniBul = eylem => [...document.querySelectorAll(`[data-eylem="${eylem}"]`)];
@@ -268,14 +391,16 @@ function kaydetHata(e){ toast('Kaydedilemedi: ' + e.message); durumuYukle(); }
 // Sunucu yanıtı (rapor_metni, metin_ai…) nesneye yazılır ve önizleme tazelenir.
 function guncelle(m, degisim){
   Object.assign(m, degisim);
-  return api(`/api/maddeler/${m.id}`, 'PATCH', degisim).then(y => { Object.assign(m, y); render(); }).catch(kaydetHata);
+  return api(yolT(`/api/maddeler/${m.id}`), 'PATCH', degisim).then(y => { Object.assign(m, y); render(); }).catch(kaydetHata);
 }
 function sil(m){ return api(`/api/maddeler/${m.id}`, 'DELETE').catch(kaydetHata); }
 
 function variantOf(text){
   const parts = text.split('|').map(s=>s.trim()).filter(Boolean);
   if (parts.length <= 1) return text.trim();
-  const d = new Date(); const day = Math.floor((d - new Date(d.getFullYear(),0,0)) / 86400000);
+  // yılın günü, seçili güne göre (sunucudaki surekli_varyant ile aynı)
+  const d = gunNesnesi(S.tarih || S.bugunTarih || isoGun(new Date()));
+  const day = Math.floor((d - Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400000);
   return parts[day % parts.length];
 }
 const lines = s => s.split('\n').map(x=>x.trim().replace(/^[-•*]\s*/,'')).filter(Boolean);
@@ -289,14 +414,51 @@ const kaynakAcik = k => !!(S.ayarlar.kaynaklar || {})[k];
 const herhangiKaynak = () => kaynakAcik('gmail') || kaynakAcik('github');
 const bulunanAcik = m => kaynakAcik(m.kaynak === 'medusa' ? 'github' : 'gmail');
 
+// --- günün düzeni: kategori bölümleri (sunucudan) + sayfadaki maddeler ---
+const katBul = id => S.duzen.kategoriler.find(k => k.id === id);
+const rapordaMi = m => !!m && m.tikli && !m.gizli;
+const bicim = () => S.ayarlar.rapor_bicimi === 'duz' ? 'duz' : 'kategorili';
+function maddeHaritasi(){
+  return new Map([...S.elle, ...S.bulunan.filter(m => !m.gizli), ...S.surekli, ...S.devam].map(m => [m.id, m]));
+}
+// Sunucunun düzenine henüz girmemiş madde (yeni eklenen, geri alınan) kendi kategorisinin sonuna eklenir.
+function bolumListesi(){
+  const harita = maddeHaritasi(), gorulen = new Set();
+  const bolumler = S.duzen.bolumler.map(b => {
+    const maddeler = b.maddeler.map(id => harita.get(id)).filter(Boolean);
+    maddeler.forEach(m => gorulen.add(m.id));
+    return { kat: katBul(b.kategori_id), maddeler };
+  });
+  harita.forEach(m => {
+    if (gorulen.has(m.id)) return;
+    const hedef = bolumler.find(b => b.kat && b.kat.id === (m.etkin_kategori_id || S.duzen.genel)) || bolumler[0];
+    if (hedef) hedef.maddeler.push(m);
+  });
+  return bolumler.filter(b => b.kat);
+}
+function duzListe(){
+  const harita = maddeHaritasi(), gorulen = new Set();
+  const al = idler => idler.map(id => harita.get(id)).filter(m => m && !gorulen.has(m.id) && gorulen.add(m.id));
+  const yapilanlar = al(S.duzen.duz.yapilanlar), devam = al(S.duzen.duz.devam);
+  harita.forEach(m => { if (!gorulen.has(m.id)) (m.tur === 'devam' ? devam : yapilanlar).push(m); });
+  return { yapilanlar, devam };
+}
+// kategorili biçimde devam eden işler "iş — aşama" olarak yazılır
+const bolumMetni = m => m.tur === 'devam' ? hamMetin(m) : raporMetni(m);
+
 function buildReport(){
-  const out = [`*${S.ayarlar.rapor_basligi || 'Günlük Rapor'} – ${shortDate(new Date())}*`, ''];
-  const done = [...S.elle.filter(m=>m.tikli).map(raporMetni), ...foundForReport(), ...S.surekli.filter(r=>r.tikli).map(raporMetni)];
-  if (done.length){ out.push('*Yapılanlar*'); done.forEach(x=>out.push('• '+x)); out.push(''); }
-  const ong = S.devam.filter(o=>o.tikli);
-  if (ong.length){ out.push('*Devam eden*'); ong.forEach(o=>out.push('• '+raporMetni(o))); out.push(''); }
+  const out = [`*${S.ayarlar.rapor_basligi || 'Günlük Rapor'} – ${S.tarih ? noktaliTarih(S.tarih) : shortDate(new Date())}*`, ''];
+  const bolum = (ad, satirlar) => { if (satirlar.length){ out.push(`*${ad}*`); satirlar.forEach(x => out.push('• ' + x)); out.push(''); } };
   const plan = lines(S.metin.yarin);
-  if (plan.length){ out.push('*Yarın*'); plan.forEach(x=>out.push('• '+x)); out.push(''); }
+  if (bicim() === 'duz'){
+    const { yapilanlar, devam } = duzListe();
+    bolum('Yapılanlar', yapilanlar.filter(rapordaMi).map(raporMetni));
+    bolum('Devam eden', devam.filter(rapordaMi).map(raporMetni));
+    bolum('Yarın', plan);
+  } else {
+    bolumListesi().forEach(b => bolum(`${b.kat.ad}:`, b.maddeler.filter(rapordaMi).map(bolumMetni)));
+    bolum('Yarın:', plan);
+  }
   return out.join('\n').trim();
 }
 
@@ -321,10 +483,31 @@ function renderPreview(){
 telefon.addEventListener('change', renderPreview);
 
 const TR_GUN = { weekday:'long' }, TR_TARIH = { day:'numeric', month:'long' };
+function renderGun(){
+  const iso = S.tarih || isoGun(new Date());
+  document.querySelectorAll('[data-gun-adi]').forEach(e => {
+    e.textContent = gunYazisi(iso, TR_GUN);
+    if (S.bugunTarih && bugunMu()) e.appendChild(el('span', 'bugunIsaret', ' · bugün'));
+  });
+  document.querySelectorAll('[data-tarih]').forEach(e => e.textContent = gunYazisi(iso, TR_TARIH));
+  hepsiniBul('onceki').forEach(b => b.disabled = !S.bugunTarih || iso <= enEskiGun());
+  hepsiniBul('sonraki').forEach(b => b.disabled = !S.bugunTarih || iso >= S.bugunTarih);
+  // geçmiş gün: mavi şerit; bugün: kaçırılan gün için sarı şerit (o gün için kapatılabilir)
+  $('gecmisSerit').hidden = bugunMu();
+  $('yapilanBaslik').textContent = bugunMu() ? 'Bugün yapılanlar' : 'Yapılanlar';
+  if (!bugunMu()) $('gecmisMetin').textContent = `${gunYazisi(iso, TR_TARIH)} ${gunYazisi(iso, TR_GUN)} raporunu düzenliyorsun ·`;
+  const kapali = (() => { try { return localStorage.getItem(`gunluk-rapor-kacirilan-${KULLANICI_ID}`); } catch { return null; } })();
+  const kacirilanGoster = bugunMu() && S.kacirilan && kapali !== S.kacirilan;
+  $('kacirilanSerit').hidden = !kacirilanGoster;
+  if (kacirilanGoster){
+    const gunAd = gunYazisi(S.kacirilan, TR_GUN);
+    $('kacirilanMetin').textContent = S.kacirilan === gunEkle(S.bugunTarih, -1)
+      ? `Dünkü (${gunAd}) rapor gönderilmedi ·`
+      : `${gunAd} (${gunYazisi(S.kacirilan, TR_TARIH)}) raporu gönderilmedi ·`;
+  }
+}
 function renderStatus(){
-  const d = new Date();
-  document.querySelectorAll('[data-gun-adi]').forEach(e => e.textContent = d.toLocaleDateString('tr-TR', TR_GUN));
-  document.querySelectorAll('[data-tarih]').forEach(e => e.textContent = d.toLocaleDateString('tr-TR', TR_TARIH));
+  renderGun();
   const gorunen = S.bulunan.filter(it => !it.gizli);
   const sayilar = {
     yapilan: S.elle.filter(m => m.tikli).length,
@@ -334,10 +517,11 @@ function renderStatus(){
   document.querySelectorAll('[data-say]').forEach(e => e.textContent = sayilar[e.dataset.say]);
   document.querySelectorAll('[data-kaynak-cip]').forEach(e => e.hidden = e.dataset.kaynakCip === 'herhangi' ? !herhangiKaynak() : !kaynakAcik(e.dataset.kaynakCip));
   if (S.tarih) { $('bulunanBlok').hidden = !herhangiKaynak(); $('kaynakIpucu').hidden = herhangiKaynak(); }
-  const saat = S.ayarlar.hatirlatma_saat || '17:00';
+  // seçili günün kopyalama durumu; geçmiş günde hatırlatma saati anlamsız
+  const saat = bugunMu() ? (S.ayarlar.hatirlatma_saat || '17:00') : '';
   const cip = $('saatCip');
   cip.classList.toggle('tamam', !!S.sonKopya);
-  cip.textContent = S.sonKopya ? `Gönderildi ${saatBicimi(S.sonKopya)}` : saat;
+  cip.textContent = S.sonKopya ? `Gönderildi ${saatBicimi(S.sonKopya)}` : (saat || 'Gönderilmedi');
   window.durumRozeti(S.sonKopya, saat);
 }
 
@@ -350,7 +534,7 @@ const tool = (tools, ad, title, fn, cls) => {
 // --- Claude düzeltmesi: "düzeltildi" etiketi ve orijinal/AI seçimi ---
 const acikPaneller = new Set();
 function aiSec(m, govde){
-  return api(`/api/maddeler/${m.id}/ai`, 'PATCH', govde).then(y => {
+  return api(yolT(`/api/maddeler/${m.id}/ai`), 'PATCH', govde).then(y => {
     Object.assign(m, y); render();
     if (y.hatalar && y.hatalar.length) toast(y.hatalar[0]);
   }).catch(e => toast('Olmadı: ' + e.message));
@@ -379,6 +563,72 @@ function aiPaneli(m, meta, txt){
   b(acik ? 'Orijinali kullan' : 'AI metnini kullan', () => aiSec(m, { kullan: !acik }));
   if (S.aiAnahtari) b('Yeniden düzelt', () => aiSec(m, { yenile: true }));
   p.appendChild(satir); txt.appendChild(p);
+}
+
+// --- kategori etiketi, seçici ve önemli (yıldız) ---
+function kategoriEtiketi(item, meta){
+  if (item.onemli){ meta.appendChild(el('span', 'onemRozet', 'Önemli')); return; }
+  const kat = katBul(item.etkin_kategori_id);
+  if (!kat || (item.tur === 'devam' && kat.sistem === 'devam')) return;  // devam eden işin kendi kartı var
+  if (item.tur === 'devam'){ meta.appendChild(el('span', 'katEtiket', kat.ad)); return; }
+  const b = el('button', 'katEtiket', kat.ad); b.type = 'button';
+  b.title = 'Rapor kategorisini değiştir'; b.setAttribute('aria-haspopup', 'menu'); b.appendChild(ikon('asagi'));
+  b.onclick = e => { e.stopPropagation(); kategoriMenusu(item, b); };
+  meta.appendChild(b);
+}
+function yildizDugmesi(tools, item){
+  const on = !!item.onemli;
+  tool(tools, 'yildiz', on ? 'Önemli işaretini kaldır' : 'Önemli olarak işaretle', () => onemDegistir(item), 'yildiz' + (on ? ' on' : ''));
+  tools.lastChild.setAttribute('aria-pressed', on);
+}
+async function onemDegistir(item){
+  item.onemli = !item.onemli; render();
+  try { Object.assign(item, await api(yolT(`/api/maddeler/${item.id}`), 'PATCH', { onemli: item.onemli })); await duzeniTazele(); }
+  catch (e) { kaydetHata(e); }
+}
+async function kategoriSec(item, kategori_id){
+  try { Object.assign(item, await api(yolT(`/api/maddeler/${item.id}`), 'PATCH', { kategori_id })); await duzeniTazele(); }
+  catch (e) { kaydetHata(e); }
+}
+
+// Açılır pencereler (kategori seçici, takvim): düğmenin altına, ekranın içinde kalacak biçimde.
+function acilirKonumla(kutu, dugme){
+  kutu.hidden = false;
+  const r = dugme.getBoundingClientRect(), g = kutu.offsetWidth, y = kutu.offsetHeight;
+  const sol = Math.max(16, Math.min(r.left, innerWidth - g - 16));
+  const ust = r.bottom + 8 + y > innerHeight - 8 && r.top - 8 - y > 8 ? r.top - 8 - y : r.bottom + 8;
+  kutu.style.left = sol + 'px'; kutu.style.top = ust + 'px';
+  acikKutu = { kutu, dugme };
+}
+let acikKutu = null;
+function acilirKapat(){ if (acikKutu){ acikKutu.kutu.hidden = true; acikKutu = null; } }
+document.addEventListener('click', e => { if (acikKutu && !acikKutu.kutu.contains(e.target) && !acikKutu.dugme.contains(e.target)) acilirKapat(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && acikKutu){ const d = acikKutu.dugme; acilirKapat(); d.focus(); } });
+addEventListener('resize', acilirKapat);
+// kaydırmada açılır pencere düğmesini izler; düğme ekrandan çıkınca kapanır
+addEventListener('scroll', () => {
+  if (!acikKutu) return;
+  const r = acikKutu.dugme.getBoundingClientRect();
+  if (r.bottom < 0 || r.top > innerHeight) acilirKapat(); else acilirKonumla(acikKutu.kutu, acikKutu.dugme);
+}, { passive:true });
+
+function kategoriMenusu(item, dugme){
+  if (acikKutu && acikKutu.dugme === dugme){ acilirKapat(); return; }
+  acilirKapat();
+  const menu = $('katMenu'); menu.innerHTML = '';
+  menu.appendChild(el('div', 'menuBaslik', 'Rapor kategorisi'));
+  const secenek = (ad, kategori_id, secili, sinif) => {
+    const b = el('button', sinif || ''); b.type = 'button';
+    b.setAttribute('role', 'menuitemradio'); b.setAttribute('aria-checked', secili);
+    const t = el('span', 'tikYer'); if (secili) t.appendChild(ikon('tik'));
+    b.append(t, ad);
+    b.onclick = () => { acilirKapat(); if (!secili) kategoriSec(item, kategori_id); };
+    menu.appendChild(b);
+  };
+  S.duzen.kategoriler.filter(k => !k.sistem).forEach(k => secenek(k.ad, k.id, k.id === item.etkin_kategori_id));
+  if (item.kategori_id) secenek('Otomatik (kurala göre)', null, false, 'soluk');
+  acilirKonumla(menu, dugme);
+  const ilk = menu.querySelector('button'); if (ilk) ilk.focus();
 }
 
 function onayKutusu(item, satir, etiket){
@@ -417,12 +667,14 @@ function row(item, kind){
     meta.appendChild(el('span', '', beklemeEtiketi(item.bekleme_gun || 0)));
   }
   if (item.kaynak === 'not') meta.appendChild(el('span', 'kaynakEtiketi', 'e-postadan'));
+  kategoriEtiketi(item, meta);
   txt.appendChild(meta);
   aiPaneli(item, meta, txt);
   if (!meta.childNodes.length) meta.remove();
   txt.onclick = () => cb.click();
 
   const tools = el('div', 'araclar');
+  yildizDugmesi(tools, item);
   if (kind==='devam'){
     tool(tools, 'kalem','Aşamayı güncelle', asamaDuzenle);
   } else if (kind==='surekli') {
@@ -450,7 +702,7 @@ function row(item, kind){
 
 function bosSatir(metin){ return el('div', 'bos', metin); }
 
-function render(){
+function render(duzenleyiCiz = true){
   const dl = $('doneList'); dl.innerHTML='';
   if (!S.elle.length) dl.appendChild(bosSatir('Henüz madde yok.'));
   S.elle.forEach(m => dl.appendChild(row(m,'elle')));
@@ -464,19 +716,20 @@ function render(){
   S.devam.forEach(o => ol.appendChild(row(o,'devam')));
   $('ongoingCnt').textContent = S.devam.length;
   if (document.activeElement !== $('plan')) $('plan').value = S.metin.yarin;
-  renderStatus(); renderFound(); renderPreview();
+  renderStatus(); renderFound(); renderPreview(); bicimSegmenti();
+  if (S.duzenleModu && duzenleyiCiz) renderDuzenle();
 }
 
 async function ekle(tur, metin, asama){
   try {
-    const m = await api('/api/maddeler', 'POST', { tur, metin, asama });
-    S[tur].push(m); render();
+    const m = await api('/api/maddeler', 'POST', { tur, metin, asama, tarih: S.tarih });
+    S[tur].push(m); render(); duzeniTazele();
   } catch (e) { toast('Eklenemedi: ' + e.message); }
 }
 async function ekleElle(metin){
   try {
-    const m = await api('/api/maddeler', 'POST', { tur:'bugun', kaynak:'elle', metin });
-    S.elle.push(m); render();
+    const m = await api('/api/maddeler', 'POST', { tur:'bugun', kaynak:'elle', metin, tarih: S.tarih });
+    S.elle.push(m); render(); duzeniTazele();
   } catch (e) { toast('Eklenemedi: ' + e.message); }
 }
 function addDone(){ const i=$('doneNew'); const t=i.value.trim(); if(!t) return; i.value=''; ekleElle(t); }
@@ -499,11 +752,11 @@ function gunlukDegisti(kaynak, deger, hemen){
   if (hemen) gunlukYaz(kaynak); else g.t = setTimeout(() => { g.t = null; gunlukYaz(kaynak); }, 600);
 }
 function gunlukYaz(kaynak, keepalive){
-  const g = gunluk[kaynak];
+  const g = gunluk[kaynak], tarih = S.tarih;
   g.zincir = g.zincir.then(async () => {
     const metin = S.metin[kaynak], satir = S.bugun[kaynak];
     if (satir) { if (satir.metin !== metin) { await api(`/api/maddeler/${satir.id}`, 'PATCH', { metin }, { keepalive }); satir.metin = metin; } }
-    else if (metin) { S.bugun[kaynak] = await api('/api/maddeler', 'POST', { tur:'bugun', kaynak, metin }, { keepalive }); }
+    else if (metin) { S.bugun[kaynak] = await api('/api/maddeler', 'POST', { tur:'bugun', kaynak, metin, tarih }, { keepalive }); }
   }).catch(kaydetHata);
 }
 document.addEventListener('visibilitychange', () => {
@@ -526,7 +779,7 @@ function duzeltCalistir(){
   dugmeleriKilitle('duzelt', true); duzeltDurum('Düzeltiliyor…');
   duzeltSurmekte = (async () => {
     try {
-      const d = await api('/api/duzelt', 'POST');
+      const d = await api(yolT('/api/duzelt'), 'POST');
       if (d.atlandi === 'günlük sınır') duzeltDurum('Bugünkü düzeltme hakkı doldu, yarın devam');
       else if (d.atlandi) duzeltDurum('Claude anahtarı tanımlı değil; ham metin kullanılıyor.');
       else if (d.hatalar && d.hatalar.length) duzeltDurum((d.duzeltilen ? `${d.duzeltilen} madde düzeltildi. ` : '') + d.hatalar.join(' · '));
@@ -552,7 +805,7 @@ async function hazirRapor(dugme){
 
 async function raporuKaydet(metin){
   try {
-    const r = await api('/api/raporlar', 'POST', { metin, tur:'gunluk' });
+    const r = await api('/api/raporlar', 'POST', { metin, tur:'gunluk', tarih: S.tarih });
     S.sonKopya = r.olusturma; renderStatus();
   } catch (e) { toast('Geçmişe kaydedilemedi: ' + e.message); }
 }
@@ -597,8 +850,6 @@ async function openWa(btn){
 }
 
 // --- Bugün bulunanlar (Gmail + GitHub) ---
-function foundForReport(){ return S.bulunan.filter(it => !it.gizli && it.tikli).map(raporMetni); }
-
 function renderFound(){
   const ul = $('foundList'); ul.innerHTML = '';
   const visible = S.bulunan.filter(it => !it.gizli);
@@ -620,10 +871,12 @@ function renderFound(){
     const txt = el('div', 'txt tikla'); txt.textContent = aiKullaniliyor(it) ? it.metin_ai : it.metin;
     const kaynak = medusa ? projeEtiketi() : 'Gmail';
     const meta = el('div', 'meta'); meta.appendChild(el('span', '', it.kaynak_zaman ? `${kaynak} · ${istanbulSaati(it.kaynak_zaman)}` : kaynak));
+    kategoriEtiketi(it, meta);
     txt.appendChild(meta);
     aiPaneli(it, meta, txt);
     txt.onclick = () => cb.click();
     const tools = el('div', 'araclar');
+    yildizDugmesi(tools, it);
     tool(tools, 'kalem','Metni düzenle', () => { const eski = raporMetni(it); const s = prompt('Metin:', eski); if (s && s.trim() && s.trim() !== eski){ guncelle(it, { metin: s.trim() }); renderFound(); renderPreview(); } });
     tool(tools, 'carpi','Gizle', () => { guncelle(it, { gizli:true }); renderFound(); renderPreview(); renderStatus(); }, 'sil');
     li.append(tile, txt, tools, cb); ul.appendChild(li);
@@ -636,7 +889,9 @@ async function loadFound(force){
   $('foundStatus').textContent = `${adlar.join(' ve ')} taranıyor…`; $('foundStatus').hidden = false;
   dugmeleriKilitle('yenile', true);
   try {
-    const d = await api('/api/bugun' + (force ? '?yenile=1' : ''));
+    const tarih = S.tarih;
+    const d = await api(yolT('/api/bugun' + (force ? '?yenile=1' : '')));
+    if (tarih !== S.tarih) return;  // bu arada başka güne geçildi
     S.bulunan = d.bulunan.filter(bulunanAcik); S.bulunanYuklendi = true; S.taramaZamani = d.tarama_zamani || null;
     const errs = $('foundErrors'); errs.innerHTML = '';
     (d.hatalar || []).forEach(h => {
@@ -645,8 +900,8 @@ async function loadFound(force){
       errs.appendChild(p);
     });
     $('foundStatus').hidden = true;
-    // Tarama kendine atılan 'rapor:' notlarını bugünün yapılanlarına yazmış olabilir.
-    if (kaynakAcik('gmail')) await durumuYukle();
+    // Tarama yeni bulunanlar ve kendine atılan 'rapor:' notları yazmış olabilir; günün düzeni de onlarla yenilenir.
+    await durumuYukle();
   } catch (e) {
     $('foundStatus').textContent = 'Tarama yapılamadı: ' + e.message;
   } finally {
@@ -657,8 +912,9 @@ async function loadFound(force){
 
 async function durumuYukle(){
   try {
-    const d = await api('/api/durum');
-    S.tarih = d.tarih; S.ayarlar = d.ayarlar; S.aiAnahtari = d.ai_anahtari; S.sonKopya = d.son_kopya; S.taramaZamani = d.tarama_zamani || null;
+    const d = await api(yolT('/api/durum'));
+    S.tarih = d.tarih; S.bugunTarih = d.bugun; S.kacirilan = d.kacirilan_gun; S.duzen = d.duzen;
+    S.ayarlar = d.ayarlar; S.aiAnahtari = d.ai_anahtari; S.sonKopya = d.son_kopya; S.taramaZamani = d.tarama_zamani || null;
     S.surekli = d.maddeler.filter(m => m.tur === 'surekli');
     S.devam = d.maddeler.filter(m => m.tur === 'devam');
     S.bulunan = d.maddeler.filter(m => m.tur === 'bulunan' && bulunanAcik(m));
@@ -667,9 +923,134 @@ async function durumuYukle(){
     if (!gunluk.yarin.t) S.metin.yarin = S.bugun.yarin ? S.bugun.yarin.metin : '';
     $('loadError').hidden = true;
   } catch (e) {
+    if (e.status === 400 && S.tarih){  // adresteki gün aralık dışında: bugüne dön
+      S.tarih = null; history.replaceState(null, '', location.pathname); toast(e.message);
+      return durumuYukle();
+    }
     $('loadError').textContent = 'Veriler yüklenemedi: ' + e.message; $('loadError').hidden = false;
   }
   render();
+}
+
+// --- günün düzeni: sunucudan tazele, Düzenle modu (sürükle-bırak), karıştır, sıfırla ---
+function duzeniUygula(d, duzenleyiCiz = true){
+  S.duzen = { kategoriler: d.kategoriler, bolumler: d.bolumler, duz: d.duz, ozel: d.ozel, genel: d.genel };
+  if (d.etkin) [...S.elle, ...S.bulunan, ...S.surekli, ...S.devam].forEach(m => {
+    if (d.etkin[m.id] !== undefined) m.etkin_kategori_id = d.etkin[m.id];
+  });
+  render(duzenleyiCiz);
+  if (S.duzenleModu && !duzenleyiCiz) $('sifirlaDugme').disabled = !S.duzen.ozel;
+}
+async function duzeniTazele(){
+  const tarih = S.tarih;
+  try { const d = await api(yolT('/api/rapor-duzeni')); if (tarih === S.tarih) duzeniUygula(d); }
+  catch (e) { console.warn('Düzen alınamadı:', e.message); }
+}
+
+let siralayicilar = [];
+function duzenleAc(){
+  S.duzenleModu = true; document.body.classList.add('duzenleAcik'); $('duzenleKutu').hidden = false;
+  hepsiniBul('duzenle').forEach(b => { b.classList.add('acik'); b.setAttribute('aria-pressed', 'true'); });
+  renderDuzenle();
+}
+function duzenleKapat(){
+  S.duzenleModu = false; document.body.classList.remove('duzenleAcik'); $('duzenleKutu').hidden = true;
+  siralayicilar.forEach(x => x.destroy()); siralayicilar = [];
+  hepsiniBul('duzenle').forEach(b => { b.classList.remove('acik'); b.setAttribute('aria-pressed', 'false'); });
+  renderPreview();
+}
+function renderDuzenle(){
+  siralayicilar.forEach(x => x.destroy()); siralayicilar = [];
+  const kutu = $('duzenleListe'); kutu.innerHTML = '';
+  // boş kategoriler de görünür: bırakma hedefi olurlar (raporda görünmezler)
+  bolumListesi().forEach(b => {
+    const maddeler = b.maddeler.filter(rapordaMi);
+    const kart = el('section', 'katKart');
+    const bas = el('div', 'katBaslik'); bas.append(el('span', '', b.kat.ad), el('span', 'cnt', String(maddeler.length)));
+    const liste = el('div', 'katListe'); liste.dataset.kategori = b.kat.id;
+    liste.setAttribute('aria-label', b.kat.ad);
+    maddeler.forEach(m => {
+      const satir = el('div', 'dRow'); satir.dataset.id = m.id;
+      const tut = el('span', 'tutamak'); tut.title = 'Sürükle'; tut.appendChild(ikon('tutamak'));
+      satir.append(tut, el('div', 'txt', bicim() === 'duz' ? raporMetni(m) : bolumMetni(m)));
+      liste.appendChild(satir);
+    });
+    kart.append(bas, liste); kutu.appendChild(kart);
+    siralayicilar.push(Sortable.create(liste, {
+      group: 'rapor', handle: '.tutamak', animation: 150, ghostClass: 'surukleniyor', onEnd: duzenKaydet,
+    }));
+  });
+  $('sifirlaDugme').disabled = !S.duzen.ozel;
+}
+async function duzenKaydet(){
+  const listeler = [...document.querySelectorAll('#duzenleListe .katListe')];
+  document.querySelectorAll('#duzenleListe .katKart').forEach(k => k.querySelector('.cnt').textContent = k.querySelector('.katListe').children.length);
+  const sirali = listeler.flatMap(l => [...l.children].map(r => ({ item_id: Number(r.dataset.id), kategori_id: Number(l.dataset.kategori) })));
+  try { duzeniUygula(await api('/api/rapor-duzeni', 'POST', { tarih: S.tarih, sirali }), false); }
+  catch (e) { toast('Sıra kaydedilemedi: ' + e.message); duzeniTazele(); }
+}
+async function karistir(){
+  try { duzeniUygula(await api('/api/rapor-duzeni/karistir', 'POST', { tarih: S.tarih })); toast('Karıştırıldı'); }
+  catch (e) { toast('Karıştırılamadı: ' + e.message); }
+}
+async function siraSifirla(){
+  try { duzeniUygula(await api(yolT('/api/rapor-duzeni'), 'DELETE')); toast('Sıra sıfırlandı'); }
+  catch (e) { toast('Sıfırlanamadı: ' + e.message); }
+}
+
+// --- rapor biçimi: Başlıklı (kategorili) / Başlıksız (düz) ---
+function bicimSegmenti(){
+  document.querySelectorAll('#bicimSec button').forEach(b => { const on = b.dataset.bicim === bicim(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+}
+document.querySelectorAll('#bicimSec button').forEach(b => b.onclick = async () => {
+  const eski = S.ayarlar.rapor_bicimi;
+  if (b.dataset.bicim === bicim()) return;
+  S.ayarlar.rapor_bicimi = b.dataset.bicim; render();
+  try { S.ayarlar.rapor_bicimi = (await api('/api/ayarlar', 'PUT', { rapor_bicimi: b.dataset.bicim })).rapor_bicimi; }
+  catch (e) { S.ayarlar.rapor_bicimi = eski; render(); toast('Kaydedilemedi: ' + e.message); }
+});
+
+// --- gün seçimi: ‹ ›, takvim (son 30 gün), şeritler ---
+async function gunGit(tarih){
+  acilirKapat();
+  if (!tarih || tarih === S.tarih || !S.bugunTarih || tarih < enEskiGun() || tarih > S.bugunTarih) return;
+  if (S.duzenleModu) duzenleKapat();
+  const g = gunluk.yarin;  // bekleyen "Yarın" yazımı önce eski güne gider
+  if (g.t){ clearTimeout(g.t); g.t = null; gunlukYaz('yarin'); }
+  await g.zincir;
+  Object.assign(S, { tarih, elle:[], bulunan:[], bulunanYuklendi:false, taramaZamani:null, sonKopya:null, kacirilan:null });
+  S.bugun.yarin = null; S.metin.yarin = ''; onizlemeAcik = false; acikPaneller.clear(); duzeltDurum('');
+  $('foundErrors').innerHTML = '';
+  history.replaceState(null, '', tarih === S.bugunTarih ? location.pathname : `?tarih=${tarih}`);
+  render(); await durumuYukle(); loadFound(false);
+}
+async function takvimAc(dugme){
+  if (acikKutu && acikKutu.dugme === dugme){ acilirKapat(); return; }
+  acilirKapat();
+  if (!S.bugunTarih) return;
+  const t = $('takvim'); t.innerHTML = '';
+  const bas = enEskiGun(), son = S.bugunTarih, ay = iso => gunYazisi(iso, { month:'long' });
+  t.appendChild(el('div', 'ay', (ay(bas) === ay(son) ? '' : ay(bas) + ' – ') + gunYazisi(son, { month:'long', year:'numeric' })));
+  const iz = el('div', 'izgara7');
+  ['Pt', 'Sa', 'Ça', 'Pe', 'Cu', 'Ct', 'Pz'].forEach(g => iz.appendChild(el('div', 'gunBasi', g)));
+  const haftaGunu = iso => (gunNesnesi(iso).getUTCDay() + 6) % 7;
+  const bitis = gunEkle(son, 6 - haftaGunu(son));
+  for (let g = gunEkle(bas, -haftaGunu(bas)); g <= bitis; g = gunEkle(g, 1)){
+    const b = el('button', '', String(gunNesnesi(g).getUTCDate())); b.type = 'button'; b.dataset.gun = g;
+    b.disabled = g < bas || g > son;
+    b.setAttribute('aria-label', `${gunYazisi(g, TR_TARIH)} ${gunYazisi(g, TR_GUN)}`);
+    if (g === son) b.classList.add('bugunGun');
+    if (g === S.tarih){ b.classList.add('secili'); b.setAttribute('aria-current', 'date'); }
+    b.onclick = () => gunGit(b.dataset.gun);
+    iz.appendChild(b);
+  }
+  t.appendChild(iz); acilirKonumla(t, dugme);
+  (t.querySelector('.secili') || t.querySelector('button:not(:disabled)')).focus();
+  // raporu kopyalanmış günler küçük yeşil noktayla
+  try {
+    const { raporlar } = await api(`/api/raporlar?tur=gunluk&limit=${GECMIS_GUN + 1}`);
+    raporlar.forEach(r => { const b = t.querySelector(`[data-gun="${r.tarih}"]`); if (b) b.classList.add('raporlu'); });
+  } catch {}
 }
 
 // Eski sürüm verileri tarayıcıda duruyorsa bir kez hesaba taşınır.
@@ -688,6 +1069,19 @@ async function eskiVeriyiTasi(){
 }
 
 hepsiniBul('yenile').forEach(b => b.onclick = () => loadFound(true));
+hepsiniBul('onceki').forEach(b => b.onclick = () => gunGit(gunEkle(S.tarih, -1)));
+hepsiniBul('sonraki').forEach(b => b.onclick = () => gunGit(gunEkle(S.tarih, 1)));
+hepsiniBul('takvim').forEach(b => b.onclick = e => { e.stopPropagation(); takvimAc(b); });
+hepsiniBul('bugune').forEach(b => b.onclick = () => gunGit(S.bugunTarih));
+hepsiniBul('kacirilanAc').forEach(b => b.onclick = () => gunGit(S.kacirilan));
+hepsiniBul('kacirilanKapat').forEach(b => b.onclick = () => {
+  try { localStorage.setItem(`gunluk-rapor-kacirilan-${KULLANICI_ID}`, S.kacirilan); } catch {}
+  $('kacirilanSerit').hidden = true;
+});
+hepsiniBul('duzenle').forEach(b => b.onclick = () => S.duzenleModu ? duzenleKapat() : duzenleAc());
+hepsiniBul('duzenleBitti').forEach(b => b.onclick = duzenleKapat);
+hepsiniBul('karistir').forEach(b => b.onclick = karistir);
+hepsiniBul('sifirla').forEach(b => b.onclick = siraSifirla);
 $('plan').oninput = e => gunlukDegisti('yarin', e.target.value);
 $('doneAdd').onclick = addDone; $('doneNew').onkeydown = e => { if(e.key==='Enter') addDone(); };
 $('recurringAdd').onclick = addRecurring; $('recurringNew').onkeydown = e => { if(e.key==='Enter') addRecurring(); };

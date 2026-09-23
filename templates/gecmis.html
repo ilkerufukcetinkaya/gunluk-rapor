@@ -24,9 +24,6 @@ main{gap:16px}
 .arama input{flex:1; min-width:0; background:transparent; padding:0; height:100%; border-radius:0}
 .arama input:focus{outline:none}
 .arama:focus-within{outline:2px solid var(--focus)}
-.segment{display:flex; background:var(--count); border-radius:12px; padding:3px; flex:none}
-.segment button{font:inherit; font-size:12.5px; font-weight:600; padding:9px 11px; border:0; border-radius:9px; background:transparent; color:var(--ink-2); cursor:pointer}
-.segment button.on{background:var(--paper); color:var(--ink); font-weight:700; box-shadow:0 1px 2px rgba(18,21,26,.06)}
 
 #liste{display:flex; flex-direction:column; gap:16px}
 .grup > .sec{padding-top:2px}
@@ -109,6 +106,7 @@ main{gap:16px}
 <script>
 const BUGUN = '{{ bugun }}';
 const SAYFA = 50;
+const GECMIS_GUN = 30;
 const PATRON = { telefon: '' };
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),1800); }
@@ -219,7 +217,13 @@ function gunlukSatir(r){
     const a = el('div', 'actions');
     const k = el('button', 'primary', 'Kopyala'); k.type = 'button';
     k.onclick = () => kopyala(r.metin);
-    a.appendChild(k); kutu.append(b, a); li.appendChild(kutu);
+    a.appendChild(k);
+    if (r.tarih >= gunEkle(BUGUN, -GECMIS_GUN)){  // son 30 gün Bugün ekranında açılıp düzenlenebilir
+      const d = el('button', 'secondary', 'Düzenle'); d.type = 'button';
+      d.onclick = () => { location.href = `/?tarih=${r.tarih}`; };
+      a.prepend(d);
+    }
+    kutu.append(b, a); li.appendChild(kutu);
   }
   return li;
 }

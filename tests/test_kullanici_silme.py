@@ -1,4 +1,4 @@
-"""K1-ek5: yönetimde kullanıcı silme. Kullanıcıya bağlı yedi tablo da temizlenir; sqlite."""
+"""K1-ek5: yönetimde kullanıcı silme. Kullanıcıya bağlı dokuz tablo da temizlenir; sqlite."""
 import re
 from datetime import date
 
@@ -9,8 +9,8 @@ from sqlalchemy import func, select
 import app as uygulama
 import guvenlik
 from veritabani import (
-    KULLANICIYA_BAGLI, ClaudeKullanim, GunlukIfade, HatirlatmaGonderimi, Kullanici, KullaniciAyari, Madde,
-    OturumYapici, PushAbonelik, Rapor, Temel, motor,
+    KULLANICIYA_BAGLI, ClaudeKullanim, GunlukIfade, HatirlatmaGonderimi, Kategori, Kullanici, KullaniciAyari, Madde,
+    OturumYapici, PushAbonelik, Rapor, RaporDuzeni, Temel, motor,
 )
 
 SIFRE = "dogru-sifre-123"
@@ -36,12 +36,16 @@ def kullanici_olustur(eposta="yonetici@ornek.com", ad="Ufuk", rol="admin") -> in
 
 
 def veri_doldur(uid: int) -> None:
-    """Kullanıcıya bağlı yedi tablonun her birine en az bir satır."""
+    """Kullanıcıya bağlı dokuz tablonun her birine en az bir satır."""
     with OturumYapici() as db:
-        m = Madde(user_id=uid, tur="bugun", tarih=GUN, metin="bir iş")
+        k = Kategori(user_id=uid, ad="Genel İşler", sira=1, kaynaklar=[])
+        db.add(k)
+        db.commit()
+        m = Madde(user_id=uid, tur="bugun", tarih=GUN, metin="bir iş", kategori_id=k.id)
         db.add(m)
         db.commit()
         db.add_all([
+            RaporDuzeni(user_id=uid, tarih=GUN, item_id=m.id, kategori_id=k.id, sira=1),
             GunlukIfade(user_id=uid, item_id=m.id, tarih=GUN, metin_ai="bugünkü ifade"),
             Rapor(user_id=uid, tarih=GUN, tur="gunluk", metin="rapor"),
             PushAbonelik(user_id=uid, endpoint=f"https://push.ornek.com/{uid}", p256dh="p", auth="a", cihaz_adi="Mac"),

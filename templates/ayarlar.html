@@ -54,6 +54,21 @@ input[type=time]{width:124px; font-weight:600; flex:none}
 .kaynak.soluk .lbl{color:var(--ink-2)}
 .ipucu{background:var(--accent-bg); color:var(--ink); border-radius:10px; padding:8px 12px; font-size:12.5px; margin:2px 0 0}
 .row > .kim + .link{align-self:center}
+/* rapor kategorileri */
+.kategoriler{list-style:none; margin:0; padding:0}
+.kategoriler > li{border-top:1px solid var(--line)}
+.katSatir{display:flex; align-items:center; gap:6px; padding:8px 14px 8px 8px}
+.katAd{font:inherit; flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:2px; background:none; border:0; padding:4px 0; cursor:pointer; color:var(--ink); text-align:left}
+.katAd b{font-size:14.5px; font-weight:600; display:flex; align-items:center; gap:8px}
+.katAd small{font-size:12px; color:var(--ink-2)}
+.katSatir .chev{color:var(--chev); transition:transform .15s}
+.katSatir[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.katDetay{background:var(--sub); padding:12px 14px 14px; display:flex; flex-direction:column; gap:10px}
+.katDetay .piller{display:flex; gap:8px; flex-wrap:wrap}
+.katDetay .eylem{display:flex; align-items:center; gap:16px}
+.katDetay .eylem .secondary{height:40px; font-size:13.5px; border-radius:12px; background:var(--paper)}
+.katDetay .eylem .tehlike{margin-left:auto}
+.bicimSatiri .segment{flex:none}
 @media (min-width:761px){
   .ikiDugme button{height:42px}
 }
@@ -154,6 +169,24 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <label class="alan" for="sozluk">Her satıra bir "alan=Kurum"</label>
           <textarea id="sozluk" name="alan_sozlugu" spellcheck="false"></textarea>
         </div>
+        <div class="row orta">
+          <div class="kim"><div class="lbl" id="kategorilerBaslik">Rapor kategorileri</div><div class="meta">Raporun bölümleri; tutamaktan sürükleyerek sırala</div></div>
+        </div>
+        <ul class="kategoriler" id="kategoriListe" aria-labelledby="kategorilerBaslik"></ul>
+        <div class="row orta" style="border-top:1px solid var(--line)">
+          <button type="button" class="link" id="kategoriEkle">{{ i.ikon('arti', 15, 2.4) }}Kategori ekle</button>
+        </div>
+        <div class="row orta">
+          <div class="kim"><label class="lbl" for="karistir">Sürekli işleri her gün karıştır</label><div class="meta">Her gün raporda farklı yerlere serpiştirilir; kapalıysa bölümün sonunda</div></div>
+          <input type="checkbox" class="sw" id="karistir">
+        </div>
+        <div class="row orta bicimSatiri">
+          <div class="kim"><div class="lbl" id="bicimBaslik">Varsayılan biçim</div><div class="meta">Başlıklı: kategori başlıkları · Başlıksız: Yapılanlar / Devam eden</div></div>
+          <div class="segment" id="bicim" role="group" aria-labelledby="bicimBaslik">
+            <button type="button" data-bicim="kategorili" aria-pressed="true" class="on">Başlıklı</button>
+            <button type="button" data-bicim="duz" aria-pressed="false">Başlıksız</button>
+          </div>
+        </div>
       </section>
     </div>
 
@@ -204,7 +237,9 @@ input[type=time]{width:124px; font-weight:600; flex:none}
   </form>
 </main>
 <div class="toast" id="toast"></div>
+<template id="ikonlar">{{ i.ikon('tutamak', 16, 2.6) }}{{ i.ikon('ileri', 16, 2.2) }}</template>
 
+<script src="/static/vendor/Sortable.min.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const ALANLAR = ['gmail_kullanici', 'github_repo', 'proje_adi', 'patron_telefon', 'rapor_basligi'];
@@ -292,6 +327,8 @@ function doldur(a){
   }
   KAYNAK_ANAHTARLARI.forEach(k => { if (!k.checked) ayrintiAc(k.dataset.ayrinti, false); });
   kaynakDurumu();
+  $('karistir').checked = a.karistir !== false;
+  bicimYaz(a.rapor_bicimi);
 }
 
 async function kaydet(){
@@ -305,6 +342,8 @@ async function kaydet(){
   govde.hatirlatma_push = $('hatirlatma_push').checked;
   govde.hatirlatma_eposta = $('hatirlatma_eposta').checked;
   govde.hatirlatma_eposta_adres = $('hatirlatma_eposta_adres').value;
+  govde.karistir = $('karistir').checked;
+  govde.rapor_bicimi = seciliBicim();
   const kaynakDegisti = !sonAyar || !!govde.gmail_sifre || !!govde.github_token
     || govde.gmail_kullanici !== sonAyar.gmail_kullanici || govde.github_repo !== sonAyar.github_repo;
   const a = await istek('/api/ayarlar', { method:'PUT', body: JSON.stringify(govde) });
@@ -351,6 +390,128 @@ $('test').onclick = async () => {
 };
 
 istek('/api/ayarlar').then(doldur).catch(err => hataGoster(err.message));
+
+// ---------------------------------------------------------------- rapor kategorileri, karıştırma, biçim
+const KAYNAK_ADLARI = { gmail:'Gmail', github:'GitHub', medusa:'MEDUSA' };
+const SISTEM_ACIKLAMA = { devam:'Devam eden işler buraya düşer', onemli:'Yıldızlı maddeler buraya düşer' };
+let kategoriler = [], acikKategori = null, yeniKategori = false, kategoriSiralayici = null;
+function el(etiket, sinif, metin){ const e=document.createElement(etiket); if(sinif) e.className=sinif; if(metin!==undefined) e.textContent=metin; return e; }
+function ikon(ad){ return $('ikonlar').content.querySelector(`[data-ad="${ad}"]`).cloneNode(true); }
+
+async function kategorileriYukle(){ kategoriler = (await istek('/api/kategoriler')).kategoriler; kategorileriCiz(); }
+
+function kaynakPilleri(secili){
+  const kutu = el('div', 'piller'); kutu.setAttribute('role', 'group'); kutu.setAttribute('aria-label', 'Kaynaklar');
+  Object.entries(KAYNAK_ADLARI).forEach(([k, ad]) => {
+    const b = el('button', 'pil' + (secili.includes(k) ? ' on' : ''), ad); b.type = 'button'; b.dataset.kaynak = k;
+    b.setAttribute('aria-pressed', secili.includes(k));
+    if (k === 'medusa') { b.disabled = true; b.title = 'MEDUSA yakında'; b.append(el('span', 'yakinda', 'yakında')); }
+    b.onclick = () => { const on = !b.classList.contains('on'); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); };
+    kutu.appendChild(b);
+  });
+  return kutu;
+}
+const pilSecimi = kutu => [...kutu.querySelectorAll('.pil.on')].map(b => b.dataset.kaynak);
+
+// Kategori adının altındaki özet: kaynaklar ya da sistem açıklaması.
+function kategoriOzeti(k){
+  if (k.sistem) return SISTEM_ACIKLAMA[k.sistem] || '';
+  return k.kaynaklar.length ? k.kaynaklar.map(x => KAYNAK_ADLARI[x] || x).join(' · ') + ' bulunanları' : 'Elle eklenenler ve diğerleri';
+}
+
+function kategoriDetayi(k){
+  const d = el('div', 'katDetay'); d.id = `kategori-${k ? k.id : 'yeni'}`;
+  const girdiId = `kategoriAd-${k ? k.id : 'yeni'}`;
+  const etiket = el('label', 'alan', 'Ad'); etiket.htmlFor = girdiId; etiket.style.fontSize = '13px'; etiket.style.fontWeight = '600';
+  const ad = el('input'); ad.type = 'text'; ad.id = girdiId; ad.maxLength = 80; ad.value = k ? k.ad : ''; ad.placeholder = 'Örn. Lisans işleri';
+  d.append(etiket, ad);
+  let piller = null;
+  if (!k || !k.sistem) {
+    d.append(el('div', 'lbl', 'Kaynaklar'));
+    piller = kaynakPilleri(k ? k.kaynaklar : []); d.append(piller);
+    d.append(el('div', 'meta', 'Seçilen kaynaktan bulunan maddeler bu kategoriye düşer.'));
+  } else {
+    d.append(el('div', 'meta', 'Sistem kategorisi: adı ve sırası değişebilir, silinemez.'));
+  }
+  const eylem = el('div', 'eylem');
+  const kaydet = el('button', 'secondary', k ? 'Kaydet' : 'Ekle'); kaydet.type = 'button';
+  const vazgec = el('button', 'link soluk', 'Vazgeç'); vazgec.type = 'button';
+  vazgec.onclick = () => { acikKategori = null; yeniKategori = false; kategorileriCiz(); };
+  kaydet.onclick = async () => {
+    kaydet.disabled = true;
+    const govde = { ad: ad.value };
+    if (piller) govde.kaynaklar = pilSecimi(piller);
+    try {
+      if (k) await istek(`/api/kategoriler/${k.id}`, { method:'PATCH', body: JSON.stringify(govde) });
+      else await istek('/api/kategoriler', { method:'POST', body: JSON.stringify(govde) });
+      acikKategori = null; yeniKategori = false; hataGoster('');
+      await kategorileriYukle(); toast(k ? 'Kategori kaydedildi' : 'Kategori eklendi');
+    } catch (err) { hataGoster(err.message); kaydet.disabled = false; }
+  };
+  // form içinde: Enter formu göndermesin, kategoriyi kaydetsin
+  ad.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); kaydet.click(); } };
+  eylem.append(kaydet, vazgec);
+  if (k && !k.sistem) {
+    const sil = el('button', 'link tehlike', 'Sil'); sil.type = 'button';
+    sil.onclick = async () => {
+      if (!confirm(`"${k.ad}" silinsin mi? Maddeleri kurala göre Genel İşler'e düşer.`)) return;
+      try { await istek(`/api/kategoriler/${k.id}`, { method:'DELETE' }); acikKategori = null; await kategorileriYukle(); toast('Kategori silindi'); }
+      catch (err) { hataGoster(err.message); }
+    };
+    eylem.append(sil);
+  }
+  d.append(eylem);
+  setTimeout(() => ad.focus(), 0);
+  return d;
+}
+
+function kategorileriCiz(){
+  if (kategoriSiralayici) { kategoriSiralayici.destroy(); kategoriSiralayici = null; }
+  const ul = $('kategoriListe'); ul.replaceChildren();
+  kategoriler.forEach(k => {
+    const li = el('li'); li.dataset.id = k.id;
+    const satir = el('div', 'katSatir'); satir.setAttribute('aria-expanded', acikKategori === k.id);
+    const tut = el('span', 'tutamak'); tut.title = 'Sürükle'; tut.appendChild(ikon('tutamak'));
+    const ad = el('button', 'katAd'); ad.type = 'button';
+    ad.setAttribute('aria-expanded', acikKategori === k.id); ad.setAttribute('aria-controls', `kategori-${k.id}`);
+    const baslik = el('b', '', k.ad);
+    if (k.sistem) baslik.append(el('span', 'sistemRozet', 'sistem'));
+    ad.append(baslik, el('small', '', kategoriOzeti(k)));
+    ad.onclick = () => { acikKategori = acikKategori === k.id ? null : k.id; yeniKategori = false; kategorileriCiz(); };
+    const chev = ikon('ileri'); chev.classList.add('chev');
+    satir.append(tut, ad, chev); li.append(satir);
+    if (acikKategori === k.id) li.append(kategoriDetayi(k));
+    ul.append(li);
+  });
+  if (yeniKategori) { const li = el('li'); li.append(kategoriDetayi(null)); ul.append(li); }
+  $('kategoriEkle').hidden = yeniKategori;
+  kategoriSiralayici = Sortable.create(ul, {
+    handle: '.tutamak', animation: 150, ghostClass: 'surukleniyor', draggable: 'li[data-id]',
+    onEnd: async () => {
+      const idler = [...ul.querySelectorAll('li[data-id]')].map(li => Number(li.dataset.id));
+      try { kategoriler = (await istek('/api/kategoriler/sira', { method:'POST', body: JSON.stringify({ idler }) })).kategoriler; toast('Sıra kaydedildi'); }
+      catch (err) { hataGoster(err.message); await kategorileriYukle(); }
+    },
+  });
+}
+$('kategoriEkle').onclick = () => { yeniKategori = true; acikKategori = null; kategorileriCiz(); };
+
+// Karıştırma ve varsayılan biçim hemen kaydedilir.
+$('karistir').onchange = async () => {
+  try { await istek('/api/ayarlar', { method:'PUT', body: JSON.stringify({ karistir: $('karistir').checked }) }); toast($('karistir').checked ? 'Sürekli işler karıştırılacak' : 'Sürekli işler sonda kalacak'); }
+  catch (err) { $('karistir').checked = !$('karistir').checked; hataGoster(err.message); }
+};
+const seciliBicim = () => (document.querySelector('#bicim button.on') || {}).dataset?.bicim || 'kategorili';
+function bicimYaz(deger){
+  document.querySelectorAll('#bicim button').forEach(b => { const on = b.dataset.bicim === (deger === 'duz' ? 'duz' : 'kategorili'); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+}
+document.querySelectorAll('#bicim button').forEach(b => b.onclick = async () => {
+  const eski = seciliBicim(); if (b.dataset.bicim === eski) return;
+  bicimYaz(b.dataset.bicim);
+  try { await istek('/api/ayarlar', { method:'PUT', body: JSON.stringify({ rapor_bicimi: b.dataset.bicim }) }); toast('Biçim kaydedildi'); }
+  catch (err) { bicimYaz(eski); hataGoster(err.message); }
+});
+kategorileriYukle().catch(err => hataGoster(err.message));
 
 // ---------------------------------------------------------------- telefon bildirimi
 const pushDestekli = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;

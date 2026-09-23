@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timezone
 
 from sqlalchemy import (
     JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint, create_engine, delete,
-    inspect, text,
+    false, inspect, text, true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -81,7 +81,26 @@ class KullaniciAyari(Temel):
     kurulum_tamam: Mapped[bool] = mapped_column(Boolean, default=False)
     # 'konu': her konu ayrı madde; 'alici': alıcı kurum başına tek madde
     eposta_gruplama: Mapped[str] = mapped_column(String(10), default="konu")
+    # 'kategorili': başlıklı bölümler; 'duz': Yapılanlar / Devam eden
+    rapor_bicimi: Mapped[str] = mapped_column(String(12), default="kategorili", server_default="kategorili")
+    karistir: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())  # sürekli işler her gün farklı yerlere serpiştirilir
     guncelleme: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi, onupdate=simdi)
+
+
+class Kategori(Temel):
+    """Rapor bölümü. sistem: 'devam' | 'onemli' (silinemez) ya da None. kaynaklar: ["gmail"], ["github", "medusa"], []."""
+    __tablename__ = "kategoriler"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    ad: Mapped[str] = mapped_column(String(80))
+    sira: Mapped[int] = mapped_column(Integer, default=0)
+    kaynaklar: Mapped[list] = mapped_column(JSON, default=list)
+    sistem: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
+
+    def sozluk(self) -> dict:
+        return {"id": self.id, "ad": self.ad, "sira": self.sira, "kaynaklar": list(self.kaynaklar or []), "sistem": self.sistem}
 
 
 class Madde(Temel):
@@ -110,6 +129,9 @@ class Madde(Temel):
     ai_kullan: Mapped[bool] = mapped_column(Boolean, default=True)
     # Bulunanlarda kaynağın zamanı: e-postanın Date başlığı ya da commit'in author tarihi.
     kaynak_zaman: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Kullanıcının (ya da Claude'un önerdiği) rapor kategorisi; boşsa kurala göre bulunur.
+    kategori_id: Mapped[int | None] = mapped_column(ForeignKey("kategoriler.id", ondelete="SET NULL"), nullable=True)
+    onemli: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     def sozluk(self) -> dict:
         return {
@@ -118,6 +140,7 @@ class Madde(Temel):
             "kaynak": self.kaynak, "kaynak_id": self.kaynak_id, "sira": self.sira,
             "metin_ai": self.metin_ai, "kullanici_duzenledi": bool(self.kullanici_duzenledi),
             "ai_kullan": self.ai_kullan is not False,
+            "kategori_id": self.kategori_id, "onemli": bool(self.onemli),
         }
 
 
@@ -131,6 +154,19 @@ class GunlukIfade(Temel):
     item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"))
     tarih: Mapped[date] = mapped_column(Date)
     metin_ai: Mapped[str] = mapped_column(Text)
+
+
+class RaporDuzeni(Temel):
+    """Bir günün raporunda maddenin elle verilmiş sırası ve (varsa) kategorisi."""
+    __tablename__ = "rapor_duzeni"
+    __table_args__ = (UniqueConstraint("user_id", "tarih", "item_id", name="uq_rapor_duzeni"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    tarih: Mapped[date] = mapped_column(Date)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"))
+    kategori_id: Mapped[int | None] = mapped_column(ForeignKey("kategoriler.id", ondelete="SET NULL"), nullable=True)
+    sira: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Rapor(Temel):
@@ -207,9 +243,13 @@ EK_KOLONLAR = [
     ("hatirlatma_gonderimleri", "hata_metni", "TEXT", "TEXT"),
     ("users", "davet_eposta_tarihi", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
     ("user_settings", "eposta_gruplama", "VARCHAR(10) NOT NULL DEFAULT 'konu'", "VARCHAR(10) NOT NULL DEFAULT 'konu'"),
+    ("items", "kategori_id", "INTEGER REFERENCES kategoriler(id) ON DELETE SET NULL", "INTEGER"),
+    ("items", "onemli", "BOOLEAN NOT NULL DEFAULT false", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("user_settings", "rapor_bicimi", "VARCHAR(12) NOT NULL DEFAULT 'kategorili'", "VARCHAR(12) NOT NULL DEFAULT 'kategorili'"),
+    ("user_settings", "karistir", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
 ]
-# Sonradan eklenen tablolar; users tablosu olan şemada eksikse oluşturulur.
-EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim"]
+# Sonradan eklenen tablolar; başvurduğu tabloların hepsi olan şemada eksikse oluşturulur.
+EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim", "kategoriler", "rapor_duzeni"]
 EK_INDEKSLER = [
     ("uq_reports_user_tarih_tur", "reports", "CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_user_tarih_tur ON reports (user_id, tarih, tur)"),
 ]
@@ -253,12 +293,12 @@ def sema_guncelle(motor_=None) -> list[str]:
     with motor_.begin() as b:
         sqlite = motor_.dialect.name == "sqlite"
         tablolar = set(inspect(b).get_table_names())
-        if "users" in tablolar:
-            for ad in EK_TABLOLAR:
-                if ad not in tablolar:
-                    Temel.metadata.tables[ad].create(b)
-                    tablolar.add(ad)
-                    eklenen.append(ad)
+        for ad in EK_TABLOLAR:
+            tablo = Temel.metadata.tables[ad]
+            if ad not in tablolar and {fk.column.table.name for fk in tablo.foreign_keys} <= tablolar:
+                tablo.create(b)
+                tablolar.add(ad)
+                eklenen.append(ad)
         for tablo, kolon, pg_tipi, sqlite_tipi in EK_KOLONLAR:
             if tablo not in tablolar:
                 continue
@@ -293,8 +333,9 @@ def sema_guncelle(motor_=None) -> list[str]:
     return eklenen
 
 
-# Silme sırası: önce yaprak tablolar, en sonda users. gunluk_ifadeler items'a da bağlı olduğu için başta.
-KULLANICIYA_BAGLI = (GunlukIfade, Madde, Rapor, KullaniciAyari, PushAbonelik, HatirlatmaGonderimi, ClaudeKullanim)
+# Silme sırası: önce yaprak tablolar, en sonda users. gunluk_ifadeler ve rapor_duzeni items'a bağlı olduğu için başta;
+# items kategorilere bağlı olduğu için kategoriler ondan sonra.
+KULLANICIYA_BAGLI = (RaporDuzeni, GunlukIfade, Madde, Kategori, Rapor, KullaniciAyari, PushAbonelik, HatirlatmaGonderimi, ClaudeKullanim)
 
 
 def kullaniciyi_sil(db: Session, kullanici: Kullanici) -> None:
@@ -319,4 +360,4 @@ def oturum():
         yield db
 
 
-__all__ = ["ClaudeKullanim", "GunlukIfade", "HatirlatmaGonderimi", "Kullanici", "KullaniciAyari", "Madde", "PushAbonelik", "Rapor", "Session", "kullaniciyi_sil", "motor", "oturum", "tablolari_olustur"]
+__all__ = ["ClaudeKullanim", "GunlukIfade", "HatirlatmaGonderimi", "Kategori", "Kullanici", "KullaniciAyari", "Madde", "PushAbonelik", "Rapor", "RaporDuzeni", "Session", "kullaniciyi_sil", "motor", "oturum", "tablolari_olustur"]
