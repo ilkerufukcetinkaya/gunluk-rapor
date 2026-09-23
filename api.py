@@ -43,6 +43,9 @@ GUNLUK_CLAUDE_SINIRI = 8
 KOTA_MESAJI = "Bugünkü düzeltme hakkı doldu, yarın devam"
 GECMIS_GUN = 30  # geçmiş gün düzenleme: bugün … 30 gün önce
 RAPOR_BICIMLERI = ("kategorili", "duz")
+# Rapora elle yazılmış gibi giren bugün satırları: elle, e-postayla gelen not, sesle eklenen.
+ELLE_KAYNAKLARI = ("elle", "not", "ses")
+SESLI_NOT_SINIRI = 5000  # karakter
 
 
 def bugun() -> date:
@@ -333,13 +336,13 @@ class KategoriBaglami:
 
 
 def rapor_adaylari(db: Session, kullanici: Kullanici, tarih: date, a: KullaniciAyari) -> list[Madde]:
-    """O günün raporuna girebilecek maddeler (tik durumundan bağımsız): sürekli, devam, elle/not, açık kaynağın bulunanları."""
+    """O günün raporuna girebilecek maddeler (tik durumundan bağımsız): sürekli, devam, elle/not/ses, açık kaynağın bulunanları."""
     acik = acik_bulunan_kaynaklari(a)
     maddeler = db.scalars(select(Madde).where(
         Madde.user_id == kullanici.id, or_(Madde.tur.in_(("surekli", "devam")), Madde.tarih == tarih),
     ).order_by(Madde.id)).all()
     return [m for m in maddeler if m.tur in ("surekli", "devam")
-            or (m.tur == "bugun" and m.kaynak in ("elle", "not") and not m.gizli)
+            or (m.tur == "bugun" and m.kaynak in ELLE_KAYNAKLARI and not m.gizli)
             or (m.tur == "bulunan" and m.kaynak in acik and not m.gizli)]
 
 
@@ -795,8 +798,8 @@ def duzeltme_paketi(db: Session, kullanici: Kullanici, tarih: date) -> list[Madd
     for m in maddeler:
         if m.tur == "surekli":
             secilir = m.id not in ifadeler
-        elif m.tur == "bugun":  # e-postayla gelen notlar elle maddeler gibi düzeltilir
-            secilir = m.kaynak in ("elle", "not") and not m.gizli and not m.kullanici_duzenledi and not m.metin_ai
+        elif m.tur == "bugun":  # e-postayla gelen notlar ve sesle eklenenler elle maddeler gibi düzeltilir
+            secilir = m.kaynak in ELLE_KAYNAKLARI and not m.gizli and not m.kullanici_duzenledi and not m.metin_ai
         elif m.tur == "bulunan":
             secilir = m.kaynak in acik and not m.gizli and not m.kullanici_duzenledi and not m.metin_ai
         else:  # devam
@@ -848,7 +851,7 @@ def aylik_claude_cagrilari(db: Session, tarih: date) -> dict[int, int]:
 def duzeltmeyi_uygula(db: Session, kullanici: Kullanici, paket: list[Madde], tarih: date, anahtar: str) -> dict:
     """Tek Claude çağrısı; hata olursa hiçbir maddeye yazılmaz. Günlük sınır dolduysa çağrılmaz, ham metin kalır.
     tarih düzeltilen gündür; kota her zaman çağrının yapıldığı günün (bugünün) sayacından düşer.
-    Kategorisi olmayan elle/not maddeleri için Claude'dan kategori önerisi de istenir (aynı çağrıda)."""
+    Kategorisi olmayan elle/not/ses maddeleri için Claude'dan kategori önerisi de istenir (aynı çağrıda)."""
     if not paket:
         return {"duzeltilen": 0, "gonderilen": 0, "hatalar": []}
     hak = claude_hakki_al(db, kullanici.id, bugun())
@@ -860,7 +863,7 @@ def duzeltmeyi_uygula(db: Session, kullanici: Kullanici, paket: list[Madde], tar
         girdi = {"id": m.id, "tur": m.tur, "metin": m.metin}
         if m.tur == "devam" and m.asama:
             girdi["asama"] = m.asama
-        if secilebilir and m.tur == "bugun" and m.kaynak in ("elle", "not") and m.kategori_id is None:
+        if secilebilir and m.tur == "bugun" and m.kaynak in ELLE_KAYNAKLARI and m.kategori_id is None:
             girdi["kategori_sec"] = True
         girdiler.append(girdi)
     kategori_listesi = [{"id": k.id, "ad": k.ad} for k in secilebilir] if any(g.get("kategori_sec") for g in girdiler) else None
@@ -917,6 +920,93 @@ def duzelt(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullan
         sonuc = duzeltmeyi_uygula(db, kullanici, paket, tarih, anahtar)
     ifadeler = bugunku_ifadeler(db, kullanici.id, tarih, [m.id for m in paket])
     return {**sonuc, "maddeler": [madde_json(m, ifadeler, tarih) for m in paket]}
+
+
+# ---------------------------------------------------------------- sesle madde ekleme
+
+class SesliNot(BaseModel):
+    metin: str
+    tarih: date | None = None
+
+
+class SesliMadde(BaseModel):
+    metin: str
+    tur: Literal["bugun", "devam"] = "bugun"
+    asama: str | None = None
+    kategori_id: int | None = None
+
+
+class SesliEkle(BaseModel):
+    maddeler: list[SesliMadde]
+    tarih: date | None = None
+
+
+@router.post("/sesli-not")
+def sesli_not(govde: SesliNot, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Dikte metnini maddelere böler, hiçbir şey yazmaz. Claude varsa (düzeltme kotasından 1 çağrı) böler, kategori ve
+    'devam' önerir; anahtar yoksa, kota doluysa ya da yanıt bozuksa metin basitçe bölünür, kategori boş kalır."""
+    tarih = gun_sec(govde.tarih)
+    metin = govde.metin.strip()
+    if not metin:
+        raise HTTPException(status_code=422, detail="Metin boş olamaz")
+    if len(metin) > SESLI_NOT_SINIRI:
+        raise HTTPException(status_code=422, detail=f"Metin en fazla {SESLI_NOT_SINIRI} karakter olabilir")
+    secilebilir = [k for k in kategorileri_hazirla(db, kullanici) if not k.sistem]
+    sonuc: dict = {"tarih": tarih.isoformat(), "hatalar": []}
+    maddeler = None
+    anahtar = ai_anahtari()
+    hak = claude_hakki_al(db, kullanici.id, bugun()) if anahtar else None
+    if not anahtar:
+        sonuc["atlandi"] = "anahtar yok"
+    elif hak is None:
+        sonuc["atlandi"] = "günlük sınır"
+    else:
+        ayar = ayar_satiri(db, kullanici)
+        servisler.kullanimi_sifirla()
+        try:
+            maddeler = servisler.claude_sesli_bol(
+                metin, anahtar, [{"id": k.id, "ad": k.ad} for k in secilebilir], ayar.proje_adi or "",
+                servisler.kendi_sirket_adlari(kendi_alanlar(ayar, kullanici), alan_sozlugu(ayar)))
+        except servisler.ClaudeHatasi as e:
+            sonuc["hatalar"].append(f"Claude: {e}; metin basitçe bölündü")
+        except Exception as e:
+            sonuc["hatalar"].append(f"Claude: beklenmeyen hata ({e.__class__.__name__}); metin basitçe bölündü")
+        finally:
+            claude_kullanimini_yaz(db, hak)
+    if maddeler is None:
+        maddeler = servisler.sesi_basitce_bol(metin)
+    gecerli = {k.id for k in secilebilir}
+    for m in maddeler:  # sistem ya da başkasının kategorisi yok sayılır
+        if m["kategori_id"] not in gecerli:
+            m["kategori_id"] = None
+    return {**sonuc, "maddeler": maddeler}
+
+
+@router.post("/sesli-not/ekle", status_code=201)
+def sesli_not_ekle(govde: SesliEkle, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Onaylanan maddeler: 'bugun' → seçili günün kaynak='ses' satırı (düzeltme paketine girer), 'devam' → devam eden iş."""
+    tarih = gun_sec(govde.tarih)
+    if not govde.maddeler:
+        raise HTTPException(status_code=422, detail="Eklenecek madde yok")
+    for m in govde.maddeler:
+        if not m.metin.strip():
+            raise HTTPException(status_code=422, detail="Metin boş olamaz")
+        if m.kategori_id is not None and kullanici_kategorisi(db, kullanici, m.kategori_id).sistem:
+            raise HTTPException(status_code=422, detail="Sistem kategorisi maddeye atanamaz")
+    sira = {"bugun": sonraki_sira(db, kullanici, "bugun", tarih), "devam": sonraki_sira(db, kullanici, "devam")}
+    yeniler = []
+    for m in govde.maddeler:
+        madde = Madde(user_id=kullanici.id, tur=m.tur, kaynak="ses", metin=m.metin.strip(), kategori_id=m.kategori_id,
+                      tikli=True, sira=sira[m.tur])
+        if m.tur == "bugun":
+            madde.tarih = tarih
+        else:
+            madde.asama = (m.asama or "").strip() or None
+        sira[m.tur] += 1
+        db.add(madde)
+        yeniler.append(madde)
+    db.commit()
+    return {"maddeler": [madde_json(m, {}, tarih) for m in yeniler]}
 
 
 # ---------------------------------------------------------------- rapor geçmişi

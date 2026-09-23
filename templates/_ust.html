@@ -22,6 +22,7 @@
 <div class="altAlan"{% if menusuz %} hidden{% endif %}>
   {% if aktif == 'bugun' %}
   <div class="eylemler">
+    <button type="button" class="secondary ikon" data-eylem="ses" aria-label="Sesle ekle" title="Sesle ekle">{{ i.ikon('mikrofon', 21) }}</button>
     <button type="button" class="secondary ikon" data-eylem="kopyala" aria-label="Kopyala" title="Kopyala">{{ i.ikon('kopyala', 19) }}</button>
     <button type="button" class="primary" data-eylem="wa"><span class="wa-ikon">{{ i.ikon('wa', 18) }}</span><span class="etiket">WhatsApp'ta aç</span></button>
   </div>

@@ -804,6 +804,93 @@ def claude_duzelt_kategorili(
     return {int(k): v for k, v in eslesme.items() if k in gecerli}, oneriler
 
 
+# ---------------------------------------------------------------- sesle madde ekleme
+
+# Basit bölme: satır sonu, cümle sonu ve "ve sonra" / "sonra da" bağlaçları.
+SES_AYIRICI = re.compile(r"\n+|(?<=[.!?…])\s+|\s*,?\s+(?:ve\s+sonra|sonra\s+da)\s+", re.IGNORECASE)
+SES_BAS_BAGLAC = re.compile(r"^(?:ve\s+)?sonra(?:\s+da)?\s+", re.IGNORECASE)
+
+
+def _bas_harf_buyut(metin: str) -> str:
+    ilk = metin[:1]
+    return {"i": "İ", "ı": "I"}.get(ilk, ilk.upper()) + metin[1:]
+
+
+def sesi_basitce_bol(metin: str) -> list[dict]:
+    """Claude'suz yedek: dikte metnini satır/cümle bazında maddelere böler; kategori boş, tür 'bugun'."""
+    maddeler = []
+    for parca in SES_AYIRICI.split(metin or ""):
+        parca = SES_BAS_BAGLAC.sub("", parca.strip(" \t,;-•*"))
+        if parca:
+            maddeler.append({"metin": _bas_harf_buyut(parca), "kategori_id": None, "tur": "bugun", "asama": None})
+    return maddeler
+
+
+def sesli_not_sistemi(proje_adi: str = "", kendi_sirket: list[str] | None = None) -> str:
+    urun = f"Yazılım ürününün adı {proje_adi}; yazılımdan söz ederken bu adı kullan.\n" if proje_adi else ""
+    return (
+        "Bir müzik edisyon şirketinde çalışan bir danışmanın sesle dikte ettiği notu günlük rapor maddelerine "
+        "bölüyorsun. Metin konuşmadan yazıya dökülmüştür; noktalama eksik ya da hatalı olabilir.\n"
+        "Kurallar:\n"
+        "- Her ayrı işi ayrı madde yap. Her madde yönetici raporuna uygun TEK cümle olur; sonunda nokta olur. "
+        "Zaman kipi -di'li geçmiş zamandır (\"gönderildi\", \"görüşüldü\"); \"-mıştır\" kullanma.\n"
+        "- Olgu ekleme, yorum katma. Kişi, kurum, ürün adları ve sayılar aynen korunur.\n"
+        "- \"şey\", \"yani\", \"işte\", \"hani\", \"ııı\" gibi dolgu ifadelerini, tekrarları ve yarım kalmış "
+        "sözleri at.\n"
+        + ("- " + kendi_sirket_kurali(kendi_sirket) + "\n" if kendi_sirket else "")
+        + "- Bir iş için \"devam ediyor\", \"sürüyor\", \"bekliyor\", \"bekleniyor\" gibi bir ifade varsa o madde "
+        "\"tur\": \"devam\" olur: \"metin\" işin adıdır, \"asama\" kısa aşamasıdır (örn. \"yanıt bekleniyor\"). "
+        "Diğer maddeler \"tur\": \"bugun\" olur ve \"asama\" null'dır.\n"
+        "- Verilen rapor kategorilerinden konuya en uygun olanın id'sini \"kategori_id\" alanında döndür; "
+        "emin değilsen null yaz.\n"
+        + urun
+        + "Yanıt olarak YALNIZ JSON dizi döndür, başka hiçbir şey yazma: "
+        "[{\"metin\": \"...\", \"kategori_id\": <sayı ya da null>, \"tur\": \"bugun\" | \"devam\", \"asama\": \"...\" | null}]"
+    )
+
+
+def claude_sesli_bol(
+    metin: str, api_anahtari: str, kategoriler: list[dict] | None = None, proje_adi: str = "",
+    kendi_sirket: list[str] | None = None, istemci: httpx.Client | None = None,
+) -> list[dict]:
+    """Dikte metnini tek çağrıda maddelere böler: [{metin, kategori_id, tur, asama}].
+    Hata, JSON olmayan ya da boş yanıt → ClaudeHatasi. Kategori id'lerinin geçerliliğini çağıran denetler."""
+    istek = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": 1500,
+        "thinking": {"type": "disabled"},
+        "system": sesli_not_sistemi(proje_adi, kendi_sirket),
+        "messages": [{
+            "role": "user",
+            "content": "Rapor kategorileri:\n" + json.dumps(kategoriler or [], ensure_ascii=False)
+            + "\n\nDikte edilen not:\n" + metin,
+        }],
+    }
+    yanit = _claude_cagir(istek, api_anahtari, istemci)
+    try:
+        dizi = _json_dizi_ayikla(yanit)
+    except ValueError as e:
+        raise ClaudeHatasi(f"yanıt JSON değil ({e})") from e
+    maddeler = []
+    for x in dizi:
+        if not isinstance(x, dict) or not isinstance(x.get("metin"), str) or not x["metin"].strip():
+            continue
+        devam = x.get("tur") == "devam"
+        asama = x.get("asama") if devam and isinstance(x.get("asama"), str) else None
+        k = x.get("kategori_id")
+        if isinstance(k, str) and k.strip().isdigit():
+            k = int(k)
+        maddeler.append({
+            "metin": x["metin"].strip(),
+            "kategori_id": k if isinstance(k, int) and not isinstance(k, bool) else None,
+            "tur": "devam" if devam else "bugun",
+            "asama": (asama or "").strip() or None,
+        })
+    if not maddeler:
+        raise ClaudeHatasi("boş yanıt")
+    return maddeler
+
+
 TR_AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
 
 

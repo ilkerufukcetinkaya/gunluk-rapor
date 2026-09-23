@@ -44,6 +44,8 @@ label.tile:has(input:focus-visible){outline:2px solid var(--focus); outline-offs
 .ekle input{flex:1; min-width:0}
 .ekle .arti{width:44px; height:44px; border:0; border-radius:12px; background:var(--btn); color:var(--btn-ink); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none}
 .liste:not(:empty) + .ekle{border-top:1px solid var(--line)}
+.ekle .mik{width:44px; height:44px; border:0; border-radius:12px; background:var(--field); color:var(--ink); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none}
+.ekle .mik:hover{background:var(--count)}
 .hataKutu{display:flex; flex-direction:column; gap:6px; padding:12px 12px 0}
 .durumSatiri{padding:12px 14px 0}
 .taramaZamani{font-size:12px; color:var(--ink-2); white-space:nowrap}
@@ -118,6 +120,45 @@ body.duzenleAcik .raporAraclar [data-eylem=karistir]{display:none}
 .raporAlt{display:none}
 .raporBaslik .meta{margin-top:2px}
 .kopyalaKucuk{width:36px; height:36px; border:0; border-radius:10px; background:var(--field); color:var(--ink); display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none}
+
+/* sesle ekleme paneli: telefonda alttan açılan sayfa, masaüstünde ortada kutu */
+body.sesAcik{overflow:hidden}
+.sesArka{position:fixed; inset:0; z-index:60; background:rgba(18,21,26,.45); display:flex; align-items:flex-end; justify-content:center}
+.sesKutu{background:var(--paper); width:100%; max-height:92vh; max-height:92dvh; border-radius:24px 24px 0 0; display:flex; flex-direction:column; box-shadow:var(--shadow-up); padding-bottom:env(safe-area-inset-bottom)}
+.sesUst{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 16px 10px 20px}
+.sesGovde{flex:1; min-height:0; overflow:auto; padding:0 20px 14px; display:flex; flex-direction:column; gap:12px}
+.sesDurum{display:flex; align-items:center; gap:10px; font-size:13.5px; font-weight:600; color:var(--ink-2); min-height:24px}
+.nabiz{display:flex; align-items:center; gap:3px; height:22px}
+.nabiz i{display:block; width:4px; height:6px; border-radius:2px; background:var(--check-off)}
+.canli .sesDurum{color:var(--ink)}
+.canli .nabiz i{background:var(--danger); animation:nabiz 1s ease-in-out infinite}
+.canli .nabiz i:nth-child(2){animation-delay:.2s}
+.canli .nabiz i:nth-child(3){animation-delay:.4s}
+.canli .nabiz i:nth-child(4){animation-delay:.1s}
+.canli .nabiz i:nth-child(5){animation-delay:.3s}
+@keyframes nabiz{0%,100%{height:6px} 50%{height:22px}}
+#sesMetin{min-height:150px; font-size:16px}
+.sesAlt{display:flex; gap:8px; padding:12px 16px 14px; border-top:1px solid var(--line)}
+.sesAlt button.secondary{padding:0 14px}
+.sesAlt .primary{flex:1; min-width:0}
+.sesSatir{display:flex; gap:12px; align-items:flex-start; padding:12px 0}
+.sesSatir + .sesSatir{border-top:1px solid var(--line)}
+.sesSatir .ck{margin-top:9px}
+.sesSatir .alanlar{flex:1; min-width:0; display:flex; flex-direction:column; gap:8px}
+.sesSatir textarea{min-height:0; resize:none; overflow:hidden; font-size:15px}
+.sesSatir.off textarea, .sesSatir.off .sesSecim{opacity:.5}
+.sesSecim{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+.sesSecim .segment button{padding:7px 10px}
+.sesSecim select, .sesSecim input{width:auto; flex:1 1 140px; min-width:0; padding:8px 12px; font-size:13px; border-radius:10px}
+@media (min-width:761px){
+  .sesArka{align-items:center; padding:24px}
+  .sesKutu{max-width:600px; max-height:calc(100vh - 48px); border-radius:20px; box-shadow:0 24px 60px -20px rgba(18,21,26,.45); padding-bottom:0}
+  #sesMetin{font-size:14px}
+  .sesSatir textarea{font-size:14px}
+  .sesAlt button.secondary, .sesAlt .primary{flex:none; padding:0 18px}
+  .sesAlt [data-ses=vazgec], .sesAlt [data-ses=geri]{margin-right:auto}
+}
+@media (prefers-reduced-motion: reduce){ .canli .nabiz i{animation:none; height:14px} }
 
 @media (max-width:760px){
   main{padding-bottom:calc(170px + env(safe-area-inset-bottom))}
@@ -239,6 +280,7 @@ body.duzenleAcik .raporAraclar [data-eylem=karistir]{display:none}
             <div class="ekle">
               <label for="doneNew" class="gizli-etiket">Yeni madde</label>
               <input type="text" id="doneNew" placeholder="Bugün ne yaptın?">
+              <button class="mik" type="button" data-eylem="ses" aria-label="Sesle ekle" title="Sesle ekle">{{ i.ikon('mikrofon', 19, 2.2) }}</button>
               <button class="arti" id="doneAdd" type="button" aria-label="Ekle">{{ i.ikon('arti', 18, 2.4) }}</button>
             </div>
           </div>
@@ -321,6 +363,32 @@ body.duzenleAcik .raporAraclar [data-eylem=karistir]{display:none}
   </div>
 </main>
 <div class="toast" id="toast"></div>
+
+<div class="sesArka" id="sesPanel" hidden>
+  <div class="sesKutu" role="dialog" aria-modal="true" aria-labelledby="sesBaslik">
+    <div class="sesUst"><h2 id="sesBaslik">Sesle ekle</h2><button class="arac" type="button" data-ses="vazgec" aria-label="Kapat" title="Kapat">{{ i.ikon('carpi', 17) }}</button></div>
+    <div class="sesGovde" id="sesKayit">
+      <div class="sesDurum" role="status"><span class="nabiz" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span id="sesDurumMetni"></span></div>
+      <p class="uyari" id="sesUyari" role="alert" hidden></p>
+      <p class="hint" id="sesIpucu" hidden>Klavyenin mikrofon simgesine basıp konuş; yazıya dökülen metni burada düzeltebilirsin.</p>
+      <label for="sesMetin" class="gizli-etiket">Dikte edilen metin</label>
+      <textarea id="sesMetin" placeholder="Bugün ne yaptın? Konuştukça burada yazıya dökülür."></textarea>
+    </div>
+    <div class="sesGovde" id="sesOnay" hidden>
+      <p class="hint" id="sesOnayBilgi"></p>
+      <div id="sesListe"></div>
+    </div>
+    <div class="sesAlt" id="sesKayitAlt">
+      <button class="secondary" type="button" data-ses="vazgec">Vazgeç</button>
+      <button class="secondary" type="button" data-ses="durdur" id="sesDurdur">Durdur</button>
+      <button class="primary" type="button" data-ses="bol" id="sesBol">Maddelere böl</button>
+    </div>
+    <div class="sesAlt" id="sesOnayAlt" hidden>
+      <button class="secondary" type="button" data-ses="geri">Geri</button>
+      <button class="primary" type="button" data-ses="ekle" id="sesEkle">Ekle</button>
+    </div>
+  </div>
+</div>
 
 <template id="ikonlar">
   {{ i.ikon('tik', 15, 2.4) }}{{ i.ikon('zarf', 17) }}{{ i.ikon('dal', 17) }}{{ i.ikon('saat', 17) }}
@@ -667,6 +735,7 @@ function row(item, kind){
     meta.appendChild(el('span', '', beklemeEtiketi(item.bekleme_gun || 0)));
   }
   if (item.kaynak === 'not') meta.appendChild(el('span', 'kaynakEtiketi', 'e-postadan'));
+  if (item.kaynak === 'ses') meta.appendChild(el('span', 'kaynakEtiketi', 'sesle'));
   kategoriEtiketi(item, meta);
   txt.appendChild(meta);
   aiPaneli(item, meta, txt);
@@ -918,7 +987,7 @@ async function durumuYukle(){
     S.surekli = d.maddeler.filter(m => m.tur === 'surekli');
     S.devam = d.maddeler.filter(m => m.tur === 'devam');
     S.bulunan = d.maddeler.filter(m => m.tur === 'bulunan' && bulunanAcik(m));
-    S.elle = d.maddeler.filter(m => m.tur === 'bugun' && (m.kaynak === 'elle' || (m.kaynak === 'not' && !m.gizli)));
+    S.elle = d.maddeler.filter(m => m.tur === 'bugun' && (m.kaynak === 'elle' || m.kaynak === 'ses' || (m.kaynak === 'not' && !m.gizli)));
     S.bugun.yarin = d.maddeler.find(m => m.tur === 'bugun' && m.kaynak === 'yarin') || null;
     if (!gunluk.yarin.t) S.metin.yarin = S.bugun.yarin ? S.bugun.yarin.metin : '';
     $('loadError').hidden = true;
@@ -997,6 +1066,162 @@ async function siraSifirla(){
   try { duzeniUygula(await api(yolT('/api/rapor-duzeni'), 'DELETE')); toast('Sıra sıfırlandı'); }
   catch (e) { toast('Sıfırlanamadı: ' + e.message); }
 }
+
+// --- sesle ekleme: dikte (tarayıcının konuşma tanıması) → Claude ile maddelere bölme → onay → ekle ---
+const Tanima = window.SpeechRecognition || window.webkitSpeechRecognition;
+const IZIN_YOK = 'Mikrofon izni verilmedi. Adres çubuğundaki simgeden bu siteye mikrofon izni verebilir ya da klavyenin mikrofonuyla dikte edebilirsin.';
+const SES_HATALARI = {
+  'not-allowed': IZIN_YOK, 'service-not-allowed': IZIN_YOK,
+  'audio-capture': 'Mikrofon bulunamadı. Bir mikrofon bağlayıp yeniden dene ya da metni yaz.',
+  'network': 'Tarayıcının konuşma tanıma hizmetine ulaşılamadı; klavyenin mikrofonuyla dikte edebilirsin.',
+  'language-not-supported': 'Tarayıcı Türkçe konuşma tanımayı desteklemiyor; klavyenin mikrofonuyla dikte edebilirsin.',
+};
+// tanima: etkin tanıma nesnesi (yoksa null); taban: dinleme başlarken metin kutusunda olan; sonDurum: bitince gösterilecek durum.
+const ses = { tanima:null, taban:'', sonDurum:'', kullanilamaz:false, maddeler:[], acan:null };
+function sesDurumu(metin, canli){ $('sesDurumMetni').textContent = metin; $('sesKayit').classList.toggle('canli', !!canli); }
+function sesDugmeleri(){
+  $('sesDurdur').hidden = !Tanima || ses.kullanilamaz;
+  $('sesDurdur').textContent = ses.tanima ? 'Durdur' : 'Yeniden dinle';
+}
+function sesIpucu(uyari){
+  $('sesIpucu').hidden = false;
+  if (uyari){ $('sesUyari').textContent = uyari; $('sesUyari').hidden = false; }
+}
+function sesAsama(onay){
+  $('sesBaslik').textContent = onay ? 'Maddeleri onayla' : 'Sesle ekle';
+  $('sesKayit').hidden = $('sesKayitAlt').hidden = onay;
+  $('sesOnay').hidden = $('sesOnayAlt').hidden = !onay;
+}
+function sesPaneliAc(dugme){
+  if (!$('sesPanel').hidden) return;
+  Object.assign(ses, { acan:dugme, maddeler:[], kullanilamaz:!Tanima, sonDurum:'' });
+  $('sesMetin').value = ''; $('sesUyari').hidden = true; $('sesIpucu').hidden = true;
+  sesAsama(false);
+  $('sesPanel').hidden = false; document.body.classList.add('sesAcik');
+  if (Tanima) dinle();
+  else { sesDurumu('Bu tarayıcıda konuşma tanıma yok'); sesIpucu(); sesDugmeleri(); $('sesMetin').focus(); }
+}
+function dinle(){
+  const mevcut = $('sesMetin').value.trim();
+  ses.taban = mevcut ? mevcut + ' ' : ''; ses.sonDurum = '';
+  let tanima;
+  try {
+    tanima = new Tanima();
+    tanima.lang = 'tr-TR'; tanima.continuous = true; tanima.interimResults = true;
+    // continuous'ta results oturumun tüm sonuçlarını taşır; metin her seferinde baştan kurulur (kesin + ara)
+    tanima.onresult = e => {
+      if (ses.tanima !== tanima) return;
+      const parcalar = [];
+      for (let n = 0; n < e.results.length; n++) parcalar.push(e.results[n][0].transcript.trim());
+      $('sesMetin').value = ses.taban + parcalar.filter(Boolean).join(' ');
+    };
+    tanima.onerror = e => {
+      if (ses.tanima !== tanima || e.error === 'aborted') return;
+      if (e.error === 'no-speech'){ ses.sonDurum = 'Ses duyulmadı'; return; }
+      ses.kullanilamaz = e.error in SES_HATALARI;
+      ses.sonDurum = 'Mikrofon kullanılamıyor';
+      sesIpucu(SES_HATALARI[e.error] || `Konuşma tanıma durdu (${e.error}).`);
+    };
+    tanima.onend = () => {
+      if (ses.tanima !== tanima) return;
+      ses.tanima = null;
+      sesDurumu(ses.sonDurum || 'Durdu — metni düzeltebilirsin'); sesDugmeleri();
+    };
+    ses.tanima = tanima;
+    tanima.start();
+  } catch (e) {
+    ses.tanima = null; ses.kullanilamaz = true;
+    sesDurumu('Konuşma tanıma başlatılamadı'); sesIpucu(); sesDugmeleri(); return;
+  }
+  sesDurumu('Dinleniyor… konuş', true); sesDugmeleri();
+}
+// Tanımayı sonuçlarını bekletmeden bırakır: metin kutusundaki (ara sonuç dahil) metin geçerlidir.
+function dinlemeyiBirak(durum){
+  const t = ses.tanima; if (!t) return;
+  ses.tanima = null; try { t.abort(); } catch {}
+  sesDurumu(durum); sesDugmeleri();
+}
+function sesKapat(){
+  dinlemeyiBirak('');
+  $('sesPanel').hidden = true; document.body.classList.remove('sesAcik');
+  if (ses.acan && ses.acan.offsetParent) ses.acan.focus();
+}
+async function sesBol(){
+  const metin = $('sesMetin').value.trim();
+  if (!metin){ toast('Önce konuş ya da yaz'); $('sesMetin').focus(); return; }
+  dinlemeyiBirak('Durdu');
+  const b = $('sesBol'); b.disabled = true; b.textContent = 'Bölünüyor…';
+  try {
+    const d = await api('/api/sesli-not', 'POST', { metin, tarih: S.tarih });
+    ses.maddeler = d.maddeler.map(m => ({ ...m, asama: m.asama || '', secili:true }));
+    const yedek = d.atlandi === 'günlük sınır' ? 'Bugünkü düzeltme hakkı doldu; metin cümlelerine göre bölündü.'
+      : d.atlandi ? 'Claude anahtarı tanımlı değil; metin cümlelerine göre bölündü.'
+      : (d.hatalar || []).length ? 'Claude yanıt veremedi; metin cümlelerine göre bölündü.' : '';
+    $('sesOnayBilgi').textContent = (yedek ? yedek + ' ' : '') + 'İstemediğinin tikini kaldır; metni, türü ve kategoriyi değiştirebilirsin.';
+    sesOnayCiz(); sesAsama(true);
+    const ilk = $('sesListe').querySelector('textarea'); if (ilk && !telefon.matches) ilk.focus();
+  } catch (e) { toast('Bölünemedi: ' + e.message); }
+  finally { b.disabled = false; b.textContent = 'Maddelere böl'; }
+}
+const boyutla = ta => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
+const sesSecilenler = () => ses.maddeler.filter(m => m.secili && m.metin.trim());
+function sesEkleSayisi(){ const n = sesSecilenler().length; $('sesEkle').textContent = n ? `Ekle (${n})` : 'Ekle'; $('sesEkle').disabled = !n; }
+function sesOnayCiz(){
+  const liste = $('sesListe'); liste.innerHTML = '';
+  const kategoriler = S.duzen.kategoriler.filter(k => !k.sistem);
+  ses.maddeler.forEach((m, n) => {
+    const satir = el('div', 'sesSatir'); satir.classList.toggle('off', !m.secili);
+    const cb = el('input', 'ck'); cb.type = 'checkbox'; cb.checked = m.secili; cb.setAttribute('aria-label', `${n + 1}. maddeyi ekle`);
+    cb.onchange = () => { m.secili = cb.checked; satir.classList.toggle('off', !cb.checked); sesEkleSayisi(); };
+    const alanlar = el('div', 'alanlar');
+    const ta = el('textarea'); ta.rows = 1; ta.value = m.metin; ta.setAttribute('aria-label', `${n + 1}. madde metni`);
+    ta.oninput = () => { m.metin = ta.value; boyutla(ta); sesEkleSayisi(); };
+    const secim = el('div', 'sesSecim');
+    const seg = el('div', 'segment'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', 'Tür');
+    const kat = el('select'); kat.setAttribute('aria-label', 'Rapor kategorisi');
+    kat.appendChild(new Option('Otomatik', ''));
+    kategoriler.forEach(k => kat.appendChild(new Option(k.ad, String(k.id))));
+    kat.value = m.kategori_id ? String(m.kategori_id) : '';
+    kat.onchange = () => { m.kategori_id = kat.value ? Number(kat.value) : null; };
+    const asama = el('input'); asama.type = 'text'; asama.value = m.asama; asama.placeholder = 'Aşama (örn. yanıt bekleniyor)';
+    asama.setAttribute('aria-label', 'Aşama');
+    asama.oninput = () => { m.asama = asama.value; };
+    const turuGoster = () => {
+      seg.querySelectorAll('button').forEach(b => { const on = b.dataset.tur === m.tur; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+      kat.hidden = m.tur === 'devam'; asama.hidden = m.tur !== 'devam';
+    };
+    [['bugun', 'Yapıldı'], ['devam', 'Devam eden']].forEach(([tur, ad]) => {
+      const b = el('button', '', ad); b.type = 'button'; b.dataset.tur = tur;
+      b.onclick = () => { m.tur = tur; turuGoster(); };
+      seg.appendChild(b);
+    });
+    turuGoster();
+    secim.append(seg, kat, asama); alanlar.append(ta, secim); satir.append(cb, alanlar);
+    liste.appendChild(satir);
+  });
+  sesEkleSayisi();
+  requestAnimationFrame(() => liste.querySelectorAll('textarea').forEach(boyutla));
+}
+async function sesEkle(){
+  const secilen = sesSecilenler(); if (!secilen.length) return;
+  $('sesEkle').disabled = true;
+  try {
+    const d = await api('/api/sesli-not/ekle', 'POST', { tarih: S.tarih, maddeler: secilen.map(m => ({
+      metin: m.metin.trim(), tur: m.tur,
+      asama: m.tur === 'devam' ? m.asama.trim() || null : null,
+      kategori_id: m.tur === 'bugun' ? m.kategori_id : null,
+    })) });
+    sesKapat(); toast(`${d.maddeler.length} madde eklendi`);
+    await durumuYukle();
+  } catch (e) { toast('Eklenemedi: ' + e.message); sesEkleSayisi(); }
+}
+$('sesMetin').addEventListener('input', () => dinlemeyiBirak('Durdu — düzenliyorsun'));
+document.querySelectorAll('[data-ses=vazgec]').forEach(b => b.onclick = sesKapat);
+document.querySelector('[data-ses=durdur]').onclick = () => ses.tanima ? ses.tanima.stop() : dinle();
+document.querySelector('[data-ses=bol]').onclick = sesBol;
+document.querySelector('[data-ses=geri]').onclick = () => { sesAsama(false); sesDurumu('Durdu — metni düzeltebilirsin'); sesDugmeleri(); };
+document.querySelector('[data-ses=ekle]').onclick = sesEkle;
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('sesPanel').hidden) sesKapat(); });
 
 // --- rapor biçimi: Başlıklı (kategorili) / Başlıksız (düz) ---
 function bicimSegmenti(){
@@ -1092,6 +1317,7 @@ $('allOff').onclick = () => hepsi(false);
 hepsiniBul('duzelt').forEach(b => b.onclick = duzeltCalistir);
 hepsiniBul('kopyala').forEach(b => b.onclick = e => copyReport(e.currentTarget));
 hepsiniBul('wa').forEach(b => b.onclick = e => openWa(e.currentTarget));
+hepsiniBul('ses').forEach(b => b.onclick = () => sesPaneliAc(b));
 
 render();
 (async () => { await eskiVeriyiTasi(); await durumuYukle(); loadFound(false); })();
