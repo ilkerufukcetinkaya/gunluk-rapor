@@ -2528,5 +2528,6 @@ def otomatik_test(kullanici: Kullanici = Depends(aktif_kullanici), db: Session =
         hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
     log.info("otomatik test user=%s sonuc=%s", kullanici.id, hata[:200] if hata else "gönderildi")
     if hata:
-        return {"ok": False, "neden": hata}
+        gonderen = servisler.kullanilan_gonderen(ayarlar["gmail_kullanici"], kullanici.ad)
+        return {"ok": False, "neden": f"{hata} · Kullanılan gönderen: {gonderen}"}
     return {"ok": True, "adres": kullanici.eposta}

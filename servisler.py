@@ -14,9 +14,9 @@ import secrets
 import smtplib
 import threading
 from datetime import date, datetime, time, timedelta, timezone
-from email.header import decode_header, make_header
+from email.header import Header, decode_header, make_header
 from email.message import EmailMessage
-from email.utils import getaddresses, parsedate_to_datetime
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
@@ -1673,7 +1673,16 @@ GONDEREN_EKI = "Günlük Rapor"
 
 
 def gonderen_adresi() -> str:
-    return (os.environ.get("EPOSTA_GONDEREN") or "").strip() or VARSAYILAN_GONDEREN
+    """EPOSTA_GONDEREN'in yalnız adres kısmı ("Günlük Rapor <a@b.com>" → "a@b.com"); boş, ASCII dışı ya da
+    '@'siz değerde varsayılan adres. From'a her zaman bu saf adres, görünen ad ayrıca eklenir."""
+    ham = (os.environ.get("EPOSTA_GONDEREN") or "").strip()
+    if not ham:
+        return VARSAYILAN_GONDEREN
+    adres = parseaddr(ham)[1].strip()
+    if not adres.isascii() or "@" not in adres or "<" in adres or ">" in adres:
+        log.warning("EPOSTA_GONDEREN geçerli bir ASCII adres içermiyor; varsayılan gönderen kullanılıyor")
+        return VARSAYILAN_GONDEREN
+    return adres
 
 
 def gonderen_basligi(adres: str, ad: str | None = None) -> str:
@@ -1709,26 +1718,33 @@ def _resend_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None, a
         neden = yanit.json().get("message") or yanit.text
     except Exception:
         neden = yanit.text
-    varsayilan = gonderen_basligi(gonderen_adresi())
-    if yanit.status_code == 422 and "from" in (neden or "").lower() and govde["from"] != varsayilan:
-        # Güvenlik ağı: görünen ad reddedilirse bir kez varsayılan gönderenle denenir
-        return _resend_gonder_varsayilan(govde, varsayilan, anahtar, istemci, f"Resend 422: {(neden or '').strip()[:120]}")
-    return f"Resend {yanit.status_code}: {(neden or '').strip()[:120]}"
-
-
-def _resend_gonder_varsayilan(govde: dict, varsayilan: str, anahtar: str, istemci: httpx.Client,
-                              ilk_hata: str) -> str | None:
-    try:
-        yanit = istemci.post(
-            "https://api.resend.com/emails", json={**govde, "from": varsayilan},
-            headers={"Authorization": f"Bearer {anahtar}", "content-type": "application/json"},
-        )
-    except Exception:
+    ilk_hata = f"Resend {yanit.status_code}: {(neden or '').strip()[:120]}"
+    if not (yanit.status_code == 422 and "from" in (neden or "").lower()):
         return ilk_hata
-    if 200 <= yanit.status_code < 300:
-        log.warning("gönderen adı reddedildi, varsayılana düşüldü")
-        return None
+    # Güvenlik ağı: gönderen reddedilirse önce RFC 2047 kodlu görünen ad, sonra yalnız saf adres denenir (en fazla 3 deneme)
+    adres = gonderen_adresi()
+    gorunen = gonderen_basligi(adres, gonderen_adi).rsplit(" <", 1)[0]
+    yedekler = [f"{Header(gorunen, 'utf-8').encode(maxlinelen=0)} <{adres}>", adres]
+    for sira, gonderen in enumerate(yedekler, 2):
+        log.warning("gönderen adı reddedildi, %d. deneme: %s", sira, gonderen)
+        try:
+            yanit = istemci.post(
+                "https://api.resend.com/emails", json={**govde, "from": gonderen},
+                headers={"Authorization": f"Bearer {anahtar}", "content-type": "application/json"},
+            )
+        except Exception:
+            return ilk_hata
+        if 200 <= yanit.status_code < 300:
+            log.warning("gönderen adı reddedildi, varsayılana düşüldü (%d. deneme başarılı)", sira)
+            return None
     return ilk_hata
+
+
+def kullanilan_gonderen(gmail_kullanici: str = "", gonderen_adi: str | None = None) -> str:
+    """Teşhis için: eposta_gonder'in ilk denemede kullanacağı From başlığı (gizli bilgi içermez)."""
+    if (os.environ.get("RESEND_API_KEY") or "").strip():
+        return gonderen_basligi(gonderen_adresi(), gonderen_adi)
+    return gonderen_basligi(gmail_kullanici, gonderen_adi)
 
 
 def _smtp_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, metin: str,

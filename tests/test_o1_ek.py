@@ -1,6 +1,7 @@
 """O1-ek: görünen ad, kişisel gönderen adı, ad eşlemeleri, tırnak içi koruma. Resend, push ve Claude sahte; saat sabit."""
 import json
 from datetime import date, datetime, time, timedelta
+from email.header import Header
 from email.headerregistry import HeaderRegistry
 from email.message import EmailMessage
 
@@ -460,26 +461,89 @@ class SiraliResend:
         return httpx.Response(kod, json={"message": mesaj} if mesaj else {"id": "re_1"})
 
 
-def test_resend_from_422_varsayilanla_tekrar_dener(monkeypatch, caplog):
-    monkeypatch.setenv("RESEND_API_KEY", "re_test")
-    monkeypatch.setenv("EPOSTA_GONDEREN", "rapor@ornek.com")
+def _rfc2047(gorunen, adres="rapor@ornek.com"):
+    return f"{Header(gorunen, 'utf-8').encode(maxlinelen=0)} <{adres}>"
+
+
+def test_resend_from_422_rfc2047_ile_tekrar_dener(monkeypatch, caplog):  # O1-ek3: 2. deneme RFC 2047
     sahte = SiraliResend([(422, "Invalid `from` field. The email address contains non-ASCII characters."), (200, None)])
     with caplog.at_level("WARNING", logger="gunluk-rapor"):
         assert servisler.eposta_gonder("k@ornek.com", "Konu", "Gövde", istemci=sahte, gonderen_adi="Ayşe Yılmaz") is None
-    assert [i["from"] for i in sahte.istekler] == ["Ayşe Yılmaz - Günlük Rapor <rapor@ornek.com>", "Günlük Rapor <rapor@ornek.com>"]
+    ikinci = _rfc2047("Ayşe Yılmaz - Günlük Rapor")
+    assert ikinci.startswith("=?utf-8?b?") and ikinci.isascii()
+    assert [i["from"] for i in sahte.istekler] == ["Ayşe Yılmaz - Günlük Rapor <rapor@ornek.com>", ikinci]
     assert sahte.istekler[0] | {"from": ""} == sahte.istekler[1] | {"from": ""}
     assert "gönderen adı reddedildi, varsayılana düşüldü" in caplog.text
 
 
-def test_resend_from_icermeyen_422_tekrar_denenmez(monkeypatch):
-    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+def test_resend_from_422_iki_kez_ucuncu_saf_adres(caplog):
+    sahte = SiraliResend([(422, "Invalid `from` field."), (422, "Invalid `from` field. x"), (200, None)])
+    with caplog.at_level("WARNING", logger="gunluk-rapor"):
+        assert servisler.eposta_gonder("k@ornek.com", "K", "G", istemci=sahte, gonderen_adi="Ayşe") is None
+    assert [i["from"] for i in sahte.istekler][1:] == [_rfc2047("Ayşe - Günlük Rapor"), "rapor@ornek.com"]
+    assert caplog.text.count("gönderen adı reddedildi") == 3  # iki düşüş + başarı
+
+
+def test_resend_from_icermeyen_422_tekrar_denenmez():
     sahte = SiraliResend([(422, "Invalid `to` field."), (200, None)])
     hata = servisler.eposta_gonder("k@ornek.com", "Konu", "Gövde", istemci=sahte, gonderen_adi="Ayşe")
     assert hata == "Resend 422: Invalid `to` field." and len(sahte.istekler) == 1
 
 
-def test_resend_from_422_ikinci_deneme_de_basarisizsa_ilk_hata(monkeypatch):
-    monkeypatch.setenv("RESEND_API_KEY", "re_test")
-    sahte = SiraliResend([(422, "Invalid `from` field."), (422, "Invalid `from` field.")])
-    assert servisler.eposta_gonder("k@ornek.com", "K", "G", istemci=sahte, gonderen_adi="Ayşe") == "Resend 422: Invalid `from` field."
-    assert len(sahte.istekler) == 2
+def test_resend_uc_deneme_de_duserse_ilk_hata():
+    sahte = SiraliResend([(422, "Invalid `from` field. 1"), (422, "Invalid `from` field. 2"), (422, "from 3"), (200, None)])
+    assert servisler.eposta_gonder("k@ornek.com", "K", "G", istemci=sahte, gonderen_adi="Ayşe") == "Resend 422: Invalid `from` field. 1"
+    assert len(sahte.istekler) == 3
+
+
+# ---------------------------------------------------------------- O1-ek3: gönderen adresi ayrıştırma
+
+@pytest.mark.parametrize("deger, beklenen", [
+    ("Günlük Rapor <a@b.com>", "a@b.com"), ("a@b.com", "a@b.com"), ("  ", "rapor@medusarights.com"),
+    ("", "rapor@medusarights.com"),
+])
+def test_gonderen_adresi_saf_adres(monkeypatch, deger, beklenen):
+    monkeypatch.setenv("EPOSTA_GONDEREN", deger)
+    assert servisler.gonderen_adresi() == beklenen
+
+
+@pytest.mark.parametrize("deger", ["rapör@b.com", "Rapor <rapör@b.com>", "gecersiz", "Günlük Rapor"])
+def test_gonderen_adresi_gecersizse_varsayilan_ve_uyari(monkeypatch, caplog, deger):
+    monkeypatch.setenv("EPOSTA_GONDEREN", deger)
+    with caplog.at_level("WARNING", logger="gunluk-rapor"):
+        assert servisler.gonderen_adresi() == "rapor@medusarights.com"
+    assert "EPOSTA_GONDEREN" in caplog.text and deger not in caplog.text
+
+
+def test_tum_yollarda_from_tek_kosebentli(monkeypatch, saat, push):
+    monkeypatch.setenv("EPOSTA_GONDEREN", "Günlük Rapor <rapor@ornek.com>")
+    uid = kullanici_olustur(otomatik_gonder=True, patron_eposta=PATRON)
+    kullanici_olustur("yonetici@ornek.com", "Mehmet Kaya", rol="admin")
+    ekle(uid, "Teklif hazırlandı")
+    c = istemci()
+    assert c.post("/api/otomatik/test").json()["ok"] is True  # test
+    assert c.post("/api/hatirlat/eposta-dene").json()["ok"] is True  # hatırlatma denemesi
+    y = istemci("yonetici@ornek.com")
+    assert y.post("/yonetim/davet", data={"ad": "Zeynep", "eposta": "z@ornek.com", "mail_gonder": "1"}).status_code == 200
+    with OturumYapici() as db:
+        zid = db.scalar(select(Kullanici.id).where(Kullanici.eposta == "z@ornek.com"))
+    assert y.post(f"/yonetim/{zid}/sifirla", data={"mail_gonder": "1"}).status_code == 200  # davet + sıfırlama
+    assert len(SahteResend.istekler) == 4  # test, hatırlatma, davet, sıfırlama
+    for g in SahteResend.istekler:
+        assert g["from"].count("<") == 1 and g["from"].count(">") == 1 and g["from"].endswith(" <rapor@ornek.com>")
+        [adres] = _from_ayristir(g["from"])
+        assert adres.addr_spec == "rapor@ornek.com"
+    assert "Ayşe Yılmaz - Günlük Rapor <rapor@ornek.com>" in [g["from"] for g in SahteResend.istekler]
+    for ad in ("", "Ayşe", 'x "y" <z>'):
+        assert servisler.gonderen_basligi(servisler.gonderen_adresi(), ad).count("<") == 1
+
+
+def test_test_ucu_hatada_kullanilan_gondereni_gosterir(monkeypatch, saat):
+    uid = kullanici_olustur()
+    ekle(uid, "Teklif hazırlandı")
+    sahte = SiraliResend([(403, "Domain not verified")])
+    monkeypatch.setattr(servisler.httpx, "Client", lambda *a, **k: sahte)
+    r = istemci().post("/api/otomatik/test").json()
+    assert r["ok"] is False
+    assert r["neden"] == "Resend 403: Domain not verified · Kullanılan gönderen: Ayşe Yılmaz - Günlük Rapor <rapor@ornek.com>"
+    assert "re_test_anahtar" not in r["neden"]
