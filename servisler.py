@@ -97,7 +97,7 @@ def claude_sistem(proje_adi: str = "", kendi_sirket: list[str] | None = None) ->
         "Bir müzik edisyon şirketinde çalışan bir danışmanın günlük raporu için maddeler yazıyorsun. "
         "Teknik terimleri (trigram, indeks, rollup, N+1, commit, endpoint vb.) yöneticinin anlayacağı iş diline çevir; "
         "her girdi için TEK cümle, geçmiş zaman, abartı yok, uydurma yok. "
-        + EPOSTA_KURALI + " " + GOOGLE_KURALI + " "
+        + EPOSTA_KURALI + " " + GOOGLE_KURALI + " " + TIRNAK_KURALI + " "
         + (kendi + " " if kendi else "")
         + urun
         + "Yalnız JSON dizi döndür: [{\"id\":..., \"metin\":...}]"
@@ -140,26 +140,202 @@ def _kucult(s: str) -> str:
     return s.replace("I", "ı").replace("İ", "i").lower()
 
 
-def yonelme_eki(ad: str) -> str:
-    """'MSG' → "MSG'ye", 'MESAM' → "MESAM'a", 'IMRO' → "IMRO'ya", 'Coverz' → "Coverz'e"."""
+def _okunus(ad: str) -> str:
+    """Ek uyumu için adın son kelimesinin okunuşu (küçük harf): 'MSG' → 'ge', 'MESAM' → 'mesam'."""
     ad = ad.strip()
     kelimeler = [k for k in re.split(r"[\s.\-_/]+", ad) if k]
     son = kelimeler[-1] if kelimeler else ad
     harfler = "".join(h for h in son if h.isalpha())
-
-    if _kucult(harfler) in EK_ISTISNALARI:
-        unlu = EK_ISTISNALARI[_kucult(harfler)]
-        return f"{ad}'{unlu}"
-
     if harfler and harfler.isupper() and not any(h in UNLULER for h in _kucult(harfler)):
-        okunus = HARF_OKUNUSU.get(harfler[-1], _kucult(harfler[-1]) + "e")
-    else:
-        okunus = _kucult(harfler)
+        return HARF_OKUNUSU.get(harfler[-1], _kucult(harfler[-1]) + "e")
+    return _kucult(harfler)
 
-    son_unlu = next((h for h in reversed(okunus) if h in UNLULER), "e")
-    unlu = "a" if son_unlu in KALIN_UNLULER else "e"
+
+def _son_unlu(okunus: str) -> str:
+    return EK_ISTISNALARI.get(okunus) or next((h for h in reversed(okunus) if h in UNLULER), "e")
+
+
+def yonelme_eki(ad: str) -> str:
+    """'MSG' → "MSG'ye", 'MESAM' → "MESAM'a", 'IMRO' → "IMRO'ya", 'Coverz' → "Coverz'e"."""
+    ad = ad.strip()
+    okunus = _okunus(ad)
+    if okunus in EK_ISTISNALARI:
+        return f"{ad}'{EK_ISTISNALARI[okunus]}"
+    unlu = "a" if _son_unlu(okunus) in KALIN_UNLULER else "e"
     kaynastirma = "y" if okunus and okunus[-1] in UNLULER else ""
     return f"{ad}'{kaynastirma}{unlu}"
+
+
+SERT_UNSUZLER = "fstkçşhp"
+DORTLU_UNLU = {"a": "ı", "ı": "ı", "e": "i", "i": "i", "o": "u", "u": "u", "ö": "ü", "ü": "ü"}
+
+
+def _buyut(s: str) -> str:
+    return s.replace("i", "İ").replace("ı", "I").upper()
+
+
+def ek_uyumu(ek: str, kaynak: str, hedef: str) -> str:
+    """Kesme işaretinden sonraki eki kaynak addan hedef ada taşır: ünlü uyumu (a/e, ı/i/u/ü), sertleşme (da/ta) ve
+    kaynaştırma harfi hedefin son sesine göre yeniden kurulur. Kaynağın kaynaştırma harfi (Medusa'nın, MSG'ye) atılır.
+    Hedef iyelik ekli bir tamlamaysa (Edisyon uygulaması) durum ekleri n'li olur: 'da' → 'nda', 'nın' → 'nın', 'a' → 'na'.
+    ek_uyumu('da', 'MEDUSA', 'Edisyon uygulaması') → 'nda'; ek_uyumu('ya', 'Medusa', 'Coverz') → 'e'."""
+    kucuk = _kucult(ek)
+    k_okunus = _okunus(kaynak)
+    cekirdek = kucuk
+    if (k_okunus and k_okunus[-1] in UNLULER and len(kucuk) >= 2 and kucuk[0] in "yn"
+            and (kucuk[1] in UNLULER or (kucuk[0] == "n" and kucuk[1] in "dt") or (kucuk[0] == "y" and kucuk[1] == "l"))):
+        cekirdek = kucuk[1:]
+    if not cekirdek:
+        return ek
+    h_okunus = _okunus(hedef)
+    h_unluyle = bool(h_okunus) and h_okunus[-1] in UNLULER
+    tamlama = h_unluyle and len(hedef.split()) >= 2 and h_okunus[-1] in "ıiuü"
+    onek = ""
+    if tamlama and (cekirdek[0] in UNLULER or cekirdek[0] in "dt"):
+        onek = "n"
+    elif h_unluyle and cekirdek[0] in UNLULER:
+        onek = "n" if re.match(r"[ıiuü]n", cekirdek) else "y"
+    elif h_unluyle and cekirdek in ("la", "le"):
+        onek = "y"
+    unlu, onceki, sonuc = _son_unlu(h_okunus), (h_okunus[-1:] or "e"), []
+    for n, h in enumerate(onek + cekirdek):
+        if (onek + cekirdek)[n:] == "ki" and n:
+            sonuc.append("ki")
+            break
+        if h in "dt":
+            h = "t" if onceki in SERT_UNSUZLER else "d"
+        elif h in "ae":
+            h = "a" if unlu in KALIN_UNLULER else "e"
+        elif h in "ıiuü":
+            h = DORTLU_UNLU[unlu]
+        if h in UNLULER:
+            unlu = h
+        sonuc.append(h)
+        onceki = h
+    cikti = "".join(sonuc)
+    return _buyut(cikti) if ek.isupper() else cikti
+
+
+# ---------------------------------------------------------------- ad eşlemeleri ve tırnak içi koruma
+
+# Aynı sınırlar arayüzde (index.html adlariEsle) de kullanılır.
+_ONCE_SINIR = r"(?<!\w)"
+_SONRA_EK = r"(?:(?P<ap>['’])(?P<ek>[^\W\d_]+))?(?!\w)"
+
+
+def _harf_deseni(h: str) -> str:
+    """Büyük/küçük harf ve Türkçe İ/ı duyarsız tek karakter deseni."""
+    if h in "iİıI":
+        return "[iİıI]"
+    if h.isspace():
+        return r"\s+"
+    esler = {x for x in (h, h.lower(), h.upper()) if len(x) == 1}
+    if len(esler) == 1:
+        return re.escape(h)
+    return "[" + "".join(sorted(re.escape(x) for x in esler)) + "]"
+
+
+def _esleme_deseni(eslemeler: tuple[tuple[str, str], ...]) -> re.Pattern:
+    parcalar = [f"(?P<e{n}>{''.join(_harf_deseni(h) for h in kaynak)})" for n, (kaynak, _) in enumerate(eslemeler)]
+    return re.compile(_ONCE_SINIR + "(?:" + "|".join(parcalar) + ")" + _SONRA_EK)
+
+
+def _esleme_listesi(eslemeler) -> tuple[tuple[str, str], ...]:
+    """[{kaynak, hedef}] → uzun kaynak önce sıralı (kaynak, hedef) çiftleri; bozuk satırlar atlanır."""
+    ciftler = []
+    for e in eslemeler or []:
+        if isinstance(e, dict) and isinstance(e.get("kaynak"), str) and e["kaynak"].strip():
+            ciftler.append((re.sub(r"\s+", " ", e["kaynak"]).strip(), str(e.get("hedef") or "").strip()))
+    return tuple(sorted(ciftler, key=lambda c: -len(c[0])))
+
+
+def _bosluklari_temizle(metin: str) -> str:
+    """Silinen adın ardından: boş tırnak/parantez, çift boşluk, noktalamadan önceki ve satır başı/sonu boşlukları."""
+    metin = re.sub(r"(?<!\w)'[ \t]*'(?!\w)", "", metin)
+    metin = re.sub(r"\([ \t]*\)", "", metin)
+    metin = re.sub(r"[ \t]{2,}", " ", metin)
+    metin = re.sub(r"[ \t]+([,.;:!?)])", r"\1", metin)
+    return re.sub(r"(?m)^[ \t]+|[ \t]+$", "", metin)
+
+
+def ad_esle(metin: str | None, eslemeler) -> str:
+    """Ad eşlemelerini uygular: kelime sınırıyla, büyük/küçük harf ve İ/ı duyarsız, uzun kaynak önce; kesme işaretli
+    ek hedefe uydurulur (ek_uyumu). Hedef boşsa ad ekiyle birlikte silinir ve kalan boşluklar temizlenir.
+    Tek geçişte uygulanır; hedefler kaynak içermediği için (Ayarlar'da denetlenir) ikinci uygulama bir şey değiştirmez.
+    Tırnak içindeki metne de uygulanır: tırnak içi koruma kuralının tek istisnası budur."""
+    if not metin:
+        return metin or ""
+    ciftler = _esleme_listesi(eslemeler)
+    if not ciftler:
+        return metin
+    silindi = False
+
+    def degistir(m: re.Match) -> str:
+        nonlocal silindi
+        n = next(i for i in range(len(ciftler)) if m.group(f"e{i}") is not None)
+        hedef = ciftler[n][1]
+        if not hedef:
+            silindi = True
+            return ""
+        if m.group("ek"):
+            return hedef + m.group("ap") + ek_uyumu(m.group("ek"), m.group(f"e{n}"), hedef)
+        return hedef
+
+    sonuc = _esleme_deseni(ciftler).sub(degistir, metin)
+    return _bosluklari_temizle(sonuc) if silindi else sonuc
+
+
+def esleme_iceriyor(metin: str, eslemeler) -> bool:
+    """Metinde eşlenecek bir kaynak ad geçiyor mu."""
+    ciftler = _esleme_listesi(eslemeler)
+    return bool(ciftler) and bool(_esleme_deseni(ciftler).search(metin or ""))
+
+
+TIRNAK_KURALI = (
+    "Tek tırnak ('…') içindeki metni harfiyen koru: kelime, harf, büyük/küçük harf ve noktalama değişmez, "
+    "proje adı kuralı uygulanmaz, tırnaklar silinmez."
+)
+_TIRNAK_ACILIS_ONCESI = "([{\"“«/—-"
+
+
+def tirnak_parcalari(metin: str | None) -> list[str]:
+    """Tek tırnak içindeki parçalar. Açılış tırnağı metin başında ya da boşluk/açılış işaretinden sonra gelir; ek
+    kesme işareti (MSG'ye) açılış sayılmaz. Kapanış: bir sonraki açılıştan önceki, ardından harf gelmeyen ilk tırnak;
+    yoksa ilk tırnak ('Ağustos raporu'nu → 'Ağustos raporu')."""
+    metin = metin or ""
+    parcalar, i = [], 0
+    acilis = lambda j: metin[j] == "'" and (j == 0 or metin[j - 1].isspace() or metin[j - 1] in _TIRNAK_ACILIS_ONCESI)  # noqa: E731
+    while True:
+        bas = next((j for j in range(i, len(metin)) if acilis(j)), None)
+        if bas is None:
+            return parcalar
+        adaylar = []
+        for j in range(bas + 1, len(metin)):
+            if acilis(j):
+                break
+            if metin[j] == "'":
+                adaylar.append(j)
+        if not adaylar:
+            i = bas + 1
+            continue
+        son = next((j for j in adaylar if j + 1 == len(metin) or not (metin[j + 1].isalnum() or metin[j + 1] == "_")), adaylar[0])
+        if metin[bas + 1:son].strip():
+            parcalar.append(metin[bas + 1:son])
+        i = son + 1
+
+
+def tirnaklar_korundu(parcalar: list[str], cikti: str) -> bool:
+    """Her parça çıktıda tırnaklarıyla aynen geçiyor mu."""
+    return all(f"'{p}'" in (cikti or "") for p in parcalar)
+
+
+def surekli_tirnaklari(metin: str) -> list[str]:
+    """Sürekli işte '|' ile ayrılmış her ifadede ortak olan tırnaklı parçalar (Claude hangisini seçerse seçsin)."""
+    ifadeler = [p for p in metin.split("|") if p.strip()] or [metin]
+    ortak = set(tirnak_parcalari(ifadeler[0]))
+    for p in ifadeler[1:]:
+        ortak &= set(tirnak_parcalari(p))
+    return sorted(ortak)
 
 
 # ---------------------------------------------------------------- e-posta
@@ -1071,17 +1247,20 @@ def _id_metin_eslesmesi(metin: str) -> dict[str, str]:
 
 def claude_cevir(
     maddeler: list[dict], api_anahtari: str, istemci: httpx.Client | None = None, proje_adi: str = "",
-    kendi_sirket: list[str] | None = None,
+    kendi_sirket: list[str] | None = None, eslemeler: list[dict] | None = None,
 ) -> tuple[list[dict], str | None]:
-    """Maddeleri tek çağrıda iş diline çevirir. Hata olursa ham maddeler + hata mesajı döner."""
+    """Maddeleri tek çağrıda iş diline çevirir. Hata olursa ham maddeler + hata mesajı döner.
+    eslemeler: ad eşlemeleri girdiye ve çıktıya uygulanır. Girdideki tırnaklı bir parçayı aynen korumayan çeviri
+    reddedilir; o maddenin metni eşlenmiş ham metin olur."""
     if not maddeler:
         return maddeler, None
-    girdiler = [{"id": m["id"], "kaynak": m["kaynak"], "metin": m["metin"]} for m in maddeler]
+    esli = {m["id"]: ad_esle(m["metin"], eslemeler) for m in maddeler}
+    girdiler = [{"id": m["id"], "kaynak": m["kaynak"], "metin": esli[m["id"]]} for m in maddeler]
     istek = {
         "model": CLAUDE_MODEL,
         "max_tokens": 1500,
         "thinking": {"type": "disabled"},
-        "system": claude_sistem(proje_adi, kendi_sirket),
+        "system": claude_sistem(ad_esle(proje_adi, eslemeler), [ad_esle(k, eslemeler) for k in kendi_sirket or []]),
         "messages": [{
             "role": "user",
             "content": (
@@ -1099,6 +1278,12 @@ def claude_cevir(
         return maddeler, f"claude: {e}, ham metin kullanıldı"
     except (ValueError, KeyError, TypeError) as e:
         return maddeler, f"claude: yanıt JSON değil ({e}), ham metin kullanıldı"
+    for kimlik, metin in list(ceviri.items()):
+        if kimlik in esli and not tirnaklar_korundu(tirnak_parcalari(esli[kimlik]), metin):
+            ceviri[kimlik] = esli[kimlik]
+            log.info("claude cevirisi reddedildi: tirnak ici degisti")
+        else:
+            ceviri[kimlik] = ad_esle(metin, eslemeler)
     # id ham metinden türetildiği için korunur; böylece gün içinde tik durumu kaybolmaz.
     return [{**m, "metin": ceviri.get(m["id"], m["metin"])} for m in maddeler], None
 
@@ -1125,6 +1310,7 @@ def duzelt_sistemi(proje_adi: str = "", kategorili: bool = False, kendi_sirket: 
         "- Teknik terimleri yöneticinin anlayacağı iş diline çevir. " + urun + "\n"
         "- " + EPOSTA_KURALI + "\n"
         "- " + GOOGLE_KURALI + "\n"
+        "- " + TIRNAK_KURALI + "\n"
         + ("- " + kendi_sirket_kurali(kendi_sirket) + "\n" if kendi_sirket else "")
         + "- 'devam' türündeki maddelerde işin adı ve aşaması tek cümlede birleşir (örn. \"… için yanıt bekleniyor.\").\n"
         "- 'surekli' türündeki maddeler her gün tekrarlanan işlerdir: son raporlardaki cümlelerle aynı olmayan "
@@ -1144,14 +1330,29 @@ def claude_duzelt(
     return claude_duzelt_kategorili(girdiler, son_raporlar, api_anahtari, proje_adi, istemci, kendi_sirket=kendi_sirket)[0]
 
 
+def _korunacak_tirnaklar(girdi: dict) -> list[str]:
+    if girdi.get("tur") == "surekli":
+        return surekli_tirnaklari(girdi.get("metin") or "")
+    return tirnak_parcalari(girdi.get("metin")) + tirnak_parcalari(girdi.get("asama"))
+
+
 def claude_duzelt_kategorili(
     girdiler: list[dict], son_raporlar: list[str], api_anahtari: str, proje_adi: str = "",
     istemci: httpx.Client | None = None, kategoriler: list[dict] | None = None, kendi_sirket: list[str] | None = None,
+    eslemeler: list[dict] | None = None,
 ) -> tuple[dict[int, str], dict[int, int]]:
     """Tek çağrı. kategoriler [{id, ad}] verilirse "kategori_sec": true girdiler için önerilen kategori de döner.
-    Dönen: (id → düzeltilmiş metin, id → kategori_id). Kategori id'lerinin geçerliliğini çağıran denetler."""
+    Dönen: (id → düzeltilmiş metin, id → kategori_id). Kategori id'lerinin geçerliliğini çağıran denetler.
+    eslemeler: ad eşlemeleri girdiye, bağlama ve çıktıya uygulanır. Girdideki tırnaklı parçayı aynen korumayan
+    madde sonuçtan çıkarılır (ham metin kalır)."""
     if not girdiler:
         return {}, {}
+    girdiler = [{**g, **{k: ad_esle(g[k], eslemeler) for k in ("metin", "asama") if isinstance(g.get(k), str)}}
+                for g in girdiler]
+    son_raporlar = [ad_esle(r, eslemeler) for r in son_raporlar]
+    kategoriler = [{**k, "ad": ad_esle(k.get("ad"), eslemeler)} for k in kategoriler] if kategoriler else kategoriler
+    proje_adi = ad_esle(proje_adi, eslemeler)
+    kendi_sirket = [ad_esle(k, eslemeler) for k in kendi_sirket] if kendi_sirket else kendi_sirket
     baglam = (
         "Son günlük raporlar (sürekli işlerde bu cümleleri tekrar etme):\n"
         + "\n---\n".join(son_raporlar) + "\n\n"
@@ -1185,7 +1386,11 @@ def claude_duzelt_kategorili(
             k = int(k)
         if isinstance(k, int) and not isinstance(k, bool):
             oneriler[int(x["id"])] = k
-    return {int(k): v for k, v in eslesme.items() if k in gecerli}, oneriler
+    korunacak = {str(g["id"]): _korunacak_tirnaklar(g) for g in girdiler}
+    reddedilen = {k for k, v in eslesme.items() if k in gecerli and not tirnaklar_korundu(korunacak[k], v)}
+    if reddedilen:
+        log.info("claude duzeltmesi reddedildi: tirnak ici degisti (%s madde)", len(reddedilen))
+    return {int(k): ad_esle(v, eslemeler) for k, v in eslesme.items() if k in gecerli and k not in reddedilen}, oneriler
 
 
 # ---------------------------------------------------------------- sesle madde ekleme
@@ -1219,6 +1424,7 @@ def sesli_not_sistemi(proje_adi: str = "", kendi_sirket: list[str] | None = None
         "- Her ayrı işi ayrı madde yap. Her madde yönetici raporuna uygun TEK cümle olur; sonunda nokta olur. "
         "Zaman kipi -di'li geçmiş zamandır (\"gönderildi\", \"görüşüldü\"); \"-mıştır\" kullanma.\n"
         "- Olgu ekleme, yorum katma. Kişi, kurum, ürün adları ve sayılar aynen korunur.\n"
+        "- " + TIRNAK_KURALI + "\n"
         "- \"şey\", \"yani\", \"işte\", \"hani\", \"ııı\" gibi dolgu ifadelerini, tekrarları ve yarım kalmış "
         "sözleri at.\n"
         + ("- " + kendi_sirket_kurali(kendi_sirket) + "\n" if kendi_sirket else "")
@@ -1235,10 +1441,15 @@ def sesli_not_sistemi(proje_adi: str = "", kendi_sirket: list[str] | None = None
 
 def claude_sesli_bol(
     metin: str, api_anahtari: str, kategoriler: list[dict] | None = None, proje_adi: str = "",
-    kendi_sirket: list[str] | None = None, istemci: httpx.Client | None = None,
+    kendi_sirket: list[str] | None = None, istemci: httpx.Client | None = None, eslemeler: list[dict] | None = None,
 ) -> list[dict]:
     """Dikte metnini tek çağrıda maddelere böler: [{metin, kategori_id, tur, asama}].
-    Hata, JSON olmayan ya da boş yanıt → ClaudeHatasi. Kategori id'lerinin geçerliliğini çağıran denetler."""
+    Hata, JSON olmayan ya da boş yanıt → ClaudeHatasi. Kategori id'lerinin geçerliliğini çağıran denetler.
+    eslemeler girdiye ve çıktıya uygulanır; girdideki tırnaklı bir parça hiçbir maddede aynen yoksa ClaudeHatasi."""
+    metin = ad_esle(metin, eslemeler)
+    kategoriler = [{**k, "ad": ad_esle(k.get("ad"), eslemeler)} for k in kategoriler or []]
+    proje_adi = ad_esle(proje_adi, eslemeler)
+    kendi_sirket = [ad_esle(k, eslemeler) for k in kendi_sirket] if kendi_sirket else kendi_sirket
     istek = {
         "model": CLAUDE_MODEL,
         "max_tokens": 1500,
@@ -1272,6 +1483,11 @@ def claude_sesli_bol(
         })
     if not maddeler:
         raise ClaudeHatasi("boş yanıt")
+    if not tirnaklar_korundu(tirnak_parcalari(metin), "\n".join(m["metin"] + " " + (m["asama"] or "") for m in maddeler)):
+        raise ClaudeHatasi("tırnak içindeki metin korunmadı")
+    for m in maddeler:
+        m["metin"] = ad_esle(m["metin"], eslemeler)
+        m["asama"] = ad_esle(m["asama"], eslemeler) or None
     return maddeler
 
 
@@ -1324,14 +1540,17 @@ def haftalik_sistemi() -> str:
         "- Günlük raporlar *Başlık:* biçiminde kategori başlıklarıyla yazılmışsa bu başlıkları konu gruplaması "
         "için ipucu say.\n"
         "- Raporlarda olmayan hiçbir bilgiyi ekleme; isimler ve sayılar aynen kalır; geçmiş zaman.\n"
+        "- " + TIRNAK_KURALI + "\n"
         "Yalnız özet metnini döndür, açıklama yazma."
     )
 
 
 def claude_haftalik(
-    raporlar: list[tuple[date, str]], baslik: str, api_anahtari: str, istemci: httpx.Client | None = None
+    raporlar: list[tuple[date, str]], baslik: str, api_anahtari: str, istemci: httpx.Client | None = None,
+    eslemeler: list[dict] | None = None,
 ) -> str:
-    govde = "\n\n".join(f"### {t.isoformat()}\n{m}" for t, m in raporlar)
+    """eslemeler: ad eşlemeleri günlük raporlara (girdi) ve özete (çıktı) uygulanır."""
+    govde = "\n\n".join(f"### {t.isoformat()}\n{ad_esle(m, eslemeler)}" for t, m in raporlar)
     istek = {
         "model": CLAUDE_MODEL,
         "max_tokens": 2000,
@@ -1345,7 +1564,7 @@ def claude_haftalik(
     metin = _claude_cagir(istek, api_anahtari, istemci).strip()
     if not metin:
         raise ClaudeHatasi("boş yanıt")
-    return metin
+    return ad_esle(metin, eslemeler)
 
 
 def surekli_varyant(metin: str, tarih: date) -> str:
@@ -1363,7 +1582,7 @@ def raporu_uret(
     tarih: date | None = None,
 ) -> dict:
     """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu, eposta_gruplama,
-    kendi_alanlar, ekip_ici_atla, kendi_sirket (çözülmüş); Google bağlıysa google: {token, kapsamlar, eposta,
+    kendi_alanlar, ekip_ici_atla, kendi_sirket (çözülmüş), ad_eslemeleri; Google bağlıysa google: {token, kapsamlar, eposta,
     yenile, hata} (token yoksa Google kaynakları atlanır).
     haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez. Sözlükse id → kayıtlı metin: metni
     değişen (ör. aynı konuya yeni mail gelen) madde yeniden çevrilir; değer None ise hiç gönderilmez.
@@ -1437,7 +1656,7 @@ def raporu_uret(
     yeniler = [m for anahtar in cevrilenler for m in sonuc[anahtar] if not kayitli(m)]
     if api_anahtari and yeniler:
         cevrilmis, hata = claude_cevir(yeniler, api_anahtari, proje_adi=ayarlar.get("proje_adi") or "",
-                                       kendi_sirket=ayarlar.get("kendi_sirket"))
+                                       kendi_sirket=ayarlar.get("kendi_sirket"), eslemeler=ayarlar.get("ad_eslemeleri"))
         if not hata:  # metin ham kalır; çeviri metin_ai'ye gider
             metinler = {m["id"]: m["metin"] for m in cevrilmis}
             for anahtar in cevrilenler:
@@ -1450,16 +1669,29 @@ def raporu_uret(
 # ---------------------------------------------------------------- hatırlatma: e-posta ve web push
 
 VARSAYILAN_GONDEREN = "rapor@medusarights.com"
+GONDEREN_EKI = "Günlük Rapor"
 
 
 def gonderen_adresi() -> str:
     return (os.environ.get("EPOSTA_GONDEREN") or "").strip() or VARSAYILAN_GONDEREN
 
 
+def gonderen_basligi(adres: str, ad: str | None = None) -> str:
+    """From başlığı: '"Ayşe Yılmaz · Günlük Rapor" <rapor@…>'; ad boşsa yalnız adres (adres hiç değişmez).
+    Görünen ad her zaman RFC 5322 quoted-string olarak yazılır: \\ ve " kaçışlanır; satır sonu ve denetim
+    karakterleri atılır (başlık enjeksiyonu olmasın)."""
+    ad = re.sub(r"\s+", " ", "".join(h if h.isprintable() else " " for h in (ad or ""))).strip()
+    if not ad:
+        return adres
+    gorunen = f"{ad} · {GONDEREN_EKI}".replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{gorunen}" <{adres}>'
+
+
 def _resend_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None, anahtar: str,
-                   istemci: httpx.Client | None = None, kopya: str | None = None) -> str | None:
+                   istemci: httpx.Client | None = None, kopya: str | None = None,
+                   gonderen_adi: str | None = None) -> str | None:
     """Render free planı giden SMTP portlarını kapatıyor; sistem e-postaları HTTPS ile gider."""
-    govde = {"from": gonderen_adresi(), "to": [kime], "subject": konu, "text": metin}
+    govde = {"from": gonderen_basligi(gonderen_adresi(), gonderen_adi), "to": [kime], "subject": konu, "text": metin}
     if yanit_adresi:
         govde["reply_to"] = yanit_adresi
     if kopya:
@@ -1484,12 +1716,12 @@ def _resend_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None, a
 
 
 def _smtp_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, metin: str,
-                 yanit_adresi: str | None, kopya: str | None = None) -> str | None:
+                 yanit_adresi: str | None, kopya: str | None = None, gonderen_adi: str | None = None) -> str | None:
     """Yerel geliştirme yedeği: kullanıcının kendi Gmail'inden SMTP ile gönderir."""
     if not (gmail_kullanici and gmail_sifre):
         return "E-posta gönderilemedi (RESEND_API_KEY tanımlı değil, Gmail yedeği de yok)"
     mesaj = EmailMessage()
-    mesaj["From"] = gmail_kullanici
+    mesaj["From"] = gonderen_basligi(gmail_kullanici, gonderen_adi)
     mesaj["To"] = kime
     mesaj["Subject"] = konu
     if yanit_adresi:
@@ -1514,13 +1746,15 @@ def _smtp_gonder(gmail_kullanici: str, gmail_sifre: str, kime: str, konu: str, m
 
 def eposta_gonder(kime: str, konu: str, metin: str, yanit_adresi: str | None = None,
                   gmail_kullanici: str = "", gmail_sifre: str = "",
-                  istemci: httpx.Client | None = None, kopya: str | None = None) -> str | None:
+                  istemci: httpx.Client | None = None, kopya: str | None = None,
+                  gonderen_adi: str | None = None) -> str | None:
     """Başarıda None, hatada kısa Türkçe neden döner; yükseltmez. kopya: tek cc adresi.
+    gonderen_adi: From'da görünen ad ("<ad> · Günlük Rapor"); adres değişmez.
     RESEND_API_KEY varsa HTTPS ile Resend, yoksa Gmail SMTP yedeği (yerel geliştirme)."""
     anahtar = (os.environ.get("RESEND_API_KEY") or "").strip()
     if anahtar:
-        return _resend_gonder(kime, konu, metin, yanit_adresi, anahtar, istemci, kopya)
-    return _smtp_gonder(gmail_kullanici, gmail_sifre, kime, konu, metin, yanit_adresi, kopya)
+        return _resend_gonder(kime, konu, metin, yanit_adresi, anahtar, istemci, kopya, gonderen_adi)
+    return _smtp_gonder(gmail_kullanici, gmail_sifre, kime, konu, metin, yanit_adresi, kopya, gonderen_adi)
 
 
 def kalin_isaretsiz(metin: str) -> str:

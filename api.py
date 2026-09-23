@@ -52,6 +52,10 @@ RAPOR_BICIMLERI = ("kategorili", "duz")
 # Rapora elle yazılmış gibi giren bugün satırları: elle, e-postayla gelen not, sesle eklenen.
 ELLE_KAYNAKLARI = ("elle", "not", "ses")
 SESLI_NOT_SINIRI = 5000  # karakter
+AD_EN_KISA, AD_EN_UZUN = 2, 60  # görünen ad
+# Raporlarda ve e-postalarda görünmemesi gereken yer tutucu adlar (Ayarlar'da sarı ipucu)
+YER_TUTUCU_ADLAR = frozenset({"yönetici", "yonetici", "admin", "administrator", "kullanıcı", "kullanici"})
+ESLEME_KAYNAK_EN_KISA, ESLEME_KAYNAK_EN_UZUN, ESLEME_HEDEF_EN_UZUN, ESLEME_SINIRI = 2, 60, 80, 50
 
 
 def bugun() -> date:
@@ -274,6 +278,9 @@ def ayar_ozeti(a: KullaniciAyari, kullanici: Kullanici | None = None) -> dict:
     """Şifre ve token hiçbir zaman dönmez; yalnız kayıtlı olup olmadıkları."""
     h, o = hatirlatma_ayari(a), otomatik_ayari(a)
     return {
+        "ad": kullanici.ad if kullanici else "",
+        "ad_yer_tutucu": ad_yer_tutucu(kullanici.ad) if kullanici else False,
+        "ad_eslemeleri": ad_eslemeleri(a),
         "otomatik_gonder": o["acik"],
         "otomatik_saat": o["saat"].strftime("%H:%M"),
         "patron_eposta": o["patron_eposta"],
@@ -310,6 +317,16 @@ def alan_sozlugu(a: KullaniciAyari) -> dict[str, str]:
     return servisler.KURUMLAR if a.alan_sozlugu is None else a.alan_sozlugu
 
 
+def ad_eslemeleri(a: KullaniciAyari | None) -> list[dict]:
+    """[{kaynak, hedef}]; satır ya da kolon yoksa boş."""
+    return [dict(e) for e in (a.ad_eslemeleri if a is not None and isinstance(a.ad_eslemeleri, list) else [])
+            if isinstance(e, dict)]
+
+
+def ad_yer_tutucu(ad: str | None) -> bool:
+    return servisler._kucult((ad or "").strip()) in YER_TUTUCU_ADLAR
+
+
 def otomatik_kendi_alanlar(a: KullaniciAyari, kullanici: Kullanici | None) -> list[str]:
     """Giriş ve Gmail adresinin alan adları + sözlükte 'şirket içi' eşlenenler (Ayarlar'da gri rozet)."""
     adresler = [kullanici.eposta if kullanici else "", a.gmail_kullanici or ""]
@@ -338,6 +355,7 @@ def cozulmus_ayarlar(a: KullaniciAyari, kullanici: Kullanici | None = None) -> d
         "github_repo": a.github_repo or "",
         "proje_adi": a.proje_adi or "",
         "alan_sozlugu": alan_sozlugu(a),
+        "ad_eslemeleri": ad_eslemeleri(a),
     }
 
 
@@ -389,10 +407,11 @@ def madde_rapor_metni(m: Madde, ifade: str | None, tarih: date) -> str:
     return ham
 
 
-def madde_json(m: Madde, ifadeler: dict[int, str], tarih: date) -> dict:
+def madde_json(m: Madde, ifadeler: dict[int, str], tarih: date, eslemeler: list[dict] | None = None) -> dict:
+    """rapor_metni ad eşlemeleri uygulanmış hâlidir; metin, metin_ai ve gunun_ifadesi ham kalır ("orijinali gör")."""
     ifade = ifadeler.get(m.id) if m.tur == "surekli" else None
     veri = {
-        **m.sozluk(), "gunun_ifadesi": ifade, "rapor_metni": madde_rapor_metni(m, ifade, tarih),
+        **m.sozluk(), "gunun_ifadesi": ifade, "rapor_metni": servisler.ad_esle(madde_rapor_metni(m, ifade, tarih), eslemeler),
         "olusturma": zaman_iso(m.olusturma), "kaynak_zaman": zaman_iso(m.kaynak_zaman),
     }
     if m.tur == "devam":  # yalnız ekranda gösterilir; rapor metnine girmez
@@ -597,7 +616,8 @@ def rapor_metni_olustur(
 
 
 def gunun_rapor_metni(db: Session, kullanici: Kullanici, tarih: date, duzen: GunDuzeni | None = None) -> str:
-    """Tikli maddelerden günün rapor metni; arayüzdeki önizlemeyle aynı kural."""
+    """Tikli maddelerden günün rapor metni; arayüzdeki önizlemeyle aynı kural. Son adımda ad eşlemeleri bütün metne
+    (başlık, kategori adları, elle yazılanlar ve Yarın dahil) uygulanır."""
     a = ayar_satiri(db, kullanici)
     duzen = duzen or GunDuzeni(db, kullanici, tarih, a)
     ifadeler = bugunku_ifadeler(db, kullanici.id, tarih)
@@ -612,12 +632,12 @@ def gunun_rapor_metni(db: Session, kullanici: Kullanici, tarih: date, duzen: Gun
     yarin = db.scalar(select(Madde.metin).where(
         Madde.user_id == kullanici.id, Madde.tur == "bugun", Madde.tarih == tarih, Madde.kaynak == "yarin",
     ))
-    return rapor_metni_olustur(
+    return servisler.ad_esle(rapor_metni_olustur(
         a.rapor_basligi or "", tarih, duzen.bicim,
         [(k.ad, [kat_metin(m) for m in liste if m.tikli]) for k, liste in duzen.bolumler],
         ([metin(m) for m in yapilanlar if m.tikli], [metin(m) for m in devam if m.tikli]),
         satirlara_bol(yarin or ""),
-    )
+    ), ad_eslemeleri(a))
 
 
 def kacirilan_gun(db: Session, kullanici: Kullanici, a: KullaniciAyari, bugun_: date) -> date | None:
@@ -657,7 +677,7 @@ def durum(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullani
         "bugun": bugun_.isoformat(),
         "kacirilan_gun": kacirilan.isoformat() if kacirilan else None,
         "maddeler": [
-            {**madde_json(m, ifadeler, tarih), "etkin_kategori_id": duzen.etkin.get(m.id)}
+            {**madde_json(m, ifadeler, tarih, ad_eslemeleri(a)), "etkin_kategori_id": duzen.etkin.get(m.id)}
             for m in maddeler if m.tur != "bulunan" or m.kaynak in acik
         ],
         "duzen": duzen.json(),
@@ -734,7 +754,7 @@ def madde_ekle(govde: MaddeYeni, kullanici: Kullanici = Depends(aktif_kullanici)
         )
         db.add(madde)
     db.commit()
-    return madde_json(madde, {}, tarih)
+    return madde_json(madde, {}, tarih, ad_eslemeleri(ayar_satiri(db, kullanici)))
 
 
 def kullanici_kategorisi(db: Session, kullanici: Kullanici, kategori_id: int) -> Kategori:
@@ -790,7 +810,7 @@ def madde_guncelle(
             madde.ai_tarih = None
         setattr(madde, alan, deger)
     db.commit()
-    return madde_json(madde, bugunku_ifadeler(db, kullanici.id, tarih, [madde.id]), tarih)
+    return madde_json(madde, bugunku_ifadeler(db, kullanici.id, tarih, [madde.id]), tarih, ad_eslemeleri(ayar_satiri(db, kullanici)))
 
 
 @router.patch("/maddeler/{madde_id}/ai")
@@ -819,7 +839,8 @@ def madde_ai(
     elif govde.kullan is not None:
         madde.ai_kullan = govde.kullan
         db.commit()
-    return {**madde_json(madde, bugunku_ifadeler(db, kullanici.id, tarih, [madde.id]), tarih), "hatalar": hatalar}
+    return {**madde_json(madde, bugunku_ifadeler(db, kullanici.id, tarih, [madde.id]), tarih,
+                         ad_eslemeleri(ayar_satiri(db, kullanici))), "hatalar": hatalar}
 
 
 @router.delete("/maddeler/{madde_id}")
@@ -955,11 +976,12 @@ def bugun_bulunanlar(
 ) -> dict:
     tarih = gun_sec(tarih)
     onbellek = bugun_taramasi(db, kullanici, tarih, bool(yenile))
+    a = ayar_satiri(db, kullanici)
     bulunanlar = db.scalars(select(Madde).where(
         Madde.user_id == kullanici.id, Madde.tur == "bulunan", Madde.tarih == tarih,
-        Madde.kaynak.in_(acik_bulunan_kaynaklari(ayar_satiri(db, kullanici))),
+        Madde.kaynak.in_(acik_bulunan_kaynaklari(a)),
     ).order_by(Madde.sira, Madde.id)).all()
-    return {"tarih": tarih.isoformat(), "bulunan": [madde_json(m, {}, tarih) for m in bulunanlar], **onbellek}
+    return {"tarih": tarih.isoformat(), "bulunan": [madde_json(m, {}, tarih, ad_eslemeleri(a)) for m in bulunanlar], **onbellek}
 
 
 # ---------------------------------------------------------------- Claude ile düzeltme
@@ -1055,7 +1077,7 @@ def duzeltmeyi_uygula(db: Session, kullanici: Kullanici, paket: list[Madde], tar
     try:
         sonuc, oneriler = servisler.claude_duzelt_kategorili(
             girdiler, son_raporlar, anahtar, proje_adi, kategoriler=kategori_listesi,
-            kendi_sirket=servisler.kendi_sirket_adlari(kendi, alan_sozlugu(ayar)))
+            kendi_sirket=servisler.kendi_sirket_adlari(kendi, alan_sozlugu(ayar)), eslemeler=ad_eslemeleri(ayar))
     except servisler.ClaudeHatasi as e:
         return {"duzeltilen": 0, "gonderilen": len(paket), "hatalar": [f"Claude: {e}; ham metin kullanılıyor"]}
     except Exception as e:
@@ -1097,7 +1119,8 @@ def duzelt(tarih: str | None = None, kullanici: Kullanici = Depends(aktif_kullan
         paket = duzeltme_paketi(db, kullanici, tarih)
         sonuc = duzeltmeyi_uygula(db, kullanici, paket, tarih, anahtar)
     ifadeler = bugunku_ifadeler(db, kullanici.id, tarih, [m.id for m in paket])
-    return {**sonuc, "maddeler": [madde_json(m, ifadeler, tarih) for m in paket]}
+    eslemeler = ad_eslemeleri(ayar_satiri(db, kullanici))
+    return {**sonuc, "maddeler": [madde_json(m, ifadeler, tarih, eslemeler) for m in paket]}
 
 
 # ---------------------------------------------------------------- sesle madde ekleme
@@ -1144,7 +1167,8 @@ def sesli_not(govde: SesliNot, kullanici: Kullanici = Depends(aktif_kullanici), 
         try:
             maddeler = servisler.claude_sesli_bol(
                 metin, anahtar, [{"id": k.id, "ad": k.ad} for k in secilebilir], ayar.proje_adi or "",
-                servisler.kendi_sirket_adlari(kendi_alanlar(ayar, kullanici), alan_sozlugu(ayar)))
+                servisler.kendi_sirket_adlari(kendi_alanlar(ayar, kullanici), alan_sozlugu(ayar)),
+                eslemeler=ad_eslemeleri(ayar))
         except servisler.ClaudeHatasi as e:
             sonuc["hatalar"].append(f"Claude: {e}; metin basitçe bölündü")
         except Exception as e:
@@ -1184,7 +1208,8 @@ def sesli_not_ekle(govde: SesliEkle, kullanici: Kullanici = Depends(aktif_kullan
         db.add(madde)
         yeniler.append(madde)
     db.commit()
-    return {"maddeler": [madde_json(m, {}, tarih) for m in yeniler]}
+    eslemeler = ad_eslemeleri(ayar_satiri(db, kullanici))
+    return {"maddeler": [madde_json(m, {}, tarih, eslemeler) for m in yeniler]}
 
 
 # ---------------------------------------------------------------- rapor geçmişi
@@ -1206,12 +1231,14 @@ def pazartesi_mi(tarih: date | None) -> date:
     return tarih
 
 
-def rapor_json(r: Rapor) -> dict:
-    satirlar = r.metin.splitlines()
+def rapor_json(r: Rapor, eslemeler: list[dict] | None = None) -> dict:
+    """metin ad eşlemeleri uygulanmış hâliyle döner (Geçmiş'te görülen ve kopyalanan)."""
+    metin = servisler.ad_esle(r.metin, eslemeler)
+    satirlar = metin.splitlines()
     return {
         "id": r.id, "tarih": r.tarih.isoformat(), "tur": r.tur,
         "hafta_baslangic": r.hafta_baslangic.isoformat() if r.hafta_baslangic else None,
-        "metin": r.metin,
+        "metin": metin,
         "ilk_satir": next((x.strip() for x in satirlar if x.strip()), ""),
         "madde_sayisi": sum(1 for x in satirlar if x.lstrip().startswith("•")),
         "olusturma": zaman_iso(r.olusturma),
@@ -1256,7 +1283,7 @@ def rapor_kaydet(
         tarih = hafta
     else:
         hafta, tarih = None, gun_sec(govde.tarih or tarih)
-    return rapor_json(rapor_yaz(db, kullanici.id, tarih, govde.tur, metin, hafta))
+    return rapor_json(rapor_yaz(db, kullanici.id, tarih, govde.tur, metin, hafta), ad_eslemeleri(ayar_satiri(db, kullanici)))
 
 
 @router.get("/raporlar")
@@ -1279,7 +1306,8 @@ def raporlari_listele(
     raporlar = db.scalars(
         select(Rapor).where(*kosullar).order_by(Rapor.tarih.desc(), Rapor.id.desc()).limit(limit).offset(offset)
     ).all()
-    return {"toplam": toplam, "raporlar": [rapor_json(r) for r in raporlar]}
+    eslemeler = ad_eslemeleri(ayar_satiri(db, kullanici))
+    return {"toplam": toplam, "raporlar": [rapor_json(r, eslemeler) for r in raporlar]}
 
 
 @router.post("/haftalik")
@@ -1302,6 +1330,7 @@ def haftalik_ozet(govde: HaftalikIstek, kullanici: Kullanici = Depends(aktif_kul
     try:
         metin = servisler.claude_haftalik(
             [(r.tarih, r.metin) for r in raporlar], servisler.hafta_basligi(pazartesi, bitis), anahtar,
+            eslemeler=ad_eslemeleri(ayar_satiri(db, kullanici)),
         )
     except servisler.ClaudeHatasi as e:
         raise HTTPException(status_code=502, detail=f"Claude: {e}") from e
@@ -1520,6 +1549,43 @@ class AyarGuncelle(BaseModel):
     patron_eposta: str | None = None
     patron_adi: str | None = None
     otomatik_kopya_bana: bool | None = None
+    ad_eslemeleri: str | list[dict] | None = None
+
+
+def ad_eslemelerini_ayristir(deger: str | list) -> list[dict]:
+    """Satır satır "Medusa Right = Edisyon uygulaması" ya da [{kaynak, hedef}]. Kaynak 2–60 karakter ve tek; hedef boş
+    olabilir (ad raporda silinir). Hedef hiçbir kaynağı içeremez: eşleme ikinci kez uygulanınca metin değişmesin."""
+    if isinstance(deger, str):
+        ciftler = []
+        for satir in deger.splitlines():
+            if not satir.strip():
+                continue
+            kaynak, esit, hedef = satir.partition("=")
+            if not esit:
+                raise HTTPException(status_code=422, detail=f"Ad eşlemesinde satır anlaşılamadı: {satir.strip()!r} (biçim: Eski ad = Yeni ad)")
+            ciftler.append((kaynak, hedef))
+    else:
+        ciftler = [(x.get("kaynak"), x.get("hedef")) if isinstance(x, dict) else (None, None) for x in deger]
+    sonuc, gorulen = [], set()
+    for kaynak, hedef in ciftler:
+        if not isinstance(kaynak, str) or not isinstance(hedef, (str, type(None))):
+            raise HTTPException(status_code=422, detail="Ad eşlemesi {kaynak, hedef} biçiminde olmalı")
+        kaynak, hedef = re.sub(r"\s+", " ", kaynak).strip(), re.sub(r"\s+", " ", hedef or "").strip()
+        if not ESLEME_KAYNAK_EN_KISA <= len(kaynak) <= ESLEME_KAYNAK_EN_UZUN:
+            raise HTTPException(status_code=422, detail=f"Ad eşlemesinde soldaki ad {ESLEME_KAYNAK_EN_KISA}–{ESLEME_KAYNAK_EN_UZUN} karakter olmalı: {kaynak!r}")
+        if len(hedef) > ESLEME_HEDEF_EN_UZUN:
+            raise HTTPException(status_code=422, detail=f"Ad eşlemesinde sağdaki ad en fazla {ESLEME_HEDEF_EN_UZUN} karakter olabilir")
+        anahtar = servisler._kucult(kaynak)
+        if anahtar in gorulen:
+            raise HTTPException(status_code=422, detail=f"Ad eşlemesinde {kaynak!r} iki kez yazılmış")
+        gorulen.add(anahtar)
+        sonuc.append({"kaynak": kaynak, "hedef": hedef})
+    if len(sonuc) > ESLEME_SINIRI:
+        raise HTTPException(status_code=422, detail=f"En fazla {ESLEME_SINIRI} ad eşlemesi olabilir")
+    for e in sonuc:
+        if servisler.esleme_iceriyor(e["hedef"], sonuc):
+            raise HTTPException(status_code=422, detail=f"Ad eşlemesinde sağdaki ad soldaki bir adı içeremez: {e['hedef']!r}")
+    return sonuc
 
 
 def kendi_alanlari_ayristir(deger: str | list[str]) -> list[str]:
@@ -1610,6 +1676,9 @@ def ayarlari_kaydet(govde: AyarGuncelle, kullanici: Kullanici = Depends(aktif_ku
         a.patron_eposta = adres
     if "patron_adi" in veri:
         a.patron_adi = re.sub(r"\s+", " ", veri.pop("patron_adi") or "").strip()[:120] or None
+    if "ad_eslemeleri" in veri:
+        deger = veri.pop("ad_eslemeleri")
+        a.ad_eslemeleri = ad_eslemelerini_ayristir(deger) if deger is not None else None
     for alan, deger in veri.items():
         deger = (deger or "").strip() or None
         if alan == "github_repo" and deger and not REPO_BICIMI.match(deger):
@@ -1675,6 +1744,28 @@ class KurulumProfil(BaseModel):
     patron_telefon: str | None = None
 
 
+class ProfilGuncelle(BaseModel):
+    ad: str | None = None
+
+
+def gorunen_ad(ad: str | None) -> str:
+    """Raporlarda ve e-postalarda görünen ad (kurulum sihirbazı ve Ayarlar aynı alanı yazar): boşluklar sadeleşir,
+    denetim karakterleri atılır; 2–60 karakter."""
+    ad = re.sub(r"\s+", " ", "".join(h if h.isprintable() else " " for h in (ad or ""))).strip()
+    if not ad:
+        raise HTTPException(status_code=422, detail="Ad boş olamaz")
+    if not AD_EN_KISA <= len(ad) <= AD_EN_UZUN:
+        raise HTTPException(status_code=422, detail=f"Ad {AD_EN_KISA}–{AD_EN_UZUN} karakter olmalı")
+    return ad
+
+
+@router.patch("/profil")
+def profil_guncelle(govde: ProfilGuncelle, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    kullanici.ad = gorunen_ad(govde.ad)
+    db.commit()
+    return {"ad": kullanici.ad, "ad_yer_tutucu": ad_yer_tutucu(kullanici.ad)}
+
+
 class KurulumSurekli(BaseModel):
     metinler: list[str]
 
@@ -1703,10 +1794,7 @@ def kurulum_bilgisi(kullanici: Kullanici = Depends(aktif_kullanici), db: Session
 def kurulum_profili(govde: KurulumProfil, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
     veri = govde.model_dump(exclude_unset=True)
     if "ad" in veri:
-        ad = (veri["ad"] or "").strip()
-        if not ad:
-            raise HTTPException(status_code=422, detail="Ad boş olamaz")
-        kullanici.ad = ad[:120]
+        kullanici.ad = gorunen_ad(veri["ad"])
     a = ayar_satiri(db, kullanici)
     db.add(a)
     for alan in ("rapor_basligi", "patron_telefon"):
@@ -1957,14 +2045,15 @@ def hatirlatma_ozeti(bulunanlar: list[Madde]) -> str:
     return "Bugünün raporu hazır bekliyor · " + ", ".join(parcalar) + " bulundu"
 
 
-def hatirlatma_epostasi(ozet: str, bulunanlar: list[Madde], tarih: date, google: dict | None = None) -> str:
-    """google: google_uyari sonucu; Bugün şeridindeki cümle ve bağlantı eklenir."""
+def hatirlatma_epostasi(ozet: str, bulunanlar: list[Madde], tarih: date, google: dict | None = None,
+                        eslemeler: list[dict] | None = None) -> str:
+    """google: google_uyari sonucu; Bugün şeridindeki cümle ve bağlantı eklenir. Ad eşlemeleri gövdeye uygulanır."""
     satirlar = [ozet, ""]
     if bulunanlar:
         satirlar += [f"• {madde_rapor_metni(m, None, tarih)}" for m in bulunanlar] + [""]
     if google:
         satirlar += [f"{google['metin']} · {google['eylem']}: {app_url()}{google['adres']}", ""]
-    return "\n".join(satirlar + [app_url(), "", "Bu hatırlatma, raporu kopyaladığın gün gelmez."])
+    return servisler.ad_esle("\n".join(satirlar + [app_url(), "", "Bu hatırlatma, raporu kopyaladığın gün gelmez."]), eslemeler)
 
 
 KANAL_ADI = {"push": "push", "eposta": "e-posta", "otomatik": "patrona e-posta", "otomatik_uyari": "ön uyarı"}
@@ -2077,7 +2166,7 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
     ).order_by(Madde.sira, Madde.id)).all()
     ozet = hatirlatma_ozeti(bulunanlar)
     google = google_uyari(a, an)  # tarama 'yenile' yazmış olabilir
-    push_govdesi = f"{ozet} · {google['metin']}" if google else ozet
+    push_govdesi = servisler.ad_esle(f"{ozet} · {google['metin']}" if google else ozet, ad_eslemeleri(a))
 
     # Kanallar bağımsız: biri düşerse diğeri yine gider. Hata da kaydedilir; aynı gün yeniden denenmez.
     if push_gerekli:
@@ -2110,9 +2199,9 @@ def _kullaniciya_hatirlat(db: Session, k: Kullanici, an: datetime) -> dict:
                 hata = servisler.eposta_gonder(
                     h["adres"] or k.eposta,
                     f"Günlük rapor hatırlatması – {tarih.strftime('%d.%m.%Y')}",
-                    hatirlatma_epostasi(ozet, bulunanlar, tarih, google),
+                    hatirlatma_epostasi(ozet, bulunanlar, tarih, google, ad_eslemeleri(a)),
                     yanit_adresi=k.eposta,
-                    gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"],
+                    gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"], gonderen_adi=k.ad,
                 )
             except Exception as e:
                 hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
@@ -2140,7 +2229,7 @@ def hatirlatma_eposta_dene(kullanici: Kullanici = Depends(aktif_kullanici), db: 
     try:
         hata = servisler.eposta_gonder(
             hedef, "Günlük rapor — e-posta testi", metin, yanit_adresi=kullanici.eposta,
-            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"])
+            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"], gonderen_adi=kullanici.ad)
     except Exception as e:
         hata = f"E-posta gönderilemedi ({e.__class__.__name__}: {e})"
     if hata:
@@ -2250,10 +2339,13 @@ def otomatik_rapor_metni(db: Session, k: Kullanici, tarih: date, duzelt: bool = 
     return gunun_rapor_metni(db, k, tarih)
 
 
-def otomatik_eposta(k: Kullanici, tarih: date, metin: str, test: bool = False) -> tuple[str, str]:
-    """(konu, gövde): gövde, Kopyala metninin kalın işaretsiz hâli ve tek satırlık alt not."""
-    konu = f"Günlük Rapor – {k.ad} – {tarih.strftime('%d.%m.%Y')}"
-    return (f"[TEST] {konu}" if test else konu), f"{servisler.kalin_isaretsiz(metin)}\n\n{OTOMATIK_ALT_SATIR}"
+def otomatik_eposta(k: Kullanici, tarih: date, metin: str, test: bool = False,
+                    eslemeler: list[dict] | None = None) -> tuple[str, str]:
+    """(konu, gövde): gövde, Kopyala metninin kalın işaretsiz hâli ve tek satırlık alt not. Ad eşlemeleri ikisine de
+    uygulanır (metin zaten eşlenmiştir; ikinci uygulama bir şey değiştirmez)."""
+    konu = servisler.ad_esle(f"Günlük Rapor – {k.ad} – {tarih.strftime('%d.%m.%Y')}", eslemeler)
+    govde = servisler.ad_esle(f"{servisler.kalin_isaretsiz(metin)}\n\n{OTOMATIK_ALT_SATIR}", eslemeler)
+    return (f"[TEST] {konu}" if test else konu), govde
 
 
 def otomatik_gonder(db: Session, k: Kullanici, tarih: date, kayit: HatirlatmaGonderimi, bildir: bool = True) -> str | None:
@@ -2263,11 +2355,11 @@ def otomatik_gonder(db: Session, k: Kullanici, tarih: date, kayit: HatirlatmaGon
     o = otomatik_ayari(a)
     try:
         metin = otomatik_rapor_metni(db, k, tarih)
-        konu, govde = otomatik_eposta(k, tarih, metin)
+        konu, govde = otomatik_eposta(k, tarih, metin, eslemeler=ad_eslemeleri(a))
         ayarlar = cozulmus_ayarlar(a)
         hata = servisler.eposta_gonder(
             o["patron_eposta"], konu, govde, yanit_adresi=k.eposta, kopya=k.eposta if o["kopya_bana"] else None,
-            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"],
+            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"], gonderen_adi=k.ad,
         )
     except Exception as e:
         db.rollback()
@@ -2294,7 +2386,9 @@ def otomatik_uyarisi(db: Session, k: Kullanici, a: KullaniciAyari, o: dict, tari
     kayit = kanal_talep_et(db, k.id, tarih, "otomatik_uyari")
     if kayit is None:
         return "ön uyarı gönderildi"
-    cumle = f"Raporun {servisler.saatte_eki(o['saat'].strftime('%H:%M'))} {patron_hedefi(o, 'patrona')} e-postayla gidecek."
+    cumle = servisler.ad_esle(
+        f"Raporun {servisler.saatte_eki(o['saat'].strftime('%H:%M'))} {patron_hedefi(o, 'patrona')} e-postayla gidecek.",
+        ad_eslemeleri(a))
     adres = f"{app_url()}/?otomatik=uyari"
     parcalar, hatalar, ulasti = [], [], False
     try:
@@ -2314,7 +2408,7 @@ def otomatik_uyarisi(db: Session, k: Kullanici, a: KullaniciAyari, o: dict, tari
         try:
             hata = servisler.eposta_gonder(
                 h["adres"] or k.eposta, f"{cumle[:-1]} – {tarih.strftime('%d.%m.%Y')}", govde, yanit_adresi=k.eposta,
-                gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"],
+                gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"], gonderen_adi=k.ad,
             )
         except Exception as e:
             hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
@@ -2412,7 +2506,7 @@ def otomatik_simdi(kullanici: Kullanici = Depends(aktif_kullanici), db: Session 
     if hata:
         raise HTTPException(status_code=502, detail=f"Gönderilemedi: {hata}")
     rapor = db.scalar(select(Rapor).where(Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih == tarih))
-    return {"ok": True, "rapor": rapor_json(rapor), "otomatik": otomatik_ozeti(db, kullanici, a, tarih)}
+    return {"ok": True, "rapor": rapor_json(rapor, ad_eslemeleri(a)), "otomatik": otomatik_ozeti(db, kullanici, a, tarih)}
 
 
 @router.post("/otomatik/test")
@@ -2422,12 +2516,14 @@ def otomatik_test(kullanici: Kullanici = Depends(aktif_kullanici), db: Session =
     tarih = bugun()
     if not otomatik_hazirlik(db, kullanici, tarih):
         raise HTTPException(status_code=422, detail="Gönderilecek tikli madde yok")
-    konu, govde = otomatik_eposta(kullanici, tarih, otomatik_rapor_metni(db, kullanici, tarih, duzelt=False), test=True)
-    ayarlar = cozulmus_ayarlar(ayar_satiri(db, kullanici))
+    a = ayar_satiri(db, kullanici)
+    konu, govde = otomatik_eposta(kullanici, tarih, otomatik_rapor_metni(db, kullanici, tarih, duzelt=False), test=True,
+                                  eslemeler=ad_eslemeleri(a))
+    ayarlar = cozulmus_ayarlar(a)
     try:
         hata = servisler.eposta_gonder(
             kullanici.eposta, konu, govde, yanit_adresi=kullanici.eposta,
-            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"])
+            gmail_kullanici=ayarlar["gmail_kullanici"], gmail_sifre=ayarlar["gmail_sifre"], gonderen_adi=kullanici.ad)
     except Exception as e:
         hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
     log.info("otomatik test user=%s sonuc=%s", kullanici.id, hata[:200] if hata else "gönderildi")

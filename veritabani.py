@@ -99,6 +99,8 @@ class KullaniciAyari(Temel):
     patron_eposta: Mapped[str | None] = mapped_column(String(254), nullable=True)
     patron_adi: Mapped[str | None] = mapped_column(String(120), nullable=True)
     otomatik_kopya_bana: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # O1-ek: [{"kaynak": "Medusa Right", "hedef": "Edisyon uygulaması"}, …]; kaynak ad raporda hiç geçmez.
+    ad_eslemeleri: Mapped[list | None] = mapped_column(JSON, nullable=True)
     guncelleme: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi, onupdate=simdi)
 
 
@@ -277,6 +279,7 @@ EK_KOLONLAR = [
     ("user_settings", "patron_adi", "VARCHAR(120)", "VARCHAR(120)"),
     ("user_settings", "otomatik_kopya_bana", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
     ("reports", "gonderim", "VARCHAR(10) NOT NULL DEFAULT 'elle'", "VARCHAR(10) NOT NULL DEFAULT 'elle'"),
+    ("user_settings", "ad_eslemeleri", "JSON", "JSON"),
 ]
 # Uzatılan VARCHAR kolonları (tablo, kolon, yeni uzunluk); sqlite uzunluğu zorlamadığı için yalnız Postgres'te.
 EK_GENISLETMELER = [

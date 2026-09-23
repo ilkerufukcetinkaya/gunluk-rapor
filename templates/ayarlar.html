@@ -25,7 +25,17 @@ main{gap:16px}
 .kendiRozet{font-size:12px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:3px 10px}
 .tikSatiri{display:flex; align-items:center; gap:12px; margin-top:4px}
 .tikSatiri label{flex:1; font-size:14.5px; font-weight:600}
-#sozluk{font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:13.5px; min-height:150px}
+#sozluk, #ad_eslemeleri{font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:13.5px; min-height:150px}
+#ad_eslemeleri{min-height:96px}
+/* görünen ad: ada tıklanınca düzenlenir */
+.adDugme{font:inherit; font-size:14.5px; font-weight:600; color:var(--ink); background:none; border:0; padding:0; cursor:pointer; display:inline-flex; align-items:center; gap:6px; text-align:left; max-width:100%; overflow-wrap:anywhere}
+.adDugme svg{color:var(--ink-3); flex:none}
+.adDugme:hover svg{color:var(--ink)}
+.adForm{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 4px}
+.adForm input{flex:1 1 160px; min-width:0}
+.adForm .secondary{height:40px; font-size:13.5px; border-radius:12px; padding:0 14px}
+.adIpucu{margin:0 14px 12px}
+.adIpucu .link{font-size:13px}
 #testSonuc{font-size:13px; white-space:pre-wrap; margin:0}
 #testSonuc.ok{color:var(--ok-ink)}
 #testSonuc.hata{color:var(--danger)}
@@ -116,10 +126,20 @@ input[type=time]{width:124px; font-weight:600; flex:none}
 
   <section class="card hesap">
     <div class="row orta">
-      <span class="avatar">{{ kullanici.ad[:1]|upper }}</span>
-      <div class="kim"><div class="lbl">{{ kullanici.ad }}</div><div class="meta">{{ kullanici.eposta }} · {% if kullanici.rol == 'admin' %}yönetici{% else %}üye{% endif %}</div></div>
+      <span class="avatar" id="hesapAvatar">{{ kullanici.ad[:1]|upper }}</span>
+      <div class="kim">
+        <button type="button" class="adDugme" id="adDugme" title="Adını düzenle" aria-label="Adını düzenle: {{ kullanici.ad }}"><span id="adMetin">{{ kullanici.ad }}</span>{{ i.ikon('kalem', 14) }}</button>
+        <form class="adForm" id="adForm" hidden>
+          <label class="gizli-etiket" for="adGirdi">Görünen ad</label>
+          <input type="text" id="adGirdi" maxlength="60" autocomplete="name" value="{{ kullanici.ad }}">
+          <button class="secondary" type="submit">Kaydet</button>
+          <button class="link soluk" type="button" id="adVazgec">Vazgeç</button>
+        </form>
+        <div class="meta">{{ kullanici.eposta }} · {% if kullanici.rol == 'admin' %}yönetici{% else %}üye{% endif %}</div>
+      </div>
       <a class="link" href="/sifre">Şifre</a>
     </div>
+    <p class="serit sari adIpucu" id="adIpucu" hidden><span>Raporlarda ve e-postalarda görünecek adını yaz</span><button type="button" class="link" id="adIpucuDugme">Adını yaz</button></p>
     <div class="alt">
       <a class="link soluk" href="/kurulum">{{ i.ikon('ileri', 15) }}Kurulumu yeniden aç</a>
       {% if kullanici.rol == 'admin' %}<a class="link soluk" href="/yonetim">{{ i.ikon('kisiler', 15) }}Yönetim</a>{% endif %}
@@ -233,6 +253,15 @@ input[type=time]{width:124px; font-weight:600; flex:none}
         <div class="row dikey ayrinti" id="sozlukAyrinti" hidden>
           <label class="alan" for="sozluk">Her satıra bir "alan=Kurum"</label>
           <textarea id="sozluk" name="alan_sozlugu" spellcheck="false"></textarea>
+        </div>
+        <div class="row orta">
+          <div class="kim"><div class="lbl">Ad eşlemeleri</div><div class="meta" id="eslemeOzeti">Soldaki ad raporda hiçbir yerde geçmez, sağdakiyle değiştirilir.</div></div>
+          <button type="button" class="link" data-ac="eslemeAyrinti" aria-expanded="false">Değiştir</button>
+        </div>
+        <div class="row dikey ayrinti" id="eslemeAyrinti" hidden>
+          <label class="alan" for="ad_eslemeleri">Her satıra bir "Eski ad = Yeni ad"</label>
+          <textarea id="ad_eslemeleri" name="ad_eslemeleri" spellcheck="false" placeholder="Medusa Right = Edisyon uygulaması"></textarea>
+          <p class="kayitli">Soldaki ad raporda hiçbir yerde geçmez, sağdakiyle değiştirilir. Büyük/küçük harf fark etmez; ekler yeni ada uydurulur. Sağı boş bırakırsan ad tamamen silinir.</p>
         </div>
         <div class="row orta">
           <div class="kim"><div class="lbl" id="kategorilerBaslik">Rapor kategorileri</div><div class="meta">Raporun bölümleri; tutamaktan sürükleyerek sırala</div></div>
@@ -447,6 +476,12 @@ function doldur(a){
   $('kendi_alanlar').value = (a.kendi_alanlar || []).join(', ');
   $('ekip_ici_atla').checked = a.ekip_ici_atla !== false;
   $('sozluk').value = Object.entries(a.alan_sozlugu || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+  const eslemeler = a.ad_eslemeleri || [];
+  $('ad_eslemeleri').value = eslemeler.map(e => `${e.kaynak} = ${e.hedef}`.trimEnd()).join('\n');
+  $('eslemeOzeti').textContent = eslemeler.length
+    ? eslemeler.map(e => e.hedef ? `${e.kaynak} → ${e.hedef}` : `${e.kaynak} → (silinir)`).join(' · ')
+    : 'Soldaki ad raporda hiçbir yerde geçmez, sağdakiyle değiştirilir.';
+  if (a.ad) adGoster(a.ad, a.ad_yer_tutucu);
   $('gmail_sifre').value = ''; $('github_token').value = '';
   $('gmail_sifre').placeholder = a.gmail_sifre_kayitli ? 'kayıtlı ••••' : '';
   $('github_token').placeholder = a.github_token_kayitli ? 'kayıtlı ••••' : '';
@@ -485,7 +520,7 @@ function doldur(a){
 }
 
 async function kaydet(){
-  const govde = { alan_sozlugu: $('sozluk').value, kaynaklar: Object.fromEntries(KAYNAK_ANAHTARLARI.map(k => [k.dataset.kaynak, k.checked])) };
+  const govde = { alan_sozlugu: $('sozluk').value, ad_eslemeleri: $('ad_eslemeleri').value, kaynaklar: Object.fromEntries(KAYNAK_ANAHTARLARI.map(k => [k.dataset.kaynak, k.checked])) };
   ALANLAR.forEach(k => govde[k] = $(k).value);
   govde.eposta_gruplama = $('eposta_gruplama').value;
   govde.kendi_alanlar = $('kendi_alanlar').value;
@@ -550,6 +585,36 @@ $('test').onclick = async () => {
 };
 
 istek('/api/ayarlar').then(doldur).catch(err => hataGoster(err.message));
+
+// --- görünen ad: kurulum sihirbazındaki adla aynı alan; raporlarda ve e-postalarda görünür ---
+let gorunenAd = {{ kullanici.ad|tojson }};
+function adGoster(ad, yerTutucu){
+  gorunenAd = ad;
+  const harf = ad.slice(0, 1).toLocaleUpperCase('tr-TR');
+  $('adMetin').textContent = ad; $('adDugme').setAttribute('aria-label', `Adını düzenle: ${ad}`);
+  $('hesapAvatar').textContent = harf;
+  const ust = document.querySelector('.ustbar .kim');
+  if (ust) { ust.querySelector('.avatar').textContent = harf; ust.lastChild.textContent = ad; }
+  $('adIpucu').hidden = !yerTutucu;
+}
+function adDuzenle(acik){
+  $('adForm').hidden = !acik; $('adDugme').hidden = acik;
+  if (acik) { $('adGirdi').value = gorunenAd; $('adGirdi').focus(); $('adGirdi').select(); }
+  else $('adDugme').focus();
+}
+$('adDugme').onclick = () => adDuzenle(true);
+$('adIpucuDugme').onclick = () => adDuzenle(true);
+$('adVazgec').onclick = () => adDuzenle(false);
+$('adGirdi').onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); adDuzenle(false); } };
+$('adForm').onsubmit = async e => {
+  e.preventDefault();
+  const dugme = $('adForm').querySelector('button[type=submit]'); dugme.disabled = true;
+  try {
+    const r = await istek('/api/profil', { method:'PATCH', body: JSON.stringify({ ad: $('adGirdi').value }) });
+    adGoster(r.ad, r.ad_yer_tutucu); adDuzenle(false); hataGoster(''); toast('Ad kaydedildi');
+  } catch (err) { hataGoster(err.message); }
+  finally { dugme.disabled = false; }
+};
 
 if ($('googleKaldir')) $('googleKaldir').onclick = async () => {
   if (!confirm('Google bağlantısı kaldırılsın mı? Takvim ve Drive taranmaz; uygulama şifresi varsa Gmail onunla sürer.')) return;

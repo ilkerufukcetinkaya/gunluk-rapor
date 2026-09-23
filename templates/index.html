@@ -485,6 +485,90 @@ function variantOf(text){
   return parts[day % parts.length];
 }
 const lines = s => s.split('\n').map(x=>x.trim().replace(/^[-•*]\s*/,'')).filter(Boolean);
+
+// --- ad eşlemeleri (Ayarlar > Rapor): servisler.ad_esle ile aynı kural. Kelime sınırıyla, büyük/küçük harf ve İ/ı
+// duyarsız, uzun ad önce; kesme işaretli ek yeni ada uydurulur (ek_uyumu); yeni ad boşsa ad ekiyle silinir.
+const UNLULER = 'aeıioöuü', KALIN_UNLULER = 'aıou', SERT_UNSUZLER = 'fstkçşhp';
+const HARF_OKUNUSU = { Q:'kü', W:'ve', X:'iks' }, EK_ISTISNALARI = { universal:'e' };
+const DORTLU_UNLU = { a:'ı', ı:'ı', e:'i', i:'i', o:'u', u:'u', ö:'ü', ü:'ü' };
+const kucult = s => s.replace(/I/g, 'ı').replace(/İ/g, 'i').toLowerCase();
+const buyut = s => s.replace(/i/g, 'İ').replace(/ı/g, 'I').toUpperCase();
+const harfMi = h => /\p{L}/u.test(h);
+function okunus(ad){
+  ad = ad.trim();
+  const kelimeler = ad.split(/[\s.\-_/]+/).filter(Boolean);
+  const harfler = [...(kelimeler.length ? kelimeler[kelimeler.length - 1] : ad)].filter(harfMi).join('');
+  const buyukHarfli = harfler && harfler === harfler.toUpperCase() && harfler !== harfler.toLowerCase();
+  if (buyukHarfli && ![...kucult(harfler)].some(h => UNLULER.includes(h))) {
+    const son = harfler[harfler.length - 1];
+    return HARF_OKUNUSU[son] || kucult(son) + 'e';
+  }
+  return kucult(harfler);
+}
+const sonUnlu = ok => EK_ISTISNALARI[ok] || [...ok].reverse().find(h => UNLULER.includes(h)) || 'e';
+function ekUyumu(ek, kaynak, hedef){
+  const kucuk = kucult(ek), kOk = okunus(kaynak);
+  let cekirdek = kucuk;
+  if (kOk && UNLULER.includes(kOk[kOk.length - 1]) && kucuk.length >= 2 && 'yn'.includes(kucuk[0])
+      && (UNLULER.includes(kucuk[1]) || (kucuk[0] === 'n' && 'dt'.includes(kucuk[1])) || (kucuk[0] === 'y' && kucuk[1] === 'l')))
+    cekirdek = kucuk.slice(1);
+  if (!cekirdek) return ek;
+  const hOk = okunus(hedef), hUnluyle = !!hOk && UNLULER.includes(hOk[hOk.length - 1]);
+  const tamlama = hUnluyle && hedef.trim().split(/\s+/).length >= 2 && 'ıiuü'.includes(hOk[hOk.length - 1]);
+  let onek = '';
+  if (tamlama && (UNLULER.includes(cekirdek[0]) || 'dt'.includes(cekirdek[0]))) onek = 'n';
+  else if (hUnluyle && UNLULER.includes(cekirdek[0])) onek = /^[ıiuü]n/.test(cekirdek) ? 'n' : 'y';
+  else if (hUnluyle && (cekirdek === 'la' || cekirdek === 'le')) onek = 'y';
+  const tum = onek + cekirdek;
+  let unlu = sonUnlu(hOk), onceki = hOk.slice(-1) || 'e', cikti = '';
+  for (let n = 0; n < tum.length; n++) {
+    if (n && tum.slice(n) === 'ki') { cikti += 'ki'; break; }
+    let h = tum[n];
+    if ('dt'.includes(h)) h = SERT_UNSUZLER.includes(onceki) ? 't' : 'd';
+    else if ('ae'.includes(h)) h = KALIN_UNLULER.includes(unlu) ? 'a' : 'e';
+    else if ('ıiuü'.includes(h)) h = DORTLU_UNLU[unlu];
+    if (UNLULER.includes(h)) unlu = h;
+    cikti += h; onceki = h;
+  }
+  return ek === ek.toUpperCase() && ek !== ek.toLowerCase() ? buyut(cikti) : cikti;
+}
+const kelimeDisi = '(?![\\p{L}\\p{N}_])', kelimeOncesi = '(?<![\\p{L}\\p{N}_])';
+function harfDeseni(h){
+  if ('iİıI'.includes(h)) return '[iİıI]';
+  if (/\s/.test(h)) return '\\s+';
+  const esler = [...new Set([h, h.toLowerCase(), h.toUpperCase()])].filter(x => [...x].length === 1);
+  if (esler.length === 1) return h.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+  return '[' + esler.map(x => x.replace(/[\\\]\[^-]/g, '\\$&')).join('') + ']';
+}
+let eslemeOnbellegi = { anahtar:null, ciftler:[], desen:null };
+function eslemeDeseni(){
+  const liste = S.ayarlar.ad_eslemeleri || [], anahtar = JSON.stringify(liste);
+  if (eslemeOnbellegi.anahtar !== anahtar) {
+    const ciftler = liste.filter(e => e && typeof e.kaynak === 'string' && e.kaynak.trim())
+      .map(e => [e.kaynak.replace(/\s+/g, ' ').trim(), String(e.hedef || '').trim()])
+      .sort((a, b) => b[0].length - a[0].length);
+    const parcalar = ciftler.map(([k], n) => `(?<e${n}>${[...k].map(harfDeseni).join('')})`);
+    const desen = ciftler.length ? new RegExp(`${kelimeOncesi}(?:${parcalar.join('|')})(?:(?<ap>['’])(?<ek>\\p{L}+))?${kelimeDisi}`, 'gu') : null;
+    eslemeOnbellegi = { anahtar, ciftler, desen };
+  }
+  return eslemeOnbellegi;
+}
+function adlariEsle(metin){
+  const { ciftler, desen } = eslemeDeseni();
+  if (!metin || !desen) return metin || '';
+  let silindi = false;
+  const sonuc = metin.replace(desen, (...arg) => {
+    const g = arg[arg.length - 1];
+    const n = ciftler.findIndex((_, i) => g[`e${i}`] !== undefined);
+    const hedef = ciftler[n][1];
+    if (!hedef) { silindi = true; return ''; }
+    return g.ek ? hedef + g.ap + ekUyumu(g.ek, g[`e${n}`], hedef) : hedef;
+  });
+  if (!silindi) return sonuc;
+  return sonuc.replace(/(?<![\p{L}\p{N}_])'[ \t]*'(?![\p{L}\p{N}_])/gu, '').replace(/\([ \t]*\)/g, '')
+    .replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+([,.;:!?)])/g, '$1').replace(/^[ \t]+|[ \t]+$/gm, '');
+}
+const katAdi = k => adlariEsle(k.ad);
 const projeEtiketi = () => S.ayarlar.proje_adi || 'GitHub';
 const hamMetin = m => m.metin + (m.tur === 'devam' && m.asama ? ` — ${m.asama}` : '');
 const raporMetni = m => m.rapor_metni || hamMetin(m);
@@ -546,7 +630,8 @@ function buildReport(){
     bolumListesi().forEach(b => bolum(`${b.kat.ad}:`, b.maddeler.filter(rapordaMi).map(bolumMetni)));
     bolum('Yarın:', plan);
   }
-  return out.join('\n').trim();
+  // son adım: ad eşlemeleri başlık, kategori adları, elle yazılanlar ve Yarın dahil bütün metne (sunucudaki gibi)
+  return adlariEsle(out.join('\n').trim());
 }
 
 // Telefonda önizleme kırpılır; "N madde daha" ile tamamı açılır.
@@ -675,9 +760,9 @@ function aiSec(m, govde){
 // meta: etiketin ekleneceği meta satırı; txt: panelin açılacağı metin kutusu.
 function aiPaneli(m, meta, txt){
   const surekli = m.tur === 'surekli';
-  if (surekli ? !m.gunun_ifadesi : (!m.metin_ai || m.kullanici_duzenledi)) return;
+  if (surekli ? !m.gunun_ifadesi : (!m.metin_ai || m.kullanici_duzenledi)) return eslemePaneli(m, meta, txt);
   const acik = m.ai_kullan !== false;
-  if (surekli) meta.appendChild(el('span', '', (acik ? 'Bugün: ' : 'Bugün (kullanılmıyor): ') + m.gunun_ifadesi));
+  if (surekli) meta.appendChild(el('span', '', (acik ? 'Bugün: ' : 'Bugün (kullanılmıyor): ') + adlariEsle(m.gunun_ifadesi)));
   const etiket = el('button', 'ai'); etiket.type = 'button';
   etiket.appendChild(ikon('kivilcim'));
   etiket.append(acik ? 'düzeltildi' : 'orijinal');
@@ -690,12 +775,26 @@ function aiPaneli(m, meta, txt){
   p.onclick = e => e.stopPropagation();
   p.appendChild(document.createTextNode(acik
     ? `Orijinal: ${surekli ? variantOf(m.metin) : hamMetin(m)}`
-    : `Claude: ${surekli ? m.gunun_ifadesi : m.metin_ai}`));
+    : `Claude: ${adlariEsle(surekli ? m.gunun_ifadesi : m.metin_ai)}`));
   const satir = el('span', 'secim');
   const b = (label, fn) => { const x = el('button', 'link', label); x.type='button'; x.onclick=fn; satir.appendChild(x); };
   b(acik ? 'Orijinali kullan' : 'AI metnini kullan', () => aiSec(m, { kullan: !acik }));
   if (S.aiAnahtari) b('Yeniden düzelt', () => aiSec(m, { yenile: true }));
   p.appendChild(satir); txt.appendChild(p);
+}
+// Claude düzeltmesi yokken ad eşlemesi metni değiştirdiyse: ham metin "orijinali gör"de.
+function eslemePaneli(m, meta, txt){
+  const ham = m.tur === 'surekli' ? variantOf(m.metin) : m.metin;
+  if (adlariEsle(ham) === ham) return;
+  const etiket = el('button', 'ai'); etiket.type = 'button';
+  etiket.append('ad eşlendi');
+  etiket.appendChild(el('span', 'soluk', acikPaneller.has(m.id) ? ' · gizle' : ' · orijinali gör'));
+  etiket.onclick = e => { e.stopPropagation(); acikPaneller.has(m.id) ? acikPaneller.delete(m.id) : acikPaneller.add(m.id); render(); };
+  meta.appendChild(etiket);
+  if (!acikPaneller.has(m.id)) return;
+  const p = el('span', 'aiPanel', `Orijinal: ${m.tur === 'devam' ? hamMetin(m) : ham}`);
+  p.onclick = e => e.stopPropagation();
+  txt.appendChild(p);
 }
 
 // --- kategori etiketi, seçici ve önemli (yıldız) ---
@@ -703,8 +802,8 @@ function kategoriEtiketi(item, meta){
   if (item.onemli){ meta.appendChild(el('span', 'onemRozet', 'Önemli')); return; }
   const kat = katBul(item.etkin_kategori_id);
   if (!kat || (item.tur === 'devam' && kat.sistem === 'devam')) return;  // devam eden işin kendi kartı var
-  if (item.tur === 'devam'){ meta.appendChild(el('span', 'katEtiket', kat.ad)); return; }
-  const b = el('button', 'katEtiket', kat.ad); b.type = 'button';
+  if (item.tur === 'devam'){ meta.appendChild(el('span', 'katEtiket', katAdi(kat))); return; }
+  const b = el('button', 'katEtiket', katAdi(kat)); b.type = 'button';
   b.title = 'Rapor kategorisini değiştir'; b.setAttribute('aria-haspopup', 'menu'); b.appendChild(ikon('asagi'));
   b.onclick = e => { e.stopPropagation(); kategoriMenusu(item, b); };
   meta.appendChild(b);
@@ -758,7 +857,7 @@ function kategoriMenusu(item, dugme){
     b.onclick = () => { acilirKapat(); if (!secili) kategoriSec(item, kategori_id); };
     menu.appendChild(b);
   };
-  S.duzen.kategoriler.filter(k => !k.sistem).forEach(k => secenek(k.ad, k.id, k.id === item.etkin_kategori_id));
+  S.duzen.kategoriler.filter(k => !k.sistem).forEach(k => secenek(katAdi(k), k.id, k.id === item.etkin_kategori_id));
   if (item.kategori_id) secenek('Otomatik (kurala göre)', null, false, 'soluk');
   acilirKonumla(menu, dugme);
   const ilk = menu.querySelector('button'); if (ilk) ilk.focus();
@@ -781,19 +880,20 @@ function row(item, kind){
     sol.append(cb, ikon('saat'));
   } else sol = cb;
 
+  // ekranda ad eşlemeleri uygulanmış metin; ham metin "orijinali gör"de
   if (kind==='surekli'){
-    txt.textContent = variantOf(item.metin);
+    txt.textContent = adlariEsle(variantOf(item.metin));
     if (item.metin.includes('|') && !item.gunun_ifadesi) meta.appendChild(el('span', '', 'bugünkü ifade · dönüşümlü'));
   } else if (aiKullaniliyor(item)) {
-    txt.textContent = item.metin_ai;
+    txt.textContent = adlariEsle(item.metin_ai);
   } else {
-    txt.textContent = item.metin;
+    txt.textContent = adlariEsle(item.metin);
   }
   const asamaDuzenle = () => { const s = prompt('Aşama:', item.asama||''); if (s!==null){ guncelle(item, { asama: s.trim() }); render(); } };
   if (kind === 'devam'){
     // "Aşama · N gündür"; aşama boşsa yalnız süre (aşama kalemle eklenir)
     if (item.asama && !aiKullaniliyor(item)){
-      const a = el('button', 'asama', item.asama); a.type = 'button'; a.title = 'Aşamayı güncelle';
+      const a = el('button', 'asama', adlariEsle(item.asama)); a.type = 'button'; a.title = 'Aşamayı güncelle';
       a.onclick = e => { e.stopPropagation(); asamaDuzenle(); };
       meta.append(a, el('span', '', '·'));
     }
@@ -1002,7 +1102,7 @@ function renderFound(){
     const gorunum = BULUNAN_GORUNUM[it.kaynak] || BULUNAN_GORUNUM.eposta;
     const tile = el('div', 'tile ' + gorunum.tile); tile.appendChild(ikon(gorunum.ikon));
     const cb = onayKutusu(it, li, 'Rapora ekle');
-    const txt = el('div', 'txt tikla'); txt.textContent = aiKullaniliyor(it) ? it.metin_ai : it.metin;
+    const txt = el('div', 'txt tikla'); txt.textContent = adlariEsle(aiKullaniliyor(it) ? it.metin_ai : it.metin);
     const kaynak = gorunum.ad();
     const meta = el('div', 'meta'); meta.appendChild(el('span', '', it.kaynak_zaman ? `${kaynak} · ${istanbulSaati(it.kaynak_zaman)}` : kaynak));
     kategoriEtiketi(it, meta);
@@ -1103,13 +1203,13 @@ function renderDuzenle(){
   bolumListesi().forEach(b => {
     const maddeler = b.maddeler.filter(rapordaMi);
     const kart = el('section', 'katKart');
-    const bas = el('div', 'katBaslik'); bas.append(el('span', '', b.kat.ad), el('span', 'cnt', String(maddeler.length)));
+    const bas = el('div', 'katBaslik'); bas.append(el('span', '', katAdi(b.kat)), el('span', 'cnt', String(maddeler.length)));
     const liste = el('div', 'katListe'); liste.dataset.kategori = b.kat.id;
-    liste.setAttribute('aria-label', b.kat.ad);
+    liste.setAttribute('aria-label', katAdi(b.kat));
     maddeler.forEach(m => {
       const satir = el('div', 'dRow'); satir.dataset.id = m.id;
       const tut = el('span', 'tutamak'); tut.title = 'Sürükle'; tut.appendChild(ikon('tutamak'));
-      satir.append(tut, el('div', 'txt', bicim() === 'duz' ? raporMetni(m) : bolumMetni(m)));
+      satir.append(tut, el('div', 'txt', adlariEsle(bicim() === 'duz' ? raporMetni(m) : bolumMetni(m))));
       liste.appendChild(satir);
     });
     kart.append(bas, liste); kutu.appendChild(kart);
@@ -1248,7 +1348,7 @@ function sesOnayCiz(){
     const seg = el('div', 'segment'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', 'Tür');
     const kat = el('select'); kat.setAttribute('aria-label', 'Rapor kategorisi');
     kat.appendChild(new Option('Otomatik', ''));
-    kategoriler.forEach(k => kat.appendChild(new Option(k.ad, String(k.id))));
+    kategoriler.forEach(k => kat.appendChild(new Option(katAdi(k), String(k.id))));
     kat.value = m.kategori_id ? String(m.kategori_id) : '';
     kat.onchange = () => { m.kategori_id = kat.value ? Number(kat.value) : null; };
     const asama = el('input'); asama.type = 'text'; asama.value = m.asama; asama.placeholder = 'Aşama (örn. yanıt bekleniyor)';

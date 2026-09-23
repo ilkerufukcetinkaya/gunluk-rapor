@@ -295,7 +295,7 @@ def test_eposta_adresi_bossa_giris_epostasina(push, saat):
     bos = kullanici_olustur("a@ornek.com")
     dolu = kullanici_olustur("b@ornek.com", "B", hatirlatma_eposta_adres="baska@ornek.com")
     cron()
-    alicilar = {m["From"]: m["To"] for m in SahteSmtp.gonderilen}
+    alicilar = {m["From"].addresses[0].addr_spec: m["To"] for m in SahteSmtp.gonderilen}  # O1-ek: görünen ad eklendi
     assert alicilar == {"a@gmail.com": "a@ornek.com", "b@gmail.com": "baska@ornek.com"}
     assert bos != dolu
 
@@ -414,7 +414,7 @@ def test_sema_guncelle_hatirlatma_iki_kez(tmp_path):
         "user_settings.google_refresh_enc", "user_settings.google_eposta", "user_settings.google_baglanti",
         "user_settings.google_durum", "user_settings.google_kapsamlar",
         "user_settings.otomatik_gonder", "user_settings.otomatik_saat", "user_settings.patron_eposta",
-        "user_settings.patron_adi", "user_settings.otomatik_kopya_bana",
+        "user_settings.patron_adi", "user_settings.otomatik_kopya_bana", "user_settings.ad_eslemeleri",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:
@@ -527,7 +527,8 @@ def test_eposta_dene_gonderir():
     assert len(SahteSmtp.gonderilen) == 1
     mesaj = SahteSmtp.gonderilen[0]
     assert mesaj["Subject"] == "Günlük rapor — e-posta testi"
-    assert mesaj["To"] == "a@ornek.com" and mesaj["From"] == "a@gmail.com"
+    assert mesaj["To"] == "a@ornek.com" and mesaj["From"].addresses[0].addr_spec == "a@gmail.com"
+    assert mesaj["From"].addresses[0].display_name == "A · Günlük Rapor"  # O1-ek
 
 
 def test_eposta_dene_kayitli_hatirlatma_adresine_gider():
@@ -618,7 +619,7 @@ def test_hatirlatma_resend_ile_gider_ve_yanit_adresi_tasir(push, saat, resend):
     assert r["eposta"] == "gönderildi"
     govde = resend.istekler[0]["govde"]
     assert govde["to"] == ["a@ornek.com"] and govde["reply_to"] == "a@ornek.com"
-    assert govde["from"] == "rapor@medusarights.com"
+    assert govde["from"] == '"A · Günlük Rapor" <rapor@medusarights.com>'  # O1-ek: adres aynı, görünen ad eklendi
     assert "Günlük rapor hatırlatması – 16.09.2026" == govde["subject"]
     assert SahteSmtp.gonderilen == []  # SMTP'ye hiç düşülmez
 

@@ -314,7 +314,7 @@ def davet_epostasi_yolla(db: Session, hedef: Kullanici, sifre: str, ben: Kullani
     konu, metin = servisler.davet_eposta_metni(
         hedef.ad, hedef.eposta, sifre, f"{api.app_url()}/giris", ben.ad, sifirlama)
     try:
-        hata = servisler.eposta_gonder(hedef.eposta, konu, metin, yanit_adresi=ben.eposta)
+        hata = servisler.eposta_gonder(hedef.eposta, konu, metin, yanit_adresi=ben.eposta, gonderen_adi=ben.ad)
     except Exception as e:
         hata = f"E-posta gönderilemedi ({e.__class__.__name__})"
     if hata:
