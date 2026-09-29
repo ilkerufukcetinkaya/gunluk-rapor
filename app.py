@@ -198,7 +198,8 @@ def gecmis_sayfasi(request: Request, kullanici: Kullanici = Depends(kurulmus_kul
 
 @app.get("/ayarlar", response_class=HTMLResponse)
 def ayarlar_sayfasi(request: Request, kullanici: Kullanici = Depends(kurulmus_kullanici)):
-    return sayfa(request, "ayarlar.html", kullanici=kullanici, google_ayarli=servisler.google_ayarli())
+    return sayfa(request, "ayarlar.html", kullanici=kullanici, google_ayarli=servisler.google_ayarli(),
+                 microsoft_ayarli=servisler.microsoft_ayarli())
 
 
 @app.get("/kurulum", response_class=HTMLResponse)
@@ -206,38 +207,112 @@ def kurulum_sayfasi(request: Request, kullanici: Kullanici = Depends(aktif_kulla
     """Her zaman açılır (Ayarlar'daki "Kurulumu yeniden aç" da buraya gelir); Bitir kurulum_tamam'ı true bırakır."""
     a = db.get(KullaniciAyari, kullanici.id)
     return sayfa(request, "kurulum.html", kullanici=kullanici, kurulum_tamam=bool(a and a.kurulum_tamam),
-                 google_ayarli=servisler.google_ayarli())
+                 google_ayarli=servisler.google_ayarli(), microsoft_ayarli=servisler.microsoft_ayarli())
 
 
-# ---------------------------------------------------------------- Google ile bağlan (OAuth 2.0 + PKCE)
+# ---------------------------------------------------------------- Google / Microsoft ile bağlan (OAuth 2.0 + PKCE)
 
-GOOGLE_DONUSLER = ("/ayarlar", "/kurulum")  # ?donus= beyaz listesi; ilki varsayılan
+OAUTH_DONUSLER = GOOGLE_DONUSLER = ("/ayarlar", "/kurulum")  # ?donus= beyaz listesi; ilki varsayılan
+
+
+class OAuthAkisi:
+    """Sağlayıcıya özgü parçalar; servisler/api işlevleri çağrı anında bulunur (testler onları değiştirebilir)."""
+
+    def __init__(self, ad: str, gorunen: str, yetki: str, takas: str, hata: str, kaydet: str, hata_mesaji):
+        self.ad, self.gorunen = ad, gorunen  # ad: 'google' | 'microsoft' (yol ve dönüş parametresi)
+        self._yetki, self._takas, self._hata, self._kaydet, self.hata_mesaji = yetki, takas, hata, kaydet, hata_mesaji
+
+    def ayarli(self) -> bool:
+        return getattr(servisler, f"{self.ad}_ayarli")()
+
+    def yetki_adresi(self, *a, **k) -> str:
+        return getattr(servisler, self._yetki)(*a, **k)
+
+    def kod_takas(self, *a) -> dict:
+        return getattr(servisler, self._takas)(*a)
+
+    @property
+    def hata(self) -> type:
+        return getattr(servisler, self._hata)
+
+    def kaydet(self, *a):
+        return getattr(api, self._kaydet)(*a)
+
+
+GOOGLE_AKISI = OAuthAkisi(
+    "google", "Google", "google_yetki_adresi", "google_kod_takas", "GoogleHatasi", "google_baglantisini_kaydet",
+    lambda hata, aciklama: "İzin verilmedi" if hata == "access_denied" else "Google isteği reddetti")
+MICROSOFT_AKISI = OAuthAkisi(
+    "microsoft", "Microsoft", "microsoft_yetki_adresi", "microsoft_kod_takas", "MicrosoftHatasi",
+    "microsoft_baglantisini_kaydet", lambda hata, aciklama: servisler.microsoft_hata_mesaji(hata, aciklama))
+
+
+def oauth_yonlendirme_adresi(request: Request, saglayici: str) -> str:
+    """APP_URL + /oauth/<sağlayıcı>/geri. Yerelde (localhost) ya da APP_URL yoksa isteğin kökü: http://localhost:8765."""
+    yerel = request.url.hostname in ("localhost", "127.0.0.1")
+    kok = ("" if yerel else (os.environ.get("APP_URL") or "").strip().rstrip("/")) or str(request.base_url).rstrip("/")
+    return f"{kok}/oauth/{saglayici}/geri"
 
 
 def google_yonlendirme_adresi(request: Request) -> str:
-    """APP_URL + /oauth/google/geri. Yerelde (localhost) ya da APP_URL yoksa isteğin kökü: http://localhost:8765."""
-    yerel = request.url.hostname in ("localhost", "127.0.0.1")
-    kok = ("" if yerel else (os.environ.get("APP_URL") or "").strip().rstrip("/")) or str(request.base_url).rstrip("/")
-    return kok + "/oauth/google/geri"
+    return oauth_yonlendirme_adresi(request, "google")
+
+
+def oauth_donusu(akis: OAuthAkisi, hedef: str, **parametre) -> RedirectResponse:
+    yanit = RedirectResponse(f"{hedef}?{urlencode(parametre)}", status_code=303)
+    kimlik.oauth_pkce_sil(akis.ad, yanit)
+    return yanit
 
 
 def google_donusu(hedef: str, **parametre) -> RedirectResponse:
-    yanit = RedirectResponse(f"{hedef}?{urlencode(parametre)}", status_code=303)
-    kimlik.pkce_cerezi_sil(yanit)
+    return oauth_donusu(GOOGLE_AKISI, hedef, **parametre)
+
+
+def oauth_basla(akis: OAuthAkisi, request: Request, donus: str, kullanici: Kullanici) -> RedirectResponse:
+    hedef = donus if donus in OAUTH_DONUSLER else OAUTH_DONUSLER[0]
+    if not akis.ayarli():
+        return oauth_donusu(akis, hedef, **{akis.ad: "hata", "neden": f"{akis.gorunen} bağlantısı bu sunucuda ayarlı değil"})
+    dogrulayici, challenge = servisler.pkce_cifti()
+    state, nonce = kimlik.oauth_state_uret(akis.ad, kullanici.id, hedef)
+    yanit = RedirectResponse(akis.yetki_adresi(
+        oauth_yonlendirme_adresi(request, akis.ad), state, challenge, login_hint=kullanici.eposta), status_code=303)
+    kimlik.oauth_pkce_yaz(akis.ad, yanit, nonce, dogrulayici)
     return yanit
+
+
+def oauth_geri(akis: OAuthAkisi, request: Request, code: str, state: str, error: str, error_description: str,
+               kullanici: Kullanici, db: Session) -> RedirectResponse:
+    """state (imza, 10 dk, oturumdaki kullanıcı) ve PKCE çerezi doğrulanır; hata/iptal → donus?<sağlayıcı>=hata&neden=…"""
+    veri = kimlik.oauth_state_coz(akis.ad, state)
+    hedef = veri["d"] if veri and veri.get("d") in OAUTH_DONUSLER else OAUTH_DONUSLER[0]
+
+    def hata(neden: str) -> RedirectResponse:
+        return oauth_donusu(akis, hedef, **{akis.ad: "hata", "neden": neden})
+
+    if veri is None:
+        return hata("İstek geçersiz ya da süresi doldu; yeniden deneyin")
+    if veri["u"] != kullanici.id:
+        return hata("Oturum eşleşmedi; yeniden deneyin")
+    if error:
+        log.warning("%s onay hatasi user=%s hata=%s", akis.ad, kullanici.id, error[:60])
+        return hata(akis.hata_mesaji(error, error_description))
+    pkce = kimlik.oauth_pkce_oku(akis.ad, request)
+    if not pkce or not hmac.compare_digest(pkce["n"], veri["n"]):
+        return hata("Doğrulama başarısız; yeniden deneyin")
+    if not code or not akis.ayarli():
+        return hata(f"{akis.gorunen} yetki kodu gelmedi")
+    try:
+        token = akis.kod_takas(code, pkce["v"], oauth_yonlendirme_adresi(request, akis.ad))
+    except akis.hata as e:
+        log.warning("%s baglanti hatasi user=%s neden=%s", akis.ad, kullanici.id, str(e)[:200])
+        return hata(str(e))
+    akis.kaydet(db, kullanici, token)
+    return oauth_donusu(akis, hedef, **{akis.ad: "bagli"})
 
 
 @app.get("/oauth/google/basla")
 def google_basla(request: Request, donus: str = "", kullanici: Kullanici = Depends(aktif_kullanici)):
-    hedef = donus if donus in GOOGLE_DONUSLER else GOOGLE_DONUSLER[0]
-    if not servisler.google_ayarli():
-        return google_donusu(hedef, google="hata", neden="Google bağlantısı bu sunucuda ayarlı değil")
-    dogrulayici, challenge = servisler.pkce_cifti()
-    state, nonce = kimlik.google_state_uret(kullanici.id, hedef)
-    yanit = RedirectResponse(servisler.google_yetki_adresi(
-        google_yonlendirme_adresi(request), state, challenge, login_hint=kullanici.eposta), status_code=303)
-    kimlik.pkce_cerezi_yaz(yanit, nonce, dogrulayici)
-    return yanit
+    return oauth_basla(GOOGLE_AKISI, request, donus, kullanici)
 
 
 @app.get("/oauth/google/geri")
@@ -245,33 +320,34 @@ def google_geri(
     request: Request, code: str = "", state: str = "", error: str = "",
     kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
 ):
-    """state (imza, 10 dk, oturumdaki kullanıcı) ve PKCE çerezi doğrulanır; hata/iptal → donus?google=hata&neden=…"""
-    veri = kimlik.google_state_coz(state)
-    hedef = veri["d"] if veri and veri.get("d") in GOOGLE_DONUSLER else GOOGLE_DONUSLER[0]
-    if veri is None:
-        return google_donusu(hedef, google="hata", neden="İstek geçersiz ya da süresi doldu; yeniden deneyin")
-    if veri["u"] != kullanici.id:
-        return google_donusu(hedef, google="hata", neden="Oturum eşleşmedi; yeniden deneyin")
-    if error:
-        neden = "İzin verilmedi" if error == "access_denied" else "Google isteği reddetti"
-        return google_donusu(hedef, google="hata", neden=neden)
-    pkce = kimlik.pkce_cerezi_oku(request)
-    if not pkce or not hmac.compare_digest(pkce["n"], veri["n"]):
-        return google_donusu(hedef, google="hata", neden="Doğrulama başarısız; yeniden deneyin")
-    if not code or not servisler.google_ayarli():
-        return google_donusu(hedef, google="hata", neden="Google yetki kodu gelmedi")
-    try:
-        token = servisler.google_kod_takas(code, pkce["v"], google_yonlendirme_adresi(request))
-    except servisler.GoogleHatasi as e:
-        log.warning("google baglanti hatasi user=%s neden=%s", kullanici.id, str(e)[:200])
-        return google_donusu(hedef, google="hata", neden=str(e))
-    api.google_baglantisini_kaydet(db, kullanici, token)
-    return google_donusu(hedef, google="bagli")
+    return oauth_geri(GOOGLE_AKISI, request, code, state, error, "", kullanici, db)
 
 
 @app.post("/oauth/google/kaldir")
 def google_kaldir(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
     return api.ayar_ozeti(api.google_baglantisini_kaldir(db, kullanici), kullanici)
+
+
+@app.get("/oauth/microsoft/basla")
+def microsoft_basla(request: Request, donus: str = "", kullanici: Kullanici = Depends(aktif_kullanici)):
+    """Tenant 'common': iş/okul ve kişisel hesaplar; prompt=select_account, login_hint giriş e-postası."""
+    return oauth_basla(MICROSOFT_AKISI, request, donus, kullanici)
+
+
+@app.get("/oauth/microsoft/geri")
+def microsoft_geri(
+    request: Request, code: str = "", state: str = "", error: str = "", error_description: str = "",
+    kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum),
+):
+    """Yönetici onayı gerekiyorsa (AADSTS65001, consent_required, "admin approval") Türkçe BT yönlendirmesi döner."""
+    return oauth_geri(MICROSOFT_AKISI, request, code, state, error, error_description, kullanici, db)
+
+
+@app.post("/oauth/microsoft/kaldir")
+def microsoft_kaldir(kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
+    """Graph'ta izin geri alma ucu yok; bilgi notu hesaptan kaldırmanın yolunu söyler."""
+    return {**api.ayar_ozeti(api.microsoft_baglantisini_kaldir(db, kullanici), kullanici),
+            "bilgi": servisler.MICROSOFT_KALDIR_NOTU}
 
 
 # ---------------------------------------------------------------- yönetim

@@ -1,5 +1,5 @@
 """Günlük rapor için veri kaynakları: Gmail (gönderilenler), GitHub (proje commit'leri), Google Takvim ve Drive,
-Claude (iş diline çeviri)."""
+Microsoft Graph (Outlook, Takvim/Teams, OneDrive), Claude (iş diline çeviri)."""
 from __future__ import annotations
 
 import base64
@@ -16,8 +16,8 @@ import threading
 from datetime import date, datetime, time, timedelta, timezone
 from email.header import Header, decode_header, make_header
 from email.message import EmailMessage
-from email.utils import getaddresses, parseaddr, parsedate_to_datetime
-from urllib.parse import urlencode
+from email.utils import format_datetime, formataddr, getaddresses, parseaddr, parsedate_to_datetime
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -822,8 +822,13 @@ GOOGLE_SCOPE = "openid email " + " ".join(GOOGLE_KAPSAMLARI.values())
 GOOGLE_TEST_SURESI = timedelta(days=7)  # test modundaki uygulamada refresh token 7 gün yaşar
 GOOGLE_YENILE_MESAJI = "Google bağlantısı yenilenmeli"
 GMAIL_BASLIKLARI = ("From", "To", "Cc", "Subject", "Date", "Message-ID")
-GOOGLE_SAYFA_SINIRI = 10
-DRIVE_SINIRI = 15
+SAYFA_SINIRI = GOOGLE_SAYFA_SINIRI = 10  # sayfalı listelerde en fazla sayfa (Google ve Graph)
+DRIVE_SINIRI = 15  # Drive ve OneDrive
+
+
+class YetkisizErisim(KaynakHatasi):
+    """Access token reddedildi (401): o sağlayıcının önbellekteki token'ı atılmalı."""
+    saglayici = ""
 
 
 class GoogleHatasi(KaynakHatasi):
@@ -834,8 +839,8 @@ class GoogleYenilenmeli(GoogleHatasi):
     """Refresh token artık geçersiz (invalid_grant): kullanıcı yeniden bağlanmalı."""
 
 
-class GoogleYetkisiz(GoogleHatasi):
-    """Access token reddedildi (401): önbellekteki token atılmalı."""
+class GoogleYetkisiz(GoogleHatasi, YetkisizErisim):
+    saglayici = "google"
 
 
 def google_istemci_bilgisi() -> tuple[str, str]:
@@ -878,22 +883,27 @@ def google_yetki_adresi(yonlendirme: str, state: str, challenge: str, login_hint
     return GOOGLE_YETKI_URL + "?" + urlencode(params)
 
 
-def _google_token_istegi(veri: dict, istemci: httpx.Client) -> dict:
-    """Token ucuna form isteği. invalid_grant → GoogleYenilenmeli; diğer hatalar GoogleHatasi (gizli değer yazılmaz)."""
+def _oauth_token_yaniti(url: str, veri: dict, istemci: httpx.Client, hata_sinifi: type, ad: str) -> tuple[int, dict]:
+    """Token ucuna form isteği → (durum kodu, JSON gövde). Bağlantı hatası hata_sinifi olarak yükselir; gizli değer yazılmaz."""
     try:
-        yanit = istemci.post(GOOGLE_TOKEN_URL, data=veri, headers={"Accept": "application/json"})
+        yanit = istemci.post(url, data=veri, headers={"Accept": "application/json"})
     except httpx.HTTPError as e:
-        raise GoogleHatasi(f"Google'a bağlanılamadı ({e.__class__.__name__})") from e
+        raise hata_sinifi(f"{ad}'a bağlanılamadı ({e.__class__.__name__})") from e
     try:
         govde = yanit.json()
     except ValueError:
         govde = {}
-    govde = govde if isinstance(govde, dict) else {}
-    if yanit.status_code >= 400 or not govde.get("access_token"):
+    return yanit.status_code, govde if isinstance(govde, dict) else {}
+
+
+def _google_token_istegi(veri: dict, istemci: httpx.Client) -> dict:
+    """invalid_grant → GoogleYenilenmeli; diğer hatalar GoogleHatasi."""
+    kod, govde = _oauth_token_yaniti(GOOGLE_TOKEN_URL, veri, istemci, GoogleHatasi, "Google")
+    if kod >= 400 or not govde.get("access_token"):
         hata = govde.get("error") if isinstance(govde.get("error"), str) else ""
         if hata == "invalid_grant":
             raise GoogleYenilenmeli(GOOGLE_YENILE_MESAJI)
-        raise GoogleHatasi(f"Google token vermedi ({hata or yanit.status_code})")
+        raise GoogleHatasi(f"Google token vermedi ({hata or kod})")
     return govde
 
 
@@ -947,27 +957,34 @@ def google_iptal(token: str, istemci: httpx.Client | None = None) -> bool:
         return False
 
 
-def _google_get(istemci: httpx.Client, token: str, url: str, params, ad: str) -> dict:
-    """ad: 'Gmail' | 'Takvim' | 'Drive' (hata metinleri için)."""
+def _rest_get(istemci: httpx.Client, token: str, url: str, params, ad: str, saglayici: str, yetkisiz: type,
+              basliklar: dict | None = None) -> dict:
+    """Bearer token'lı GET → JSON sözlük. ad: 'Gmail' | 'Takvim' | 'Outlook' …, saglayici: 'Google' | 'Microsoft'
+    (hata metinleri için). 401 → yetkisiz sınıfı; hata gövdesi {"error": {"message"}} (Google ve Graph aynı)."""
     try:
-        yanit = istemci.get(url, params=params, headers={"Authorization": f"Bearer {token}"})
+        yanit = istemci.get(url, params=params, headers={"Authorization": f"Bearer {token}", **(basliklar or {})})
     except httpx.HTTPError as e:
-        raise KaynakHatasi(f"{ad} (Google) okunamadı: bağlantı hatası ({e.__class__.__name__})") from e
+        raise KaynakHatasi(f"{ad} ({saglayici}) okunamadı: bağlantı hatası ({e.__class__.__name__})") from e
     if yanit.status_code == 401:
-        raise GoogleYetkisiz(f"{ad} (Google) oturumu geçersiz; birazdan yeniden deneyin")
+        raise yetkisiz(f"{ad} ({saglayici}) oturumu geçersiz; birazdan yeniden deneyin")
     if yanit.status_code >= 400:
         try:
             neden = yanit.json()["error"]["message"]
         except Exception:
             neden = yanit.text
         neden = re.sub(r"\s+", " ", str(neden or "")).strip()[:160]
-        onek = f"{ad} (Google) erişimi reddedildi" if yanit.status_code == 403 else f"{ad} (Google) hata döndürdü"
+        onek = f"{ad} ({saglayici}) erişimi reddedildi" if yanit.status_code == 403 else f"{ad} ({saglayici}) hata döndürdü"
         raise KaynakHatasi(f"{onek} ({yanit.status_code}{': ' + neden if neden else ''})")
     try:
         govde = yanit.json()
     except ValueError as e:
-        raise KaynakHatasi(f"{ad} (Google) yanıtı okunamadı") from e
+        raise KaynakHatasi(f"{ad} ({saglayici}) yanıtı okunamadı") from e
     return govde if isinstance(govde, dict) else {}
+
+
+def _google_get(istemci: httpx.Client, token: str, url: str, params, ad: str) -> dict:
+    """ad: 'Gmail' | 'Takvim' | 'Drive' (hata metinleri için)."""
+    return _rest_get(istemci, token, url, params, ad, "Google", GoogleYetkisiz)
 
 
 def gun_araligi(gun: date) -> tuple[datetime, datetime]:
@@ -991,13 +1008,13 @@ def iso_zaman(deger) -> datetime | None:
 
 
 def kaynak_kimligi(kimlik: str, gun: date) -> str:
-    """Takvim etkinliği / Drive dosyası + gün: aynı gün her taramada aynı id."""
+    """Takvim etkinliği / Drive ya da OneDrive dosyası + gün: aynı gün her taramada aynı id."""
     return hashlib.sha1((kimlik + gun.isoformat()).encode("utf-8")).hexdigest()[:10]
 
 
 def _google_sayfalari(istemci: httpx.Client, token: str, url: str, params: dict, ad: str, alan: str) -> list:
     ogeler, sayfa = [], None
-    for _ in range(GOOGLE_SAYFA_SINIRI):
+    for _ in range(SAYFA_SINIRI):
         govde = _google_get(istemci, token, url, {**params, **({"pageToken": sayfa} if sayfa else {})}, ad)
         ogeler += [x for x in govde.get(alan) or [] if isinstance(x, dict)]
         sayfa = govde.get("nextPageToken")
@@ -1058,15 +1075,52 @@ def _takvim_zamani(deger: dict) -> tuple[datetime | None, bool]:
 TAKVIM_SISTEM_ALANLARI = ("resource.calendar.google.com", "group.calendar.google.com")
 
 
+def toplanti_maddeleri(
+    etkinlikler: list[dict], bugun: date, sozluk: dict[str, str] | None = None, kendi_alanlar: list[str] | None = None,
+    an: datetime | None = None,
+) -> list[dict]:
+    """Sağlayıcıdan bağımsız: etkinlikler {"id", "baslik", "baslangic", "bitis" (Istanbul), "tum_gun", "teams",
+    "katilimcilar": [(görünen ad, adres)]} — dahil/hariç süzgecini (yanıt, iptal, kendine blok) sağlayıcı yapmıştır.
+    Bitiş saati henüz gelmemiş toplantı atlanır; tüm gün etkinlikleri o gün sayılır. Kendi şirketinden ve sözlükte
+    'şirket içi' olan katılımcılar kurum olarak yazılmaz."""
+    an = an or datetime.now(ISTANBUL)
+    bas, son = gun_araligi(bugun)
+    maddeler = []
+    for e in etkinlikler:
+        baslangic, bitis = e.get("baslangic"), e.get("bitis")
+        if baslangic is None:
+            continue
+        baslik = re.sub(r"\s+", " ", str(e.get("baslik") or "")).strip() or "Başlıksız"
+        if e.get("tum_gun"):
+            if not baslangic.date() <= bugun < (bitis.date() if bitis else baslangic.date() + timedelta(days=1)):
+                continue
+            metin, zaman = f"'{baslik}' (tüm gün)", bas
+        else:
+            if not bas <= baslangic < son or (bitis is not None and bitis > an):
+                continue
+            kurumlar = []
+            for ad, adres in e.get("katilimcilar") or []:
+                if kendi_alanlar is not None and kendi_mi(adres, kendi_alanlar):
+                    continue
+                kurum = kurum_adi(ad, adres, sozluk)
+                if _kucult(kurum.strip()) != SIRKET_ICI and kurum not in kurumlar:
+                    kurumlar.append(kurum)
+            ne = "Teams toplantısı" if e.get("teams") else "toplantısı"
+            metin = f"'{baslik}' {ne} yapıldı" + (f" ({', '.join(kurumlar)} ile)" if kurumlar else "")
+            zaman = baslangic
+        maddeler.append({"id": kaynak_kimligi(str(e.get("id") or metin), bugun), "metin": metin, "kaynak": "takvim",
+                         "kaynak_zaman": zaman})
+    return tekille(maddeler)
+
+
 def takvim_maddeleri(
     etkinlikler: list[dict], bugun: date, sozluk: dict[str, str] | None = None, kendi_alanlar: list[str] | None = None,
     an: datetime | None = None,
 ) -> list[dict]:
-    """Dahil: düzenleyeni kullanıcı olan ya da kabul/belki yanıtı verilen etkinlik. Hariç: reddedilen, iptal, başka
-    katılımcısı ve açıklaması olmayan (kendine blok), bitiş saati henüz gelmemiş. Tüm gün etkinlikleri o gün sayılır."""
-    an = an or datetime.now(ISTANBUL)
-    bas, son = gun_araligi(bugun)
-    maddeler = []
+    """Google Takvim. Dahil: düzenleyeni kullanıcı olan ya da kabul/belki yanıtı verilen etkinlik. Hariç: reddedilen,
+    iptal, başka katılımcısı ve açıklaması olmayan (kendine blok), bitiş saati henüz gelmemiş. Tüm gün etkinlikleri
+    o gün sayılır."""
+    uygun = []
     for e in etkinlikler:
         if e.get("status") == "cancelled":
             continue
@@ -1083,29 +1137,9 @@ def takvim_maddeleri(
             continue
         baslangic, tum_gun = _takvim_zamani(e.get("start") or {})
         bitis, _ = _takvim_zamani(e.get("end") or {})
-        if baslangic is None:
-            continue
-        baslik = re.sub(r"\s+", " ", str(e.get("summary") or "")).strip() or "Başlıksız"
-        if tum_gun:
-            if not baslangic.date() <= bugun < (bitis.date() if bitis else baslangic.date() + timedelta(days=1)):
-                continue
-            metin, zaman = f"'{baslik}' (tüm gün)", bas
-        else:
-            if not bas <= baslangic < son or (bitis is not None and bitis > an):
-                continue
-            kurumlar = []
-            for k in digerleri:
-                adres = str(k["email"])
-                if kendi_alanlar is not None and kendi_mi(adres, kendi_alanlar):
-                    continue
-                kurum = kurum_adi(str(k.get("displayName") or ""), adres, sozluk)
-                if _kucult(kurum.strip()) != SIRKET_ICI and kurum not in kurumlar:
-                    kurumlar.append(kurum)
-            metin = f"'{baslik}' toplantısı yapıldı" + (f" ({', '.join(kurumlar)} ile)" if kurumlar else "")
-            zaman = baslangic
-        maddeler.append({"id": kaynak_kimligi(str(e.get("id") or metin), bugun), "metin": metin, "kaynak": "takvim",
-                         "kaynak_zaman": zaman})
-    return tekille(maddeler)
+        uygun.append({"id": e.get("id"), "baslik": e.get("summary"), "baslangic": baslangic, "bitis": bitis,
+                      "tum_gun": tum_gun, "katilimcilar": [(str(k.get("displayName") or ""), str(k["email"])) for k in digerleri]})
+    return toplanti_maddeleri(uygun, bugun, sozluk, kendi_alanlar, an)
 
 
 def takvim_tara(
@@ -1145,24 +1179,30 @@ def dosya_adi(ad: str | None) -> str:
     return kisa or ad or "Adsız"
 
 
-def drive_maddeleri(dosyalar: list[dict], bugun: date) -> list[dict]:
-    """Yalnız son değişikliği kullanıcının yaptığı dosyalar; o gün oluşturulan 'oluşturuldu', diğerleri 'güncellendi'.
-    En fazla DRIVE_SINIRI madde, fazlası tek "ve N dosya daha güncellendi" maddesi."""
-    benim = sorted((d for d in dosyalar if (d.get("lastModifyingUser") or {}).get("me") is True and d.get("id")),
-                   key=lambda d: (iso_zaman(d.get("modifiedTime")) or datetime.min.replace(tzinfo=ISTANBUL), str(d["id"])))
+def dosya_maddeleri(dosyalar: list[dict], bugun: date, kaynak: str, fazla_kimligi: str) -> list[dict]:
+    """Sağlayıcıdan bağımsız: dosyalar {"kimlik", "ad", "tur", "olusturma", "degisme"} yalnız son değişikliği kullanıcının
+    yaptığı dosyalardır. O gün oluşturulan 'oluşturuldu', diğerleri 'güncellendi'; en fazla DRIVE_SINIRI madde, fazlası
+    tek "ve N dosya daha güncellendi" maddesi."""
+    sirali = sorted(dosyalar, key=lambda d: (d["degisme"] or datetime.min.replace(tzinfo=ISTANBUL), d["kimlik"]))
     maddeler = []
-    for d in benim[:DRIVE_SINIRI]:
-        olusturma = iso_zaman(d.get("createdTime"))
-        tur = drive_turu(d.get("mimeType"))
-        ek = DRIVE_TURLERI[tur][0] if tur in DRIVE_TURLERI else "dosyası"
-        ne = "oluşturuldu" if olusturma is not None and olusturma.date() == bugun else "güncellendi"
-        maddeler.append({"id": kaynak_kimligi(str(d["id"]), bugun), "metin": f"'{dosya_adi(d.get('name'))}' {ek} {ne}",
-                         "kaynak": "drive", "kaynak_zaman": iso_zaman(d.get("modifiedTime"))})
-    fazla = benim[DRIVE_SINIRI:]
+    for d in sirali[:DRIVE_SINIRI]:
+        ek = DRIVE_TURLERI[d["tur"]][0] if d["tur"] in DRIVE_TURLERI else "dosyası"
+        ne = "oluşturuldu" if d["olusturma"] is not None and d["olusturma"].date() == bugun else "güncellendi"
+        maddeler.append({"id": kaynak_kimligi(d["kimlik"], bugun), "metin": f"'{dosya_adi(d['ad'])}' {ek} {ne}",
+                         "kaynak": kaynak, "kaynak_zaman": d["degisme"]})
+    fazla = sirali[DRIVE_SINIRI:]
     if fazla:
-        maddeler.append({"id": kaynak_kimligi("drive-fazla", bugun), "metin": f"ve {len(fazla)} dosya daha güncellendi",
-                         "kaynak": "drive", "kaynak_zaman": iso_zaman(fazla[-1].get("modifiedTime"))})
+        maddeler.append({"id": kaynak_kimligi(fazla_kimligi, bugun), "metin": f"ve {len(fazla)} dosya daha güncellendi",
+                         "kaynak": kaynak, "kaynak_zaman": fazla[-1]["degisme"]})
     return maddeler
+
+
+def drive_maddeleri(dosyalar: list[dict], bugun: date) -> list[dict]:
+    """Google Drive: yalnız son değişikliği kullanıcının yaptığı dosyalar (lastModifyingUser.me)."""
+    benim = [{"kimlik": str(d["id"]), "ad": d.get("name"), "tur": drive_turu(d.get("mimeType")),
+              "olusturma": iso_zaman(d.get("createdTime")), "degisme": iso_zaman(d.get("modifiedTime"))}
+             for d in dosyalar if (d.get("lastModifyingUser") or {}).get("me") is True and d.get("id")]
+    return dosya_maddeleri(benim, bugun, "drive", "drive-fazla")
 
 
 def drive_sorgusu(gun: date) -> str:
@@ -1177,6 +1217,322 @@ def drive_tara(token: str, bugun: date, istemci: httpx.Client | None = None) -> 
         "fields": "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,lastModifyingUser(me))",
     }, "Drive", "files")
     return drive_maddeleri(dosyalar, bugun)
+
+
+# ---------------------------------------------------------------- Microsoft: OAuth (v2.0, tenant common), Graph
+
+MICROSOFT_YETKI_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+GRAPH_API = "https://graph.microsoft.com/v1.0"
+# kısa ad → Graph izni; kaynaklar sözlüğündeki anahtarlarla aynı
+MICROSOFT_KAPSAMLARI = {"outlook": "Mail.Read", "outlook_takvim": "Calendars.Read", "onedrive": "Files.Read"}
+MICROSOFT_SCOPE = "openid email offline_access User.Read " + " ".join(MICROSOFT_KAPSAMLARI.values())
+MICROSOFT_YENILE_MESAJI = "Microsoft bağlantısı yenilenmeli"
+MICROSOFT_YONETICI_MESAJI = (
+    "Şirketinin Microsoft yöneticisinin bu uygulamaya bir kez onay vermesi gerekiyor. "
+    "BT birimine 'Günlük Rapor uygulamasına kullanıcı onayı' için başvur."
+)
+MICROSOFT_KALDIR_NOTU = "Hesabından tamamen kaldırmak için account.microsoft.com → Gizlilik → Uygulamalar"
+# Kiracı kullanıcı onayını kapatmışsa: AADSTS65001 (onay yok), 90094/900941 (yönetici izni gerekli)
+YONETICI_ONAYI = re.compile(r"AADSTS(65001|90094|900941)\b|admin(istrator)?\s+(approval|consent|permission)", re.IGNORECASE)
+OUTLOOK_ALANLARI = "subject,toRecipients,ccRecipients,sentDateTime,internetMessageId,from"
+# organizer spesifikasyon listesine eklendi: davet edildiğim toplantıda düzenleyen katılımcılar arasında gelmez.
+OUTLOOK_TAKVIM_ALANLARI = ("subject,start,end,isAllDay,isCancelled,isOrganizer,responseStatus,attendees,organizer,"
+                           "bodyPreview,isOnlineMeeting,onlineMeetingProvider")
+ISTANBUL_TERCIHI = {"Prefer": 'outlook.timezone="Europe/Istanbul"'}
+DUZ_METIN_TERCIHI = {"Prefer": 'outlook.body-content-type="text"'}
+# Uzantı → Drive'daki tür adı (belirtme hâli DRIVE_TURLERI'nden); diğerleri "dosya"
+ONEDRIVE_TURLERI = {"xlsx": "tablo", "xlsm": "tablo", "xls": "tablo", "csv": "tablo", "docx": "belge", "doc": "belge",
+                    "pptx": "sunum", "ppt": "sunum", "pdf": "PDF"}
+
+
+class MicrosoftHatasi(KaynakHatasi):
+    pass
+
+
+class MicrosoftYenilenmeli(MicrosoftHatasi):
+    """Refresh token artık geçersiz (invalid_grant / interaction_required): kullanıcı yeniden bağlanmalı."""
+
+
+class MicrosoftYetkisiz(MicrosoftHatasi, YetkisizErisim):
+    saglayici = "microsoft"
+
+
+def microsoft_istemci_bilgisi() -> tuple[str, str]:
+    return (os.environ.get("MICROSOFT_CLIENT_ID") or "").strip(), (os.environ.get("MICROSOFT_CLIENT_SECRET") or "").strip()
+
+
+def microsoft_ayarli() -> bool:
+    """İki değişken de yoksa Microsoft arayüzü hiç görünmez."""
+    return all(microsoft_istemci_bilgisi())
+
+
+def microsoft_istemci() -> httpx.Client:
+    return httpx.Client(timeout=20)
+
+
+def microsoft_kisa_kapsamlar(kapsamlar: list[str] | None) -> list[str]:
+    """Token yanıtındaki scope'lar ("Mail.Read" ya da "https://graph.microsoft.com/Mail.Read") → kısa adlar."""
+    verilen = {str(k).rsplit("/", 1)[-1].lower() for k in kapsamlar or []}
+    return [k for k, izin in MICROSOFT_KAPSAMLARI.items() if izin.lower() in verilen]
+
+
+def microsoft_yetki_adresi(yonlendirme: str, state: str, challenge: str, login_hint: str = "") -> str:
+    params = {
+        "client_id": microsoft_istemci_bilgisi()[0], "response_type": "code", "redirect_uri": yonlendirme,
+        "response_mode": "query", "scope": MICROSOFT_SCOPE, "state": state, "code_challenge": challenge,
+        "code_challenge_method": "S256", "prompt": "select_account",
+    }
+    if login_hint:
+        params["login_hint"] = login_hint
+    return MICROSOFT_YETKI_URL + "?" + urlencode(params)
+
+
+def _kisa_neden(hata: str, aciklama: str) -> str:
+    """error_description'ın ilk cümlesi (AADSTS kodu dahil, iz/zaman satırları hariç), yoksa error kodu."""
+    ilk = re.split(r"\r?\n|(?<=\.)\s", (aciklama or "").strip(), maxsplit=1)[0].strip()
+    return (ilk[:120] if ilk else "") or hata or "bilinmeyen hata"
+
+
+def microsoft_hata_mesaji(hata: str, aciklama: str = "") -> str:
+    """Onay dönüşündeki error / error_description → kullanıcıya Türkçe neden."""
+    hata, aciklama = hata or "", aciklama or ""
+    if hata == "consent_required" or YONETICI_ONAYI.search(aciklama):
+        return MICROSOFT_YONETICI_MESAJI
+    if hata == "access_denied":
+        return "İzin verilmedi"
+    return f"Microsoft isteği reddetti ({_kisa_neden(hata, aciklama)})"
+
+
+def _microsoft_token_istegi(veri: dict, istemci: httpx.Client, yenileme: bool) -> dict:
+    """Yenilemede invalid_grant / interaction_required → MicrosoftYenilenmeli; yönetici onayı gerekiyorsa Türkçe
+    mesaj; diğer hatalar kısa nedenle MicrosoftHatasi."""
+    kod, govde = _oauth_token_yaniti(MICROSOFT_TOKEN_URL, veri, istemci, MicrosoftHatasi, "Microsoft")
+    if kod >= 400 or not govde.get("access_token"):
+        hata = govde.get("error") if isinstance(govde.get("error"), str) else ""
+        aciklama = govde.get("error_description") if isinstance(govde.get("error_description"), str) else ""
+        if yenileme and hata in ("invalid_grant", "interaction_required"):
+            raise MicrosoftYenilenmeli(MICROSOFT_YENILE_MESAJI)
+        if hata == "consent_required" or YONETICI_ONAYI.search(aciklama):
+            raise MicrosoftHatasi(MICROSOFT_YONETICI_MESAJI)
+        raise MicrosoftHatasi(f"Microsoft token vermedi ({_kisa_neden(hata, aciklama) if hata else kod})")
+    return govde
+
+
+def _graph_get(istemci: httpx.Client, token: str, url: str, ad: str, basliklar: dict | None = None) -> dict:
+    """url sorgusu hazır (graph_adresi ya da @odata.nextLink)."""
+    return _rest_get(istemci, token, url, None, ad, "Microsoft", MicrosoftYetkisiz, basliklar)
+
+
+def graph_adresi(yol: str, params: dict | None = None) -> str:
+    """OData sistem seçenekleri ($filter, $select…) '$' ile ve boşluklar %20 olarak yazılır."""
+    sorgu = "&".join(f"{k}={quote(str(v), safe=',')}" for k, v in (params or {}).items())
+    return GRAPH_API + yol + (f"?{sorgu}" if sorgu else "")
+
+
+def _graph_sayfalari(istemci: httpx.Client, token: str, url: str, ad: str, basliklar: dict | None = None) -> list:
+    """@odata.nextLink ile sayfalar; token yalnız Graph adresine gider."""
+    ogeler = []
+    for _ in range(SAYFA_SINIRI):
+        govde = _graph_get(istemci, token, url, ad, basliklar)
+        ogeler += [x for x in govde.get("value") or [] if isinstance(x, dict)]
+        url = govde.get("@odata.nextLink")
+        if not isinstance(url, str) or not url.startswith(GRAPH_API + "/"):
+            break
+    return ogeler
+
+
+def microsoft_eposta(token: str, istemci: httpx.Client) -> str:
+    """/me: mail, yoksa userPrincipalName."""
+    try:
+        govde = _graph_get(istemci, token, graph_adresi("/me", {"$select": "mail,userPrincipalName"}), "Microsoft hesabı")
+    except KaynakHatasi as e:
+        raise MicrosoftHatasi(str(e)) from e
+    for alan in ("mail", "userPrincipalName"):
+        eposta = govde.get(alan)
+        if isinstance(eposta, str) and "@" in eposta:
+            return eposta.strip().lower()
+    raise MicrosoftHatasi("Microsoft e-posta adresini vermedi")
+
+
+def microsoft_kod_takas(kod: str, dogrulayici: str, yonlendirme: str, istemci: httpx.Client | None = None) -> dict:
+    """Yetki kodu → {access_token, expires_in, refresh_token, kapsamlar, eposta}."""
+    client_id, secret = microsoft_istemci_bilgisi()
+    istemci = istemci or microsoft_istemci()
+    govde = _microsoft_token_istegi({
+        "client_id": client_id, "client_secret": secret, "code": kod, "redirect_uri": yonlendirme,
+        "grant_type": "authorization_code", "code_verifier": dogrulayici, "scope": MICROSOFT_SCOPE,
+    }, istemci, yenileme=False)
+    if not govde.get("refresh_token"):
+        raise MicrosoftHatasi("Microsoft yenileme anahtarı vermedi; yeniden bağlanın")
+    return {
+        "access_token": govde["access_token"], "expires_in": int(govde.get("expires_in") or 3600),
+        "refresh_token": govde["refresh_token"], "kapsamlar": str(govde.get("scope") or "").split(),
+        "eposta": microsoft_eposta(govde["access_token"], istemci),
+    }
+
+
+def microsoft_yenile(refresh_token: str, istemci: httpx.Client | None = None) -> tuple[str, int, str | None]:
+    """(access_token, saniye, yeni refresh token ya da None). Microsoft çoğu yenilemede yeni refresh token döner."""
+    client_id, secret = microsoft_istemci_bilgisi()
+    govde = _microsoft_token_istegi({
+        "client_id": client_id, "client_secret": secret, "refresh_token": refresh_token,
+        "grant_type": "refresh_token", "scope": MICROSOFT_SCOPE,
+    }, istemci or microsoft_istemci(), yenileme=True)
+    yeni = govde.get("refresh_token")
+    return govde["access_token"], int(govde.get("expires_in") or 3600), yeni if isinstance(yeni, str) and yeni else None
+
+
+def _graph_adresleri(alicilar) -> str:
+    """Graph recipient listesi → "Ad <adres>, …" başlık değeri (IMAP/Gmail yoluyla aynı ayrıştırıcıya gider)."""
+    parcalar = []
+    for a in alicilar or []:
+        adres = (a.get("emailAddress") or {}) if isinstance(a, dict) else {}
+        eposta = str(adres.get("address") or "").strip()
+        if not eposta:
+            continue
+        try:
+            parcalar.append(formataddr((str(adres.get("name") or "").strip(), eposta), charset="utf-8"))
+        except UnicodeError:  # ASCII dışı adres (EAI): görünen ad olmadan yazılır, tarama düşmez
+            parcalar.append(eposta)
+    return ", ".join(parcalar)
+
+
+def outlook_mesaji(m: dict) -> dict:
+    """Graph mesajı → epostalari_maddele / notlari_maddele'nin beklediği başlık sözlüğü."""
+    zaman = iso_zaman(m.get("sentDateTime"))
+    return {
+        "date": format_datetime(zaman) if zaman else None, "subject": str(m.get("subject") or ""),
+        "from": _graph_adresleri([m.get("from")]), "to": _graph_adresleri(m.get("toRecipients")),
+        "cc": _graph_adresleri(m.get("ccRecipients")), "message-id": m.get("internetMessageId"), "graph_id": m.get("id"),
+    }
+
+
+def outlook_sorgusu(gun: date) -> dict:
+    bas, son = gun_araligi(gun)
+    return {"$filter": f"sentDateTime ge {rfc3339(bas)} and sentDateTime lt {rfc3339(son)}",
+            "$select": OUTLOOK_ALANLARI, "$top": 50}
+
+
+def outlook_tara(
+    token: str, kendi_adres: str, bugun: date, sozluk: dict[str, str] | None = None, gruplama: str = "konu",
+    kendi_alanlar: list[str] | None = None, ekip_ici_atla: bool = True, istemci: httpx.Client | None = None,
+) -> list[dict]:
+    """Gönderilmiş Öğeler → gmail_tara ile aynı maddeler (epostalari_maddele + notlari_maddele aynen). E-posta maddeleri
+    kaynak 'outlook' olur ve id'leri 'ms-' önekini alır: aynı konu Gmail'den de gittiyse kaynak_id çakışmaz. Not
+    maddelerinin id'si internetMessageId'den türer."""
+    istemci = istemci or microsoft_istemci()
+    mailler = [outlook_mesaji(m) for m in _graph_sayfalari(
+        istemci, token, graph_adresi("/me/mailFolders/sentitems/messages", outlook_sorgusu(bugun)), "Outlook")]
+    notlar, gonderilen = [], []
+    for m in mailler:
+        konu = not_konusu(m, kendi_adres)
+        (gonderilen if konu is None else notlar).append(m)
+        if konu == "" and bugun_mu(m.get("date"), bugun) and m.get("graph_id"):  # yalnız önek: satırlar gövdede
+            govde = _graph_get(istemci, token, graph_adresi(f"/me/messages/{quote(str(m['graph_id']), safe='')}",
+                                                           {"$select": "body"}), "Outlook", DUZ_METIN_TERCIHI)
+            m["govde"] = str((govde.get("body") or {}).get("content") or "")
+    maddeler = epostalari_maddele(gonderilen, kendi_adres, bugun, sozluk, gruplama, kendi_alanlar, ekip_ici_atla)
+    return [{**m, "id": "ms-" + m["id"], "kaynak": "outlook"} for m in maddeler] + notlari_maddele(notlar, kendi_adres, bugun)
+
+
+def graph_zamani(deger) -> datetime | None:
+    """{"dateTime": "2026-09-16T10:00:00.0000000", "timeZone": "Europe/Istanbul"} → Istanbul saati."""
+    if not isinstance(deger, dict) or not isinstance(deger.get("dateTime"), str):
+        return None
+    metin = re.sub(r"(\.\d{6})\d+", r"\1", deger["dateTime"].strip()).replace("Z", "+00:00")
+    try:
+        zaman = datetime.fromisoformat(metin)
+    except ValueError:
+        return None
+    if zaman.tzinfo is None:
+        try:
+            bolge = timezone.utc if str(deger.get("timeZone") or "").upper() in ("UTC", "") else ZoneInfo(deger["timeZone"])
+        except Exception:
+            bolge = ISTANBUL  # Prefer ile Istanbul istendi; Windows saat dilimi adı gelirse de öyle sayılır
+        zaman = zaman.replace(tzinfo=bolge)
+    return zaman.astimezone(ISTANBUL)
+
+
+def outlook_takvim_maddeleri(
+    etkinlikler: list[dict], bugun: date, kendi_adres: str = "", sozluk: dict[str, str] | None = None,
+    kendi_alanlar: list[str] | None = None, an: datetime | None = None,
+) -> list[dict]:
+    """Outlook/Teams takvimi, Google'la aynı kurallar: düzenleyen ya da kabul/belki yanıtı verilen dahil; reddedilen,
+    iptal, katılımcısız ve bodyPreview'u boş (kendine blok), bitmemiş olan hariç. Oda/kaynak tipindeki katılımcılar
+    sayılmaz. Teams toplantısı "'<konu>' Teams toplantısı yapıldı"."""
+    kendi = (kendi_adres or "").strip().lower()
+    uygun = []
+    for e in etkinlikler:
+        if e.get("isCancelled"):
+            continue
+        yanit = str((e.get("responseStatus") or {}).get("response") or "")
+        if yanit == "declined":
+            continue
+        if not (e.get("isOrganizer") is True or yanit in ("organizer", "accepted", "tentativelyAccepted")):
+            continue
+        katilimcilar = []
+        for k in [e.get("organizer")] + list(e.get("attendees") or []):
+            if not isinstance(k, dict) or str(k.get("type") or "").lower() == "resource":
+                continue
+            adres = k.get("emailAddress") or {}
+            eposta = str(adres.get("address") or "").strip()
+            if "@" not in eposta or eposta.lower() == kendi or any(eposta.lower() == a.lower() for _, a in katilimcilar):
+                continue
+            katilimcilar.append((str(adres.get("name") or "").strip(), eposta))
+        if not katilimcilar and not str(e.get("bodyPreview") or "").strip():
+            continue
+        uygun.append({
+            "id": e.get("id"), "baslik": e.get("subject"), "baslangic": graph_zamani(e.get("start")),
+            "bitis": graph_zamani(e.get("end")), "tum_gun": e.get("isAllDay") is True, "katilimcilar": katilimcilar,
+            "teams": e.get("isOnlineMeeting") is True and e.get("onlineMeetingProvider") == "teamsForBusiness",
+        })
+    return toplanti_maddeleri(uygun, bugun, sozluk, kendi_alanlar, an)
+
+
+def outlook_takvim_tara(
+    token: str, kendi_adres: str, bugun: date, sozluk: dict[str, str] | None = None,
+    kendi_alanlar: list[str] | None = None, istemci: httpx.Client | None = None, an: datetime | None = None,
+) -> list[dict]:
+    bas, son = gun_araligi(bugun)
+    adres = graph_adresi("/me/calendarView", {"startDateTime": rfc3339(bas), "endDateTime": rfc3339(son),
+                                               "$select": OUTLOOK_TAKVIM_ALANLARI, "$top": 100})
+    etkinlikler = _graph_sayfalari(istemci or microsoft_istemci(), token, adres, "Takvim", ISTANBUL_TERCIHI)
+    return outlook_takvim_maddeleri(etkinlikler, bugun, kendi_adres, sozluk, kendi_alanlar, an)
+
+
+def onedrive_turu(ad: str | None) -> str:
+    """Uzantıdan: xlsx → tablo, docx → belge, pptx → sunum, pdf → PDF, diğerleri dosya."""
+    ad = (ad or "").strip()
+    return ONEDRIVE_TURLERI.get(ad.rpartition(".")[2].lower(), "dosya") if "." in ad else "dosya"
+
+
+def onedrive_maddeleri(ogeler: list[dict], bugun: date, kendi_adres: str) -> list[dict]:
+    """/me/drive/recent: yalnız o gün değiştirilmiş ve son değiştireni kullanıcı (lastModifiedBy.user.email = ms_eposta)
+    olan dosyalar; klasörler hariç. Paylaşılan dosyada remoteItem'ın alanları esas alınır."""
+    bas, son = gun_araligi(bugun)
+    kendi = (kendi_adres or "").strip().lower()
+    dosyalar: dict[str, dict] = {}
+    for o in ogeler:
+        if isinstance(o.get("remoteItem"), dict):
+            o = {**o, **o["remoteItem"]}
+        if "folder" in o or not o.get("id") or not kendi:
+            continue
+        degisme = iso_zaman(o.get("lastModifiedDateTime"))
+        if degisme is None or not bas <= degisme < son:
+            continue
+        kim = str(((o.get("lastModifiedBy") or {}).get("user") or {}).get("email") or "").strip().lower()
+        if kim != kendi:
+            continue
+        kimlik = str((o.get("parentReference") or {}).get("driveId") or "") + str(o["id"])
+        dosyalar.setdefault(kimlik, {"kimlik": kimlik, "ad": o.get("name"), "tur": onedrive_turu(o.get("name")),
+                                     "olusturma": iso_zaman(o.get("createdDateTime")), "degisme": degisme})
+    return dosya_maddeleri(list(dosyalar.values()), bugun, "onedrive", "onedrive-fazla")
+
+
+def onedrive_tara(token: str, kendi_adres: str, bugun: date, istemci: httpx.Client | None = None) -> list[dict]:
+    ogeler = _graph_sayfalari(istemci or microsoft_istemci(), token, GRAPH_API + "/me/drive/recent", "OneDrive")
+    return onedrive_maddeleri(ogeler, bugun, kendi_adres)
 
 
 # ---------------------------------------------------------------- Claude
@@ -1245,6 +1601,10 @@ def _id_metin_eslesmesi(metin: str) -> dict[str, str]:
     }
 
 
+# Microsoft maddeleri Claude'a Google karşılıklarının adıyla gider: aynı açıklama ve aynı kural geçerli.
+CLAUDE_KAYNAK_ADI = {"outlook": "eposta", "onedrive": "drive"}
+
+
 def claude_cevir(
     maddeler: list[dict], api_anahtari: str, istemci: httpx.Client | None = None, proje_adi: str = "",
     kendi_sirket: list[str] | None = None, eslemeler: list[dict] | None = None,
@@ -1255,7 +1615,8 @@ def claude_cevir(
     if not maddeler:
         return maddeler, None
     esli = {m["id"]: ad_esle(m["metin"], eslemeler) for m in maddeler}
-    girdiler = [{"id": m["id"], "kaynak": m["kaynak"], "metin": esli[m["id"]]} for m in maddeler]
+    girdiler = [{"id": m["id"], "kaynak": CLAUDE_KAYNAK_ADI.get(m["kaynak"], m["kaynak"]), "metin": esli[m["id"]]}
+                for m in maddeler]
     istek = {
         "model": CLAUDE_MODEL,
         "max_tokens": 1500,
@@ -1583,14 +1944,15 @@ def raporu_uret(
 ) -> dict:
     """ayarlar: gmail_kullanici, gmail_sifre, github_token, github_repo, proje_adi, alan_sozlugu, eposta_gruplama,
     kendi_alanlar, ekip_ici_atla, kendi_sirket (çözülmüş), ad_eslemeleri; Google bağlıysa google: {token, kapsamlar, eposta,
-    yenile, hata} (token yoksa Google kaynakları atlanır).
+    yenile, hata} (token yoksa Google kaynakları atlanır); Microsoft bağlıysa microsoft: aynı biçimde.
     haric_idler: zaten kayıtlı maddeler; Claude'a yeniden gönderilmez. Sözlükse id → kayıtlı metin: metni
     değişen (ör. aynı konuya yeni mail gelen) madde yeniden çevrilir; değer None ise hiç gönderilmez.
     tarih: taranan gün (Istanbul); verilmezse bugün.
-    Dönen "taranan": hatasız taranan Google kaynakları (takvim/drive); eski maddeleri gizleme kuralı buna bakar."""
+    Dönen "taranan": hatasız taranan OAuth kaynakları (outlook, takvim, drive, onedrive); takvim yalnız açık olan her
+    sağlayıcı hatasız tarandıysa yazılır. Eski maddeleri gizleme kuralı buna bakar."""
     bugun = tarih or istanbul_bugun()
-    sonuc = {"tarih": bugun.isoformat(), "eposta": [], "medusa": [], "not": [], "takvim": [], "drive": [],
-             "hatalar": [], "taranan": []}
+    sonuc = {"tarih": bugun.isoformat(), "eposta": [], "outlook": [], "medusa": [], "not": [], "takvim": [], "drive": [],
+             "onedrive": [], "hatalar": [], "taranan": []}
     # Kapalı kaynak sessizce atlanır; açık ama ayarı eksik olan uyarı yazar.
     acik = ayarlar.get("kaynaklar") or {"gmail": True, "github": True}
     google = ayarlar.get("google") or {}
@@ -1599,13 +1961,19 @@ def raporu_uret(
         sonuc["hatalar"].append({"kaynak": "google", "mesaj": GOOGLE_YENILE_MESAJI})
     elif google.get("hata"):
         sonuc["hatalar"].append({"kaynak": "google", "mesaj": google["hata"]})
+    ms = ayarlar.get("microsoft") or {}
+    ms_token, ms_kapsam, ms_adres = ms.get("token"), set(ms.get("kapsamlar") or []), ms.get("eposta") or ""
+    if ms.get("yenile"):
+        sonuc["hatalar"].append({"kaynak": "microsoft", "mesaj": MICROSOFT_YENILE_MESAJI})
+    elif ms.get("hata"):
+        sonuc["hatalar"].append({"kaynak": "microsoft", "mesaj": ms["hata"]})
 
     def tara(kaynak: str, ad: str, islem):
         """Kaynak hatası sonuca yazılır, None döner."""
         try:
             return islem()
-        except GoogleYetkisiz as e:
-            sonuc["google_yetkisiz"] = True
+        except YetkisizErisim as e:
+            sonuc[f"{e.saglayici}_yetkisiz"] = True
             sonuc["hatalar"].append({"kaynak": kaynak, "mesaj": str(e)})
         except KaynakHatasi as e:
             sonuc["hatalar"].append({"kaynak": kaynak, "mesaj": str(e)})
@@ -1631,28 +1999,46 @@ def raporu_uret(
         sonuc["eposta"] = [m for m in bulunan if m["kaynak"] != "not"]
         sonuc["not"] = [m for m in bulunan if m["kaynak"] == "not"]
 
+    # Outlook: Gmail'den bağımsız; ikisi de açıksa ikisi de taranır.
+    if acik.get("outlook") and ms_token and "outlook" in ms_kapsam:
+        bulunan = tara("outlook", "Outlook", lambda: outlook_tara(ms_token, ms_adres, bugun, **eposta_ayari))
+        if bulunan is not None:
+            sonuc["outlook"] = [m for m in bulunan if m["kaynak"] != "not"]
+            sonuc["not"] += [m for m in bulunan if m["kaynak"] == "not"]
+            sonuc["taranan"].append("outlook")
+
     if acik.get("github") and ayarlar.get("github_token") and ayarlar.get("github_repo"):
         commitler = tara("github", "GitHub", lambda: github_tara(ayarlar["github_token"], ayarlar["github_repo"], bugun))
         sonuc["medusa"] = commitler or []
     elif acik.get("github"):
         sonuc["hatalar"].append({"kaynak": "github", "mesaj": "GitHub ayarı girilmemiş (Ayarlar)"})
 
-    for kaynak, ad, islem in (
-        ("takvim", "Takvim", lambda: takvim_tara(token, bugun, ayarlar.get("alan_sozlugu"), ayarlar.get("kendi_alanlar"))),
-        ("drive", "Drive", lambda: drive_tara(token, bugun)),
+    sozluk, kendi = ayarlar.get("alan_sozlugu"), ayarlar.get("kendi_alanlar")
+    google_acik = lambda k: bool(acik.get(k) and token and k in kapsam)  # noqa: E731
+    ms_acik = lambda k: bool(acik.get(k) and ms_token and k in ms_kapsam)  # noqa: E731
+    for kaynak, isler in (
+        ("takvim", [(google_acik("takvim"), "Takvim", lambda: takvim_tara(token, bugun, sozluk, kendi)),
+                    (ms_acik("outlook_takvim"), "Takvim (Microsoft)",
+                     lambda: outlook_takvim_tara(ms_token, ms_adres, bugun, sozluk, kendi))]),
+        ("drive", [(google_acik("drive"), "Drive", lambda: drive_tara(token, bugun))]),
+        ("onedrive", [(ms_acik("onedrive"), "OneDrive", lambda: onedrive_tara(ms_token, ms_adres, bugun))]),
     ):
-        if acik.get(kaynak) and token and kaynak in kapsam:
+        hatasiz = None
+        for calisir, ad, islem in isler:
+            if not calisir:
+                continue
             maddeler = tara(kaynak, ad, islem)
-            if maddeler is not None:
-                sonuc[kaynak] = maddeler
-                sonuc["taranan"].append(kaynak)
+            hatasiz = hatasiz is not False and maddeler is not None
+            sonuc[kaynak] += maddeler or []
+        if hatasiz:
+            sonuc["taranan"].append(kaynak)
 
     def kayitli(m: dict) -> bool:
         if m["id"] not in haric_idler:
             return False
         return not isinstance(haric_idler, dict) or haric_idler[m["id"]] in (None, m["metin"])
 
-    cevrilenler = ("eposta", "medusa", "takvim", "drive")
+    cevrilenler = ("eposta", "outlook", "medusa", "takvim", "drive", "onedrive")
     yeniler = [m for anahtar in cevrilenler for m in sonuc[anahtar] if not kayitli(m)]
     if api_anahtari and yeniler:
         cevrilmis, hata = claude_cevir(yeniler, api_anahtari, proje_adi=ayarlar.get("proje_adi") or "",

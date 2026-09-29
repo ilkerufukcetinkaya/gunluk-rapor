@@ -85,10 +85,13 @@ input[type=time]{width:124px; font-weight:600; flex:none}
 .katDetay .eylem .secondary{height:40px; font-size:13.5px; border-radius:12px; background:var(--paper)}
 .katDetay .eylem .tehlike{margin-left:auto}
 .bicimSatiri .segment{flex:none}
-/* Google hesabı */
+/* Google ve Microsoft hesabı */
 .t-google{background:var(--accent-bg); color:var(--accent)}
+.saglayici{font-size:11.5px; font-weight:600; color:var(--ink-3); margin-left:6px}
 .googleEylem{display:flex; flex-direction:column; align-items:flex-end; gap:6px}
 .googleSatir .kim .meta{margin-top:3px}
+.googleSatir .durum{max-width:100%; overflow-wrap:anywhere}  /* uzun e-posta düğmenin altına taşmasın */
+.googleEylem{flex:none}
 .googleNot{background:var(--sub); padding-top:10px; padding-bottom:12px}
 .googleNot .kayitli{font-size:12.5px}
 .googleSerit{margin:0 14px 12px}
@@ -165,6 +168,36 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <p class="kayitli">Google 'uygulama doğrulanmadı' uyarısı gösterebilir: Gelişmiş → Günlük Rapor'a git. Test sürecinde bağlantı 7 günde bir yenilenir.</p>
         </div>
         {% endif %}
+        {% if microsoft_ayarli %}
+        <div class="row orta kaynak googleSatir" id="msSatir">
+          <div class="tile t-outlook">{{ i.ikon('microsoft', 17, 2) }}</div>
+          <div class="kim"><div class="lbl">Microsoft hesabı</div><div class="durum" id="msDurum">Bağlı değil</div><div class="meta" id="msMeta">Şirket hesabında yönetici onayı istenebilir</div></div>
+          <div class="googleEylem">
+            <a class="link" id="msBaglan" href="/oauth/microsoft/basla?donus=/ayarlar">Microsoft ile bağlan</a>
+            <button type="button" class="link tehlike" id="msKaldir" hidden>Bağlantıyı kaldır</button>
+          </div>
+        </div>
+        <p class="serit sari googleSerit" id="msHata" role="alert" hidden></p>
+        <p class="serit turuncu googleSerit" id="msYenile" hidden><span>Microsoft bağlantısı yenilenmeli —</span><a class="link" href="/oauth/microsoft/basla?donus=/ayarlar">Yeniden bağlan</a></p>
+        <div class="row dikey googleNot" id="msNot" hidden>
+          <p class="kayitli" id="msNotMetni">Hesabından tamamen kaldırmak için account.microsoft.com → Gizlilik → Uygulamalar.</p>
+        </div>
+        <div class="row orta kaynak" id="outlookSatir" data-ms-satir hidden>
+          <div class="tile t-outlook">{{ i.ikon('zarf', 17) }}</div>
+          <div class="kim"><div class="lbl">Outlook</div><div class="durum" id="outlookDurum">Microsoft ile bağlanınca</div></div>
+          <input type="checkbox" class="sw" id="kaynak_outlook" data-kaynak="outlook" data-ms="1" aria-label="Outlook'u tara" disabled>
+        </div>
+        <div class="row orta kaynak" id="msTakvimSatir" data-ms-satir hidden>
+          <div class="tile t-takvim">{{ i.ikon('takvim', 17) }}</div>
+          <div class="kim"><div class="lbl">Takvim<span class="saglayici">Microsoft</span></div><div class="durum" id="outlook_takvimDurum">Microsoft ile bağlanınca</div></div>
+          <input type="checkbox" class="sw" id="kaynak_outlook_takvim" data-kaynak="outlook_takvim" data-ms="1" aria-label="Outlook takvimini tara" disabled>
+        </div>
+        <div class="row orta kaynak" id="onedriveSatir" data-ms-satir hidden>
+          <div class="tile t-onedrive">{{ i.ikon('belge', 17) }}</div>
+          <div class="kim"><div class="lbl">OneDrive</div><div class="durum" id="onedriveDurum">Microsoft ile bağlanınca</div></div>
+          <input type="checkbox" class="sw" id="kaynak_onedrive" data-kaynak="onedrive" data-ms="1" aria-label="OneDrive'ı tara" disabled>
+        </div>
+        {% endif %}
         <div class="row orta kaynak">
           <div class="tile t-gmail">{{ i.ikon('zarf', 17) }}</div>
           <div class="kim"><div class="lbl">Gmail</div><div class="durum" id="gmailDurum">Kapalı</div></div>
@@ -197,12 +230,12 @@ input[type=time]{width:124px; font-weight:600; flex:none}
         {% if google_ayarli %}
         <div class="row orta kaynak" id="takvimSatir">
           <div class="tile t-takvim">{{ i.ikon('takvim', 17) }}</div>
-          <div class="kim"><div class="lbl">Takvim</div><div class="durum" id="takvimDurum">Google ile bağlanınca</div></div>
+          <div class="kim"><div class="lbl">Takvim<span class="saglayici">Google</span></div><div class="durum" id="takvimDurum">Google ile bağlanınca</div></div>
           <input type="checkbox" class="sw" id="kaynak_takvim" data-kaynak="takvim" data-google="1" aria-label="Takvimi tara" disabled>
         </div>
         <div class="row orta kaynak" id="driveSatir">
           <div class="tile t-drive">{{ i.ikon('belge', 17) }}</div>
-          <div class="kim"><div class="lbl">Drive</div><div class="durum" id="driveDurum">Google ile bağlanınca</div></div>
+          <div class="kim"><div class="lbl">Drive<span class="saglayici">Google</span></div><div class="durum" id="driveDurum">Google ile bağlanınca</div></div>
           <input type="checkbox" class="sw" id="kaynak_drive" data-kaynak="drive" data-google="1" aria-label="Drive'ı tara" disabled>
         </div>
         {% endif %}
@@ -434,6 +467,33 @@ function kaynakDurumu(){
   else if (t.github_ok) durumYaz($('githubDurum'), 'ok', 'Bağlı · ' + parca(t.sonuc, 'GitHub'));
   else durumYaz($('githubDurum'), 'hata', parca(t.sonuc, 'GitHub') || 'Bağlanamadı');
   googleDurumu();
+  microsoftDurumu();
+}
+
+// --- Microsoft hesabı satırı: bağlı değil (yönetici onayı notu) / bağlı (e-posta) / yenilenmeli; Outlook, Takvim, OneDrive ---
+function microsoftDurumu(){
+  if (!$('msSatir')) return;
+  const m = (sonAyar && sonAyar.microsoft) || {};
+  const yenile = m.bagli && m.durum === 'yenile';
+  $('msBaglan').hidden = !!m.bagli;  // yenilenmeliyse "Yeniden bağlan" turuncu şeritte
+  $('msKaldir').hidden = !m.bagli;
+  $('msMeta').hidden = !!m.bagli;
+  $('msYenile').hidden = !yenile;
+  if (m.bagli) { $('msNot').hidden = true; $('msHata').hidden = true; }
+  document.querySelectorAll('[data-ms-satir]').forEach(s => s.hidden = !m.bagli);
+  if (!m.bagli) durumYaz($('msDurum'), '', 'Bağlı değil');
+  else if (yenile) durumYaz($('msDurum'), 'hata', `${m.eposta} · bağlantı yenilenmeli`);
+  else durumYaz($('msDurum'), 'ok', `Bağlı · ${m.eposta}`);
+  ['outlook', 'outlook_takvim', 'onedrive'].forEach(k => {
+    const sw = $('kaynak_' + k), izin = !!(m.bagli && m.kapsamlar && m.kapsamlar[k]);
+    sw.disabled = !izin;
+    if (!izin) sw.checked = false;
+    const durum = $(k + 'Durum');
+    if (!izin) { durumYaz(durum, 'izinsiz', ''); durum.append(el('span', 'izinYok', 'izin verilmedi')); }
+    else if (!sw.checked) durumYaz(durum, '', 'Kapalı · taranmıyor');
+    else if (yenile) durumYaz(durum, 'hata', 'Microsoft bağlantısı yenilenmeli');
+    else durumYaz(durum, 'ok', 'Microsoft hesabıyla');
+  });
 }
 
 // --- Google hesabı satırı: bağlı değil / bağlı (e-posta, geçerlilik) / yenilenmeli; Takvim ve Drive anahtarları ---
@@ -631,10 +691,34 @@ if ($('googleKaldir')) $('googleKaldir').onclick = async () => {
   else hataGoster('Google bağlanamadı: ' + (q.get('neden') || 'bilinmeyen hata'));
   history.replaceState(null, '', location.pathname);
 })();
+if ($('msKaldir')) $('msKaldir').onclick = async () => {
+  if (!confirm('Microsoft bağlantısı kaldırılsın mı? Outlook, Takvim ve OneDrive taranmaz.')) return;
+  $('msKaldir').disabled = true;
+  try {
+    const r = await istek('/oauth/microsoft/kaldir', { method:'POST' });
+    doldur(r); hataGoster(''); toast('Microsoft bağlantısı kaldırıldı');
+    if (r.bilgi) { $('msNotMetni').textContent = r.bilgi + '.'; $('msNot').hidden = false; }
+  } catch (err) { hataGoster(err.message); }
+  finally { $('msKaldir').disabled = false; }
+};
+// ?microsoft=bagli | hata&neden=… — neden (ör. yönetici onayı) Microsoft satırının altında kalır
+(() => {
+  const q = new URLSearchParams(location.search), sonuc = q.get('microsoft');
+  if (!sonuc) return;
+  if (sonuc === 'bagli') toast('Microsoft bağlandı');
+  else {
+    const metin = 'Microsoft bağlanamadı: ' + (q.get('neden') || 'bilinmeyen hata');
+    if ($('msHata')) { $('msHata').textContent = metin; $('msHata').hidden = false; } else hataGoster(metin);
+  }
+  history.replaceState(null, '', location.pathname);
+})();
 
 // ---------------------------------------------------------------- rapor kategorileri, karıştırma, biçim
-const KAYNAK_ADLARI = { gmail:'Gmail', github:'GitHub', medusa:'MEDUSA', takvim:'Takvim', drive:'Drive' };
-const PIL_KAYNAKLARI = {{ (['gmail', 'github', 'medusa'] + (['takvim', 'drive'] if google_ayarli else []))|tojson }};
+const KAYNAK_ADLARI = { gmail:'Gmail', outlook:'Outlook', github:'GitHub', medusa:'MEDUSA', takvim:'Takvim', drive:'Drive', onedrive:'OneDrive' };
+// Takvim tek pil: Google ve Microsoft toplantılarını birlikte kapsar.
+const PIL_KAYNAKLARI = {{ (['gmail'] + (['outlook'] if microsoft_ayarli else []) + ['github', 'medusa']
+  + (['takvim'] if google_ayarli or microsoft_ayarli else []) + (['drive'] if google_ayarli else [])
+  + (['onedrive'] if microsoft_ayarli else []))|tojson }};
 const SISTEM_ACIKLAMA = { devam:'Devam eden işler buraya düşer', onemli:'Yıldızlı maddeler buraya düşer' };
 let kategoriler = [], acikKategori = null, yeniKategori = false, kategoriSiralayici = null;
 function el(etiket, sinif, metin){ const e=document.createElement(etiket); if(sinif) e.className=sinif; if(metin!==undefined) e.textContent=metin; return e; }

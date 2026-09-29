@@ -93,6 +93,12 @@ class KullaniciAyari(Temel):
     google_baglanti: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # onay anı
     google_durum: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'bagli' | 'yenile' | None
     google_kapsamlar: Mapped[list | None] = mapped_column(JSON, nullable=True)  # verilen scope adresleri
+    # M1: Microsoft OAuth (Graph). Google'la aynı düzen; refresh token her yenilemede dönebilir (rotasyon).
+    ms_refresh_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ms_eposta: Mapped[str | None] = mapped_column(String(254), nullable=True)  # /me: mail || userPrincipalName
+    ms_baglanti: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # onay anı
+    ms_durum: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'bagli' | 'yenile' | None
+    ms_kapsamlar: Mapped[list | None] = mapped_column(JSON, nullable=True)  # verilen scope adları
     # O1: rapor otomatik_saat'e kadar kopyalanmazsa tikli maddeler patron_eposta'ya gider (günler = hatirlatma_gunler).
     otomatik_gonder: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     otomatik_saat: Mapped[time] = mapped_column(Time, default=time(18, 30))
@@ -280,6 +286,11 @@ EK_KOLONLAR = [
     ("user_settings", "otomatik_kopya_bana", "BOOLEAN NOT NULL DEFAULT true", "BOOLEAN NOT NULL DEFAULT 1"),
     ("reports", "gonderim", "VARCHAR(10) NOT NULL DEFAULT 'elle'", "VARCHAR(10) NOT NULL DEFAULT 'elle'"),
     ("user_settings", "ad_eslemeleri", "JSON", "JSON"),
+    ("user_settings", "ms_refresh_enc", "TEXT", "TEXT"),
+    ("user_settings", "ms_eposta", "VARCHAR(254)", "VARCHAR(254)"),
+    ("user_settings", "ms_baglanti", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
+    ("user_settings", "ms_durum", "VARCHAR(10)", "VARCHAR(10)"),
+    ("user_settings", "ms_kapsamlar", "JSON", "JSON"),
 ]
 # Uzatılan VARCHAR kolonları (tablo, kolon, yeni uzunluk); sqlite uzunluğu zorlamadığı için yalnız Postgres'te.
 EK_GENISLETMELER = [

@@ -1,4 +1,4 @@
-"""Oturum çerezi, istek başına kullanıcı bağımlılıkları ve Google OAuth'un state/PKCE çerezi."""
+"""Oturum çerezi, istek başına kullanıcı bağımlılıkları ve OAuth'un (Google, Microsoft) state/PKCE çerezi."""
 from __future__ import annotations
 
 import hashlib
@@ -71,24 +71,43 @@ def yonetici(kullanici: Kullanici = Depends(aktif_kullanici)) -> Kullanici:
     return kullanici
 
 
-# ---------------------------------------------------------------- Google OAuth: imzalı state + PKCE çerezi
+# ---------------------------------------------------------------- OAuth (Google, Microsoft): imzalı state + PKCE çerezi
 
+OAUTH_SAGLAYICILARI = ("google", "microsoft")
 GOOGLE_STATE_SURESI = 10 * 60  # sn
+MICROSOFT_STATE_SURESI = 10 * 60
 PKCE_CEREZ = "google_pkce"
-_google_imzaci = URLSafeTimedSerializer(
-    hashlib.sha256(b"google-oauth:" + guvenlik.GIZLI_ANAHTAR.encode()).hexdigest(), salt="google-oauth")
+MICROSOFT_PKCE_CEREZ = "microsoft_pkce"
 
 
-def google_state_uret(user_id: int, donus: str) -> tuple[str, str]:
+def _imzaci(saglayici: str) -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(
+        hashlib.sha256(f"{saglayici}-oauth:".encode() + guvenlik.GIZLI_ANAHTAR.encode()).hexdigest(), salt=f"{saglayici}-oauth")
+
+
+# Sağlayıcı başına ayrı imza: Google'ın state'i Microsoft dönüşünde (ya da tersi) geçmez.
+_imzacilar = {s: _imzaci(s) for s in OAUTH_SAGLAYICILARI}
+_google_imzaci = _imzacilar["google"]
+
+
+def _sure(saglayici: str) -> int:
+    return GOOGLE_STATE_SURESI if saglayici == "google" else MICROSOFT_STATE_SURESI
+
+
+def _pkce_cerezi(saglayici: str) -> str:
+    return PKCE_CEREZ if saglayici == "google" else MICROSOFT_PKCE_CEREZ
+
+
+def oauth_state_uret(saglayici: str, user_id: int, donus: str) -> tuple[str, str]:
     """(state, nonce). state kullanıcıyı, dönüş sayfasını ve nonce'u taşır; 10 dk geçerli."""
     nonce = secrets.token_urlsafe(16)
-    return _google_imzaci.dumps({"u": user_id, "n": nonce, "d": donus}, salt="state"), nonce
+    return _imzacilar[saglayici].dumps({"u": user_id, "n": nonce, "d": donus}, salt="state"), nonce
 
 
-def google_state_coz(state: str) -> dict | None:
+def oauth_state_coz(saglayici: str, state: str) -> dict | None:
     """Sahte, bozuk ya da süresi geçmiş state → None."""
     try:
-        veri = _google_imzaci.loads(state or "", salt="state", max_age=GOOGLE_STATE_SURESI)
+        veri = _imzacilar[saglayici].loads(state or "", salt="state", max_age=_sure(saglayici))
     except BadSignature:
         return None
     if not isinstance(veri, dict) or not isinstance(veri.get("u"), int) or not isinstance(veri.get("n"), str):
@@ -96,22 +115,44 @@ def google_state_coz(state: str) -> dict | None:
     return veri
 
 
-def pkce_cerezi_yaz(yanit: Response, nonce: str, dogrulayici: str) -> None:
-    """code_verifier tarayıcıda, imzalı ve yalnız /oauth/google yolunda; Google'a giden adreste yer almaz."""
+def oauth_pkce_yaz(saglayici: str, yanit: Response, nonce: str, dogrulayici: str) -> None:
+    """code_verifier tarayıcıda, imzalı ve yalnız /oauth/<sağlayıcı> yolunda; sağlayıcıya giden adreste yer almaz."""
     yanit.set_cookie(
-        PKCE_CEREZ, _google_imzaci.dumps({"n": nonce, "v": dogrulayici}, salt="pkce"),
-        max_age=GOOGLE_STATE_SURESI, httponly=True, secure=bool(os.environ.get("RENDER")), samesite="lax",
-        path="/oauth/google",
+        _pkce_cerezi(saglayici), _imzacilar[saglayici].dumps({"n": nonce, "v": dogrulayici}, salt="pkce"),
+        max_age=_sure(saglayici), httponly=True, secure=bool(os.environ.get("RENDER")), samesite="lax",
+        path=f"/oauth/{saglayici}",
     )
 
 
-def pkce_cerezi_oku(request: Request) -> dict | None:
+def oauth_pkce_oku(saglayici: str, request: Request) -> dict | None:
     try:
-        veri = _google_imzaci.loads(request.cookies.get(PKCE_CEREZ) or "", salt="pkce", max_age=GOOGLE_STATE_SURESI)
+        veri = _imzacilar[saglayici].loads(request.cookies.get(_pkce_cerezi(saglayici)) or "", salt="pkce",
+                                           max_age=_sure(saglayici))
     except BadSignature:
         return None
     return veri if isinstance(veri, dict) and isinstance(veri.get("n"), str) and isinstance(veri.get("v"), str) else None
 
 
+def oauth_pkce_sil(saglayici: str, yanit: Response) -> None:
+    yanit.delete_cookie(_pkce_cerezi(saglayici), path=f"/oauth/{saglayici}")
+
+
+# G1 adları
+def google_state_uret(user_id: int, donus: str) -> tuple[str, str]:
+    return oauth_state_uret("google", user_id, donus)
+
+
+def google_state_coz(state: str) -> dict | None:
+    return oauth_state_coz("google", state)
+
+
+def pkce_cerezi_yaz(yanit: Response, nonce: str, dogrulayici: str) -> None:
+    oauth_pkce_yaz("google", yanit, nonce, dogrulayici)
+
+
+def pkce_cerezi_oku(request: Request) -> dict | None:
+    return oauth_pkce_oku("google", request)
+
+
 def pkce_cerezi_sil(yanit: Response) -> None:
-    yanit.delete_cookie(PKCE_CEREZ, path="/oauth/google")
+    oauth_pkce_sil("google", yanit)

@@ -37,3 +37,7 @@ services:
         sync: false
       - key: GOOGLE_TEST_MODU
         sync: false
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
+      - key: MICROSOFT_CLIENT_SECRET
+        sync: false

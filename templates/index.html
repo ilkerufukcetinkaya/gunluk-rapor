@@ -248,10 +248,10 @@ body.sesAcik{overflow:hidden}
   </div>
   <div class="cipler">
     <div class="chip"><b data-say="yapilan">0</b>yapılan</div>
-    <div class="chip" data-kaynak-cip="gmail" hidden><b data-say="eposta">0</b>e-posta</div>
+    <div class="chip" data-kaynak-cip="gmail outlook" hidden><b data-say="eposta">0</b>e-posta</div>
     <div class="chip" data-kaynak-cip="github" hidden><b data-say="commit">0</b>commit</div>
-    <div class="chip" data-kaynak-cip="takvim" data-sifirsa-gizle hidden><b data-say="toplanti">0</b>toplantı</div>
-    <div class="chip" data-kaynak-cip="drive" data-sifirsa-gizle hidden><b data-say="dosya">0</b>dosya</div>
+    <div class="chip" data-kaynak-cip="takvim outlook_takvim" data-sifirsa-gizle hidden><b data-say="toplanti">0</b>toplantı</div>
+    <div class="chip" data-kaynak-cip="drive onedrive" data-sifirsa-gizle hidden><b data-say="dosya">0</b>dosya</div>
     <div class="chip saat" id="saatCip">17:00</div>
   </div>
 </div>
@@ -260,6 +260,7 @@ body.sesAcik{overflow:hidden}
   <p class="uyari" id="loadError" role="alert" hidden></p>
   <p class="serit mavi" id="gecmisSerit" hidden><span id="gecmisMetin"></span><button class="link" type="button" data-eylem="bugune">Bugüne dön</button></p>
   <p class="serit sari" id="googleSerit" hidden><span id="googleMetin"></span><a class="link" id="googleEylem" href="/oauth/google/basla">Şimdi yenile</a></p>
+  <p class="serit turuncu" id="microsoftSerit" hidden><span id="microsoftMetin"></span><a class="link" id="microsoftEylem" href="/oauth/microsoft/basla">Yeniden bağlan</a></p>
   <p class="serit sari" id="kacirilanSerit" hidden><span id="kacirilanMetin"></span><button class="link" type="button" data-eylem="kacirilanAc">Aç ›</button><button class="link kapat" type="button" data-eylem="kacirilanKapat" aria-label="Kapat" title="Kapat">{{ i.ikon('carpi', 14, 2.4) }}</button></p>
   <p class="serit mavi" id="otomatikSerit" hidden><span id="otomatikSeritMetin"></span><button class="link" type="button" data-eylem="otomatikSimdi">Şimdi gönder</button><button class="link" type="button" data-eylem="otomatikIptal">Bugün iptal</button></p>
   <div class="bugun">
@@ -274,10 +275,10 @@ body.sesAcik{overflow:hidden}
         </div>
         <div class="cipler">
           <div class="beyazCip"><b data-say="yapilan">0</b>yapılan</div>
-          <div class="beyazCip" data-kaynak-cip="gmail" hidden><b data-say="eposta">0</b>e-posta</div>
+          <div class="beyazCip" data-kaynak-cip="gmail outlook" hidden><b data-say="eposta">0</b>e-posta</div>
           <div class="beyazCip" data-kaynak-cip="github" hidden><b data-say="commit">0</b>commit</div>
-          <div class="beyazCip" data-kaynak-cip="takvim" data-sifirsa-gizle hidden><b data-say="toplanti">0</b>toplantı</div>
-          <div class="beyazCip" data-kaynak-cip="drive" data-sifirsa-gizle hidden><b data-say="dosya">0</b>dosya</div>
+          <div class="beyazCip" data-kaynak-cip="takvim outlook_takvim" data-sifirsa-gizle hidden><b data-say="toplanti">0</b>toplantı</div>
+          <div class="beyazCip" data-kaynak-cip="drive onedrive" data-sifirsa-gizle hidden><b data-say="dosya">0</b>dosya</div>
           <button class="link" type="button" data-eylem="yenile" data-kaynak-cip="herhangi" hidden>{{ i.ikon('yenile', 14, 2.2) }}Yenile</button>
         </div>
       </div>
@@ -575,15 +576,18 @@ const raporMetni = m => m.rapor_metni || hamMetin(m);
 const aiKullaniliyor = m => !!(m.metin_ai && !m.kullanici_duzenledi && m.ai_kullan !== false);
 const beklemeEtiketi = n => n > 0 ? `${n} gündür` : 'bugün eklendi';
 // Açık kaynaklar: gmail → 'eposta', github → 'medusa', takvim → 'takvim', drive → 'drive' kaynaklı bulunanlar.
-const BULUNAN_KAYNAGI = { eposta:'gmail', medusa:'github', takvim:'takvim', drive:'drive' };
+// Toplantılar iki sağlayıcıdan da 'takvim' olarak gelir; Outlook ve OneDrive kendi kaynaklarıyla.
+const BULUNAN_KAYNAGI = { eposta:['gmail'], outlook:['outlook'], medusa:['github'], takvim:['takvim', 'outlook_takvim'],
+  drive:['drive'], onedrive:['onedrive'] };
 // bulunanın kutucuğu, ikonu ve meta satırındaki adı
 const BULUNAN_GORUNUM = {
   eposta: { tile:'t-gmail', ikon:'zarf', ad:() => 'Gmail' }, medusa: { tile:'t-git', ikon:'dal', ad:() => projeEtiketi() },
   takvim: { tile:'t-takvim', ikon:'takvim', ad:() => 'Takvim' }, drive: { tile:'t-drive', ikon:'belge', ad:() => 'Drive' },
+  outlook: { tile:'t-outlook', ikon:'zarf', ad:() => 'Outlook' }, onedrive: { tile:'t-onedrive', ikon:'belge', ad:() => 'OneDrive' },
 };
 const kaynakAcik = k => !!(S.ayarlar.kaynaklar || {})[k];
-const herhangiKaynak = () => Object.values(BULUNAN_KAYNAGI).some(kaynakAcik);
-const bulunanAcik = m => kaynakAcik(BULUNAN_KAYNAGI[m.kaynak] || 'gmail');
+const herhangiKaynak = () => Object.values(BULUNAN_KAYNAGI).flat().some(kaynakAcik);
+const bulunanAcik = m => (BULUNAN_KAYNAGI[m.kaynak] || ['gmail']).some(kaynakAcik);
 
 // --- günün düzeni: kategori bölümleri (sunucudan) + sayfadaki maddeler ---
 const katBul = id => S.duzen.kategoriler.find(k => k.id === id);
@@ -669,14 +673,9 @@ function renderGun(){
   $('yapilanBaslik').textContent = bugunMu() ? 'Bugün yapılanlar' : 'Yapılanlar';
   if (!bugunMu()) $('gecmisMetin').textContent = `${gunYazisi(iso, TR_TARIH)} ${gunYazisi(iso, TR_GUN)} raporunu düzenliyorsun ·`;
   const kapali = (() => { try { return localStorage.getItem(`gunluk-rapor-kacirilan-${KULLANICI_ID}`); } catch { return null; } })();
-  // Google bağlantısı: ≤ 24 saat kaldıysa sarı, süre dolduysa ya da yenilenmeliyse turuncu şerit
-  const g = (S.ayarlar.google || {}).uyari;
-  $('googleSerit').hidden = !g;
-  if (g){
-    $('googleSerit').className = 'serit ' + (g.tur === 'doldu' ? 'turuncu' : 'sari');
-    $('googleMetin').textContent = g.metin + ' ·';
-    $('googleEylem').textContent = g.eylem; $('googleEylem').href = g.adres;
-  }
+  // Google bağlantısı: ≤ 24 saat kaldıysa sarı, süre dolduysa ya da yenilenmeliyse turuncu şerit; Microsoft yalnız turuncu
+  baglantiSeridi('google', (S.ayarlar.google || {}).uyari);
+  baglantiSeridi('microsoft', (S.ayarlar.microsoft || {}).uyari);
   const kacirilanGoster = bugunMu() && S.kacirilan && kapali !== S.kacirilan;
   $('kacirilanSerit').hidden = !kacirilanGoster;
   if (kacirilanGoster){
@@ -686,20 +685,27 @@ function renderGun(){
       : `${gunAd} (${gunYazisi(S.kacirilan, TR_TARIH)}) raporu gönderilmedi ·`;
   }
 }
+function baglantiSeridi(onek, u){
+  $(onek + 'Serit').hidden = !u;
+  if (!u) return;
+  $(onek + 'Serit').className = 'serit ' + (u.tur === 'doldu' ? 'turuncu' : 'sari');
+  $(onek + 'Metin').textContent = u.metin + ' ·';
+  $(onek + 'Eylem').textContent = u.eylem; $(onek + 'Eylem').href = u.adres;
+}
 function renderStatus(){
   renderGun();
   const gorunen = S.bulunan.filter(it => !it.gizli);
   const sayilar = {
     yapilan: S.elle.filter(m => m.tikli).length,
-    eposta: gorunen.filter(it => it.kaynak === 'eposta').length,
+    eposta: gorunen.filter(it => it.kaynak === 'eposta' || it.kaynak === 'outlook').length,  // sağlayıcıdan bağımsız toplam
     commit: gorunen.filter(it => it.kaynak === 'medusa').length,
     toplanti: gorunen.filter(it => it.kaynak === 'takvim').length,
-    dosya: gorunen.filter(it => it.kaynak === 'drive').length,
+    dosya: gorunen.filter(it => it.kaynak === 'drive' || it.kaynak === 'onedrive').length,
   };
   document.querySelectorAll('[data-say]').forEach(e => e.textContent = sayilar[e.dataset.say]);
   // toplantı ve dosya çipleri 0 iken görünmez
   document.querySelectorAll('[data-kaynak-cip]').forEach(e => e.hidden = e.dataset.kaynakCip === 'herhangi' ? !herhangiKaynak()
-    : !kaynakAcik(e.dataset.kaynakCip) || ('sifirsaGizle' in e.dataset && !Number(e.querySelector('[data-say]').textContent)));
+    : !e.dataset.kaynakCip.split(' ').some(kaynakAcik) || ('sifirsaGizle' in e.dataset && !Number(e.querySelector('[data-say]').textContent)));
   if (S.tarih) { $('bulunanBlok').hidden = !herhangiKaynak(); $('kaynakIpucu').hidden = herhangiKaynak(); }
   // seçili günün kopyalama durumu; geçmiş günde hatırlatma saati anlamsız
   const saat = bugunMu() ? (S.ayarlar.hatirlatma_saat || '17:00') : '';
@@ -1119,8 +1125,9 @@ function renderFound(){
 
 async function loadFound(force){
   if (!herhangiKaynak()) return;  // hiç kaynak açık değil: taranacak bir şey yok
-  const adlar = [kaynakAcik('gmail') && 'Gmail', kaynakAcik('github') && projeEtiketi(),
-    kaynakAcik('takvim') && 'Takvim', kaynakAcik('drive') && 'Drive'].filter(Boolean);
+  const adlar = [kaynakAcik('gmail') && 'Gmail', kaynakAcik('outlook') && 'Outlook', kaynakAcik('github') && projeEtiketi(),
+    (kaynakAcik('takvim') || kaynakAcik('outlook_takvim')) && 'Takvim', kaynakAcik('drive') && 'Drive',
+    kaynakAcik('onedrive') && 'OneDrive'].filter(Boolean);
   const adYazisi = adlar.length > 1 ? adlar.slice(0, -1).join(', ') + ' ve ' + adlar[adlar.length - 1] : adlar[0];
   $('foundStatus').textContent = `${adYazisi} taranıyor…`; $('foundStatus').hidden = false;
   dugmeleriKilitle('yenile', true);
@@ -1132,6 +1139,7 @@ async function loadFound(force){
     const errs = $('foundErrors'); errs.innerHTML = '';
     (d.hatalar || []).forEach(h => {
       if (h.kaynak === 'google' && h.mesaj === 'Google bağlantısı yenilenmeli') return;  // turuncu şerit gösteriyor
+      if (h.kaynak === 'microsoft' && h.mesaj === 'Microsoft bağlantısı yenilenmeli') return;
       const p = el('p', 'uyari', h.mesaj);
       if (/\(Ayarlar\)$/.test(h.mesaj)) { p.textContent = h.mesaj.replace(/\(Ayarlar\)$/, '('); const a=document.createElement('a'); a.href='/ayarlar'; a.textContent='Ayarlar'; p.append(a, ')'); }
       errs.appendChild(p);

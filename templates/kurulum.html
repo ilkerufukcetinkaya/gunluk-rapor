@@ -46,7 +46,16 @@ main{max-width:640px; gap:14px}
 .googleYol{gap:10px}
 .googleYol .primary{width:100%}
 .googleYol .link{align-self:center; padding:4px 10px}
-#googleSonuc{font-size:13px; margin:0; color:var(--ok-ink)}
+#googleSonuc, #msSonuc{font-size:13px; margin:0; color:var(--ok-ink)}
+/* Google ve Microsoft düğmeleri yan yana; ikisi birlikteyse dar ekranda kısa etiket */
+.baglanIkili{display:flex; gap:10px}
+.baglanIkili button{flex:1; min-width:0; padding:0 10px; gap:7px}
+.baglanIkili .etiket{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.baglanIkili .kisa{display:none}
+@media (max-width:560px){
+  .baglanIkili.ikili .uzun{display:none}
+  .baglanIkili.ikili .kisa{display:inline}
+}
 
 /* sürekli işler adımı */
 .grup > .lbl{padding:14px 14px 4px; font-size:13px; font-weight:700; color:var(--ink-2)}
@@ -137,23 +146,28 @@ label.row{cursor:pointer}
   <!-- 2) Gmail -->
   <section class="card adim" data-adim="1" aria-labelledby="b1" hidden>
     <div class="ust">
-      {% if google_ayarli %}
-      <h2 id="b1">Google hesabını bağla</h2>
+      {% if google_ayarli or microsoft_ayarli %}
+      <h2 id="b1">{% if google_ayarli and microsoft_ayarli %}Hesabını bağla{% elif google_ayarli %}Google hesabını bağla{% else %}Microsoft hesabını bağla{% endif %}</h2>
       <p class="hint">Gönderdiğin e-postalar, katıldığın toplantılar ve üzerinde çalıştığın dosyalar rapora kendiliğinden düşer. Yalnız okuma izni istenir.</p>
       {% else %}
       <h2 id="b1">Gmail'i bağla</h2>
       <p class="hint">Gün içinde gönderdiğin e-postalar rapora kendiliğinden düşer. Yalnız Gönderilmiş klasörü okunur.</p>
       {% endif %}
     </div>
-    {% if google_ayarli %}
+    {% if google_ayarli or microsoft_ayarli %}
     <div class="row dikey googleYol" id="googleYol">
-      <button type="button" class="primary" id="googleBaglan">{{ i.ikon('google', 17, 2.4) }}<span class="etiket">Google ile bağlan</span></button>
+      <div class="baglanIkili{% if google_ayarli and microsoft_ayarli %} ikili{% endif %}">
+        {% if google_ayarli %}<button type="button" class="primary" id="googleBaglan" aria-label="Google ile bağlan">{{ i.ikon('google', 17, 2.4) }}<span class="etiket"><span class="uzun">Google ile bağlan</span><span class="kisa">Google</span></span></button>{% endif %}
+        {% if microsoft_ayarli %}<button type="button" class="primary" id="msBaglan" aria-label="Microsoft ile bağlan">{{ i.ikon('microsoft', 16, 2) }}<span class="etiket"><span class="uzun">Microsoft ile bağlan</span><span class="kisa">Microsoft</span></span></button>{% endif %}
+      </div>
       <p id="googleSonuc" aria-live="polite" hidden></p>
-      <p class="hint">Google 'uygulama doğrulanmadı' uyarısı gösterebilir: Gelişmiş → Günlük Rapor'a git. Test sürecinde bağlantı 7 günde bir yenilenir.</p>
+      <p id="msSonuc" aria-live="polite" hidden></p>
+      {% if google_ayarli %}<p class="hint">Google 'uygulama doğrulanmadı' uyarısı gösterebilir: Gelişmiş → Günlük Rapor'a git. Test sürecinde bağlantı 7 günde bir yenilenir.</p>{% endif %}
+      {% if microsoft_ayarli %}<p class="hint">Şirket hesabında yönetici onayı istenebilir.</p>{% endif %}
       <button type="button" class="link soluk" id="sifreyleBaglan" aria-expanded="false" aria-controls="sifreYolu">Uygulama şifresiyle bağlan</button>
     </div>
     {% endif %}
-    <div class="gmailIzgara" id="sifreYolu"{% if google_ayarli %} hidden{% endif %}>
+    <div class="gmailIzgara" id="sifreYolu"{% if google_ayarli or microsoft_ayarli %} hidden{% endif %}>
       <div class="form">
         <div class="row dikey">
           <label class="alan" for="gmail_kullanici">Gmail adresi</label>
@@ -368,22 +382,36 @@ $('test').onclick = async () => {
   finally { $('test').disabled = false; }
 };
 
-// Google ile bağlan: onay sonrası /kurulum?google=… adresine, bu adıma dönülür.
-if ($('googleBaglan')) {
-  $('googleBaglan').onclick = () => { $('googleBaglan').disabled = true; location.href = '/oauth/google/basla?donus=/kurulum'; };
+// Hesap bağlama düğmeleri: onay sonrası /kurulum?google=… (ya da ?microsoft=…) adresine, bu adıma dönülür.
+if ($('googleBaglan')) $('googleBaglan').onclick = () => { $('googleBaglan').disabled = true; location.href = '/oauth/google/basla?donus=/kurulum'; };
+if ($('msBaglan')) $('msBaglan').onclick = () => { $('msBaglan').disabled = true; location.href = '/oauth/microsoft/basla?donus=/kurulum'; };
+if ($('sifreyleBaglan')) {
   $('sifreyleBaglan').onclick = () => {
     const ac = $('sifreYolu').hidden;
     $('sifreYolu').hidden = !ac; $('sifreyleBaglan').setAttribute('aria-expanded', ac);
     if (ac) $('gmail_sifre').focus();
   };
 }
+// Bağlı ya da yenilenmeli hesabın düğmesi: uzun etiket geniş ekranda, kısa etiket (ikon + sağlayıcı yanında) dar ekranda
+function etiketYaz(dugme, uzun, kisa){
+  dugme.querySelector('.uzun').textContent = uzun; dugme.querySelector('.kisa').textContent = kisa;
+  dugme.setAttribute('aria-label', uzun);
+}
 function googleDurumuYaz(g){
   if (!$('googleBaglan') || !g || !g.bagli) return;
   const yenile = g.durum === 'yenile';
-  $('googleBaglan').querySelector('.etiket').textContent = yenile ? 'Google ile yeniden bağlan' : 'Başka Google hesabıyla bağlan';
+  etiketYaz($('googleBaglan'), yenile ? 'Google ile yeniden bağlan' : 'Başka Google hesabıyla bağlan', yenile ? 'Yeniden bağlan' : 'Başka hesap');
   $('googleBaglan').className = yenile ? 'primary' : 'secondary';
   $('googleSonuc').textContent = yenile ? '' : `Google bağlı: ${g.eposta}. Devam edebilirsin.`;
   $('googleSonuc').hidden = yenile;
+}
+function microsoftDurumuYaz(m){
+  if (!$('msBaglan') || !m || !m.bagli) return;
+  const yenile = m.durum === 'yenile';
+  etiketYaz($('msBaglan'), yenile ? 'Microsoft ile yeniden bağlan' : 'Başka Microsoft hesabıyla bağlan', yenile ? 'Yeniden bağlan' : 'Başka hesap');
+  $('msBaglan').className = yenile ? 'primary' : 'secondary';
+  $('msSonuc').textContent = yenile ? '' : `Microsoft bağlı: ${m.eposta}. Devam edebilirsin.`;
+  $('msSonuc').hidden = yenile;
 }
 
 // ---------------------------------------------------------------- 3) sürekli işler
@@ -489,15 +517,18 @@ $('pushAc').onclick = async () => {
     $('epostaMeta').textContent = `Kendi Gmail'inden ${a.hatirlatma_eposta_adres || bilgi.eposta} adresine gönderilir`;
     sablonlariCiz();
     googleDurumuYaz(a.google);
+    microsoftDurumuYaz(a.microsoft);
     // uygulama şifresi zaten kayıtlıysa o yol açık gelir
     if ($('sifreYolu') && a.gmail_sifre_kayitli) { $('sifreYolu').hidden = false; $('sifreyleBaglan').setAttribute('aria-expanded', 'true'); }
   } catch (err) { hataGoster('Bilgiler yüklenemedi: ' + err.message); }
-  // Google onayından dönüş: kaldığı adımdan (Google adımı) devam
-  const q = new URLSearchParams(location.search), google = q.get('google');
-  if (google) history.replaceState(null, '', location.pathname);
-  goster(google ? 1 : 0);
+  // Google / Microsoft onayından dönüş: kaldığı adımdan (hesap adımı) devam
+  const q = new URLSearchParams(location.search), google = q.get('google'), ms = q.get('microsoft');
+  if (google || ms) history.replaceState(null, '', location.pathname);
+  goster(google || ms ? 1 : 0);
   if (google === 'bagli') toast('Google bağlandı');
   else if (google) hataGoster('Google bağlanamadı: ' + (q.get('neden') || 'bilinmeyen hata'));
+  if (ms === 'bagli') toast('Microsoft bağlandı');
+  else if (ms) hataGoster('Microsoft bağlanamadı: ' + (q.get('neden') || 'bilinmeyen hata'));
 })();
 </script>
 </body>

@@ -1,6 +1,6 @@
 # Günlük rapor
 
-Patrona WhatsApp'tan gönderilen günlük raporu hazırlayan küçük web servisi. Her kullanıcının kendi hesabı, Gmail/GitHub ayarları ve maddeleri sunucuda durur. Bugün gönderilen iş e-postalarını (Gmail), toplantıları (Google Takvim), üzerinde çalışılan dosyaları (Google Drive) ve projenin bugünkü commit'lerini (GitHub) tarar, rapor maddesi önerir; tikle, düzenle, kopyala. Maddeler tek Claude çağrısıyla yazım ve üslup yönünden düzeltilir (orijinal saklanır, geri alınabilir). Kopyalanan raporlar geçmişte birikir; geçmişten haftalık özet üretilir. Gönderim elle yapılır; rapor kopyalanmamışsa ayarlanan saatte (varsayılan hafta içi 17:00) telefona bildirim ve e-posta ile hatırlatılır.
+Patrona WhatsApp'tan gönderilen günlük raporu hazırlayan küçük web servisi. Her kullanıcının kendi hesabı, Gmail/GitHub ayarları ve maddeleri sunucuda durur. Bugün gönderilen iş e-postalarını (Gmail, Outlook), toplantıları (Google Takvim, Outlook/Teams), üzerinde çalışılan dosyaları (Google Drive, OneDrive) ve projenin bugünkü commit'lerini (GitHub) tarar, rapor maddesi önerir; tikle, düzenle, kopyala. Maddeler tek Claude çağrısıyla yazım ve üslup yönünden düzeltilir (orijinal saklanır, geri alınabilir). Kopyalanan raporlar geçmişte birikir; geçmişten haftalık özet üretilir. Gönderim elle yapılır; rapor kopyalanmamışsa ayarlanan saatte (varsayılan hafta içi 17:00) telefona bildirim ve e-posta ile hatırlatılır.
 
 ## Çalıştırma
 
@@ -26,6 +26,7 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `EPOSTA_GONDEREN` | Gönderen adresi, varsayılan `rapor@medusarights.com`; Resend'de doğrulanmış alan adından olmalı |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google OAuth istemcisi (Web application). Biri bile yoksa "Google ile bağlan" arayüzü hiç görünmez |
 | `GOOGLE_TEST_MODU` | Varsayılan `1`: OAuth uygulaması Google'da test modunda, bağlantı 7 günde düşer; son 24 saatte uyarılır. Yayın moduna geçince `0` |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | Microsoft Entra uygulama kaydı (çok kiracılı + kişisel hesaplar). Biri bile yoksa "Microsoft ile bağlan" arayüzü hiç görünmez |
 
 Tablolar açılışta otomatik oluşur; sonradan eklenen kolon ve indeksler de açılışta idempotent olarak eklenir (`veritabani.sema_guncelle`, ayrı migration aracı yok).
 
@@ -63,6 +64,19 @@ Kullanıcı tek onayla Gmail (gönderilenler), Google Takvim (katıldığı topl
 
 Akış: Ayarlar › Kaynaklar › **Google ile bağlan** (ya da kurulum sihirbazının 2. adımı) → Google onayı → `/oauth/google/geri`. Refresh token `GIZLI_ANAHTAR` ile şifrelenip saklanır, access token yalnız bellekte tutulur. Google hesabı bağlıyken Gmail REST ile okunur; uygulama şifresi yedek yoldur ve Google bağlantısı yenilenmeliyse ona düşülür. Test modunda Google refresh token'ı 7 gün sonra geçersiz kılar: son 24 saatte Bugün sayfasında sarı şerit ve hatırlatmada uyarı, süre dolunca turuncu şerit çıkar; **Yeniden bağlan** yeni 7 gün başlatır. **Bağlantıyı kaldır** izni Google'da da geri alır.
 
+## Microsoft ile bağlan (Outlook, Takvim/Teams, OneDrive)
+
+Kullanıcı tek onayla Outlook'u (Gönderilmiş Öğeler), Outlook takvimini (Teams toplantıları dahil) ve OneDrive/SharePoint'te değiştirdiği dosyaların adlarını salt okunur bağlar. Microsoft kütüphanesi yok; OAuth 2.0 + PKCE (v2.0 uç noktaları, kiracı `common`) ve Microsoft Graph REST çağrıları `httpx` ile.
+
+1. [entra.microsoft.com](https://entra.microsoft.com) → **App registrations › New registration**: ad "Günlük Rapor", hesap türü **Accounts in any organizational directory and personal Microsoft accounts**, platform **Web**, Redirect URI `https://gunluk-rapor.onrender.com/oauth/microsoft/geri`; ardından **Authentication**'dan `http://localhost:8765/oauth/microsoft/geri` de eklenir.
+2. **API permissions › Microsoft Graph › Delegated**: `openid`, `email`, `offline_access`, `User.Read`, `Mail.Read`, `Calendars.Read`, `Files.Read`.
+3. **Certificates & secrets › New client secret**: değeri (Secret ID değil) Render'da ve yerelde `.env`'de `MICROSOFT_CLIENT_SECRET`, **Overview**'daki Application (client) ID'yi `MICROSOFT_CLIENT_ID` olarak girin. Sırrın bitiş tarihini not edin; dolunca bağlantılar "Microsoft token vermedi" hatası verir.
+4. Yönlendirme adresi `APP_URL + /oauth/microsoft/geri`'dir; localhost'tan açıldığında ya da `APP_URL` yoksa isteğin kökü kullanılır.
+
+Akış: Ayarlar › Kaynaklar › **Microsoft ile bağlan** (ya da kurulum sihirbazının 2. adımı) → Microsoft hesap seçimi ve onayı → `/oauth/microsoft/geri`. E-posta `/me`'den (`mail`, yoksa `userPrincipalName`) alınır. Refresh token `GIZLI_ANAHTAR` ile şifrelenip saklanır; Microsoft yenilemede yeni refresh token dönerse kayıt güncellenir, access token yalnız bellekte tutulur. Refresh `invalid_grant` dönerse bağlantı "yenilenmeli" olur: Microsoft kaynakları atlanır, Bugün'de turuncu şerit ve hatırlatmada satır çıkar (Google'daki 7 günlük test süresi Microsoft'ta yok). Şirket kiracısı kullanıcı onayını kapatmışsa (AADSTS65001 / yönetici onayı) kullanıcıya BT'den onay istemesi söylenir; yönetici Entra'da **Enterprise applications › Günlük Rapor › Permissions › Grant admin consent** ile bir kez onaylar. **Bağlantıyı kaldır** yalnız bizdeki kaydı siler (Graph'ta geri alma ucu yok); hesaptan tamamen kaldırmak için account.microsoft.com → Gizlilik → Uygulamalar.
+
+Maddeler Google'dakiyle aynı kurallarla üretilir: Outlook e-postaları Gmail'le aynı gruplama, kendi şirketi ve not (`rapor:` / `not:`) kurallarından geçer (kaynak `outlook`, kaynak_id `ms-` önekli: Gmail'le aynı konu çakışmaz); toplantılar kaynak `takvim` (Teams'te "… Teams toplantısı yapıldı"); OneDrive dosyaları kaynak `onedrive`, tür uzantıdan. Kategori pillerinde "Outlook", "Takvim" (iki sağlayıcı) ve "OneDrive" vardır; Outlook ya da OneDrive için kategori seçilmemişse Gmail'in / Drive'ın kategorisine düşer.
+
 ## E-posta gönderimi (Resend)
 
 Render free planı giden SMTP portlarını kapatıyor (`OSError`), bu yüzden sistem e-postaları HTTPS ile Resend üzerinden gider.
@@ -88,6 +102,7 @@ Render free planı giden SMTP portlarını kapatıyor (`OSError`), bu yüzden si
 - `GET /api/bugun` bugünkü öneriler (kullanıcı başına günde bir tarama, `?yenile=1` ile yeniden)
 - `GET/PUT /api/ayarlar`, `POST /api/ayarlar/test`, `POST /api/ice-aktar`
 - `GET /oauth/google/basla?donus=/ayarlar|/kurulum` Google onayına yönlendirir · `GET /oauth/google/geri` dönüş (state + PKCE doğrulanır) · `POST /oauth/google/kaldir`
+- `GET /oauth/microsoft/basla?donus=/ayarlar|/kurulum` · `GET /oauth/microsoft/geri` · `POST /oauth/microsoft/kaldir` (yanıtta `bilgi`: hesaptan kaldırma notu)
 - `GET /api/push/anahtar`, `GET/POST /api/push/abone`, `DELETE /api/push/abone/{id}`, `POST /api/push/dene` bu kullanıcının cihazlarına test bildirimi
 - `POST /api/hatirlat?token=` ya da `Authorization: Bearer` — oturumsuz cron ucu, yanlış token 401
 - `GET /api/saglik` (korumasız) `{"ok", "son_hatirlat_ping"}` · `/sw.js` ve `/static/*` (PWA; ikonlar `ikon_uret.py` ile üretilir)

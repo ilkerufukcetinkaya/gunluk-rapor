@@ -415,6 +415,8 @@ def test_sema_guncelle_hatirlatma_iki_kez(tmp_path):
         "user_settings.google_durum", "user_settings.google_kapsamlar",
         "user_settings.otomatik_gonder", "user_settings.otomatik_saat", "user_settings.patron_eposta",
         "user_settings.patron_adi", "user_settings.otomatik_kopya_bana", "user_settings.ad_eslemeleri",
+        "user_settings.ms_refresh_enc", "user_settings.ms_eposta", "user_settings.ms_baglanti",
+        "user_settings.ms_durum", "user_settings.ms_kapsamlar",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:
