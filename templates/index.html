@@ -262,6 +262,7 @@ body.sesAcik{overflow:hidden}
   <p class="serit sari" id="googleSerit" hidden><span id="googleMetin"></span><a class="link" id="googleEylem" href="/oauth/google/basla">Şimdi yenile</a></p>
   <p class="serit turuncu" id="microsoftSerit" hidden><span id="microsoftMetin"></span><a class="link" id="microsoftEylem" href="/oauth/microsoft/basla">Yeniden bağlan</a></p>
   <p class="serit sari" id="kacirilanSerit" hidden><span id="kacirilanMetin"></span><button class="link" type="button" data-eylem="kacirilanAc">Aç ›</button><button class="link kapat" type="button" data-eylem="kacirilanKapat" aria-label="Kapat" title="Kapat">{{ i.ikon('carpi', 14, 2.4) }}</button></p>
+  <p class="serit mavi" id="ozetSerit" hidden><span id="ozetSeritMetin"></span><a class="link" id="ozetSeritAc" href="/gecmis#aylik">Aç</a><button class="link kapat" type="button" data-eylem="ozetSeritKapat" aria-label="Kapat" title="Kapat">{{ i.ikon('carpi', 14, 2.4) }}</button></p>
   <p class="serit mavi" id="otomatikSerit" hidden><span id="otomatikSeritMetin"></span><button class="link" type="button" data-eylem="otomatikSimdi">Şimdi gönder</button><button class="link" type="button" data-eylem="otomatikIptal">Bugün iptal</button></p>
   <div class="bugun">
     <div class="solKolon">
@@ -684,6 +685,24 @@ function renderGun(){
       ? `Dünkü (${gunAd}) rapor gönderilmedi ·`
       : `${gunAd} (${gunYazisi(S.kacirilan, TR_TARIH)}) raporu gönderilmedi ·`;
   }
+  ozetSeridi();
+}
+// Ayın 1'inde bir kez: geçen ayın aylık özeti hazırlanabilir (kapatınca ya da açınca o ay için bir daha görünmez).
+const TR_AYLAR = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+const OZET_SERIT_ANAHTARI = `gunluk-rapor-ozet-serit-${KULLANICI_ID}`;
+function ozetSeridi(){
+  const ay = S.bugunTarih && S.bugunTarih.endsWith('-01') ? gunEkle(S.bugunTarih, -1).slice(0, 7) : null;
+  const kapali = (() => { try { return localStorage.getItem(OZET_SERIT_ANAHTARI); } catch { return null; } })();
+  const goster = !!ay && bugunMu() && kapali !== ay;
+  $('ozetSerit').hidden = !goster;
+  if (!goster) return;
+  $('ozetSeritMetin').textContent = `${TR_AYLAR[Number(ay.slice(5)) - 1]} özetin hazırlanabilir ·`;
+  $('ozetSeritAc').href = `/gecmis#aylik-${ay}`;
+  $('ozetSerit').dataset.ay = ay;
+}
+function ozetSeridiniKapat(){
+  try { localStorage.setItem(OZET_SERIT_ANAHTARI, $('ozetSerit').dataset.ay || ''); } catch {}
+  $('ozetSerit').hidden = true;
 }
 function baglantiSeridi(onek, u){
   $(onek + 'Serit').hidden = !u;
@@ -1479,6 +1498,8 @@ hepsiniBul('kacirilanKapat').forEach(b => b.onclick = () => {
   try { localStorage.setItem(`gunluk-rapor-kacirilan-${KULLANICI_ID}`, S.kacirilan); } catch {}
   $('kacirilanSerit').hidden = true;
 });
+hepsiniBul('ozetSeritKapat').forEach(b => b.onclick = ozetSeridiniKapat);
+$('ozetSeritAc').addEventListener('click', ozetSeridiniKapat);
 hepsiniBul('duzenle').forEach(b => b.onclick = () => S.duzenleModu ? duzenleKapat() : duzenleAc());
 hepsiniBul('duzenleBitti').forEach(b => b.onclick = duzenleKapat);
 hepsiniBul('karistir').forEach(b => b.onclick = karistir);

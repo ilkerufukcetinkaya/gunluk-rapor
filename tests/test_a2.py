@@ -53,7 +53,7 @@ def test_gorunen_adli_ve_adsiz_maddeler():
         "Ufuk Çetinkaya'ya 'Teklif' konulu e-posta gönderildi",
         "Ayşe Yılmaz'a 'Sözleşme' konulu e-posta gönderildi",
         "Bir kişiye 'Fatura' konulu e-posta gönderildi",
-        "ornek.com.tr'e 'Katalog' konulu e-posta gönderildi",  # mevcut davranış (alan adı)
+        "ornek.com.tr'ye 'Katalog' konulu e-posta gönderildi",  # alan adı; ek son parçanın okunuşuna göre (A3)
     ]
 
 

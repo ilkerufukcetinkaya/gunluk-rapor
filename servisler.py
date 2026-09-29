@@ -157,12 +157,35 @@ def _son_unlu(okunus: str) -> str:
     return EK_ISTISNALARI.get(okunus) or next((h for h in reversed(okunus) if h in UNLULER), "e")
 
 
+# A3: alan adının son parçasının okunuşu. Listede olmayan uzantı son harfinin okunuşuyla çekimlenir (uk → "ke").
+ALAN_UZANTISI_OKUNUSU = {"tr": "tere", "com": "kom", "net": "net", "org": "org", "io": "io", "edu": "edu", "gov": "gov",
+                         "info": "info", "biz": "biz", "co": "ko"}
+ALAN_ADI = re.compile(r"^[\w-]+(\.[\w-]+)*\.[a-z]{2,24}$", re.IGNORECASE)
+
+
+def _harf_okunusu(harf: str) -> str:
+    """Tek harfin Türkçe okunuşu: ünlü kendisi, ünsüz '+e' (Q, W, X istisna)."""
+    kucuk = _kucult(harf)
+    if kucuk in UNLULER:
+        return kucuk
+    return _kucult(HARF_OKUNUSU.get(_buyut(kucuk), kucuk + "e"))
+
+
+def alan_adi_okunusu(ad: str) -> str | None:
+    """Alan adıysa son parçasının okunuşu ('ornek.com.tr' → 'tere', 'firma.com' → 'kom'); değilse None."""
+    if not ALAN_ADI.match(ad):
+        return None
+    uzanti = _kucult(ad.rpartition(".")[2])
+    return ALAN_UZANTISI_OKUNUSU.get(uzanti) or _harf_okunusu(uzanti[-1])
+
+
 def yonelme_eki(ad: str) -> str:
-    """'MSG' → "MSG'ye", 'MESAM' → "MESAM'a", 'IMRO' → "IMRO'ya", 'Coverz' → "Coverz'e"; 'bir kişi' → "bir kişiye"."""
+    """'MSG' → "MSG'ye", 'MESAM' → "MESAM'a", 'IMRO' → "IMRO'ya", 'Coverz' → "Coverz'e"; 'bir kişi' → "bir kişiye".
+    Alan adında ek son parçanın okunuşuna uyar: 'ornek.com.tr' → "ornek.com.tr'ye", 'firma.com' → "firma.com'a"."""
     ad = ad.strip()
     if ad == BIR_KISI:  # özel ad değil: kesme işareti yok
         return ad + "ye"
-    okunus = _okunus(ad)
+    okunus = alan_adi_okunusu(ad) or _okunus(ad)
     if okunus in EK_ISTISNALARI:
         return f"{ad}'{EK_ISTISNALARI[okunus]}"
     unlu = "a" if _son_unlu(okunus) in KALIN_UNLULER else "e"
@@ -1936,6 +1959,181 @@ def claude_haftalik(
     metin = _claude_cagir(istek, api_anahtari, istemci).strip()
     if not metin:
         raise ClaudeHatasi("boş yanıt")
+    return ad_esle(metin, eslemeler)
+
+
+# ---------------------------------------------------------------- aylık / yıllık özet (A1)
+
+OZET_BASLIKLARI = {
+    ("aylik", "patron"): "*Aylık Özet – {donem}*", ("yillik", "patron"): "*Yıllık Özet – {donem}*",
+    ("aylik", "basari"): "Başarı Dökümü – {donem}", ("yillik", "basari"): "Başarı Dökümü – {donem}",
+}
+BASARI_BOLUMLERI = ("Öne çıkanlar", "Sorumluluk alanlarına göre", "Tamamlanan işler", "Sürekli üstlenilen işler", "Sayılarla")
+KATEGORI_BASLIGI = re.compile(r"^\*(?P<ad>[^*\n]+?):\*$")
+BOLUM_BASLIGI = re.compile(r"^\*[^*\n]+\*$")
+EPOSTA_HEDEFI = re.compile(r"^(?P<hedef>.+?)(?:'(?:ya|ye|a|e)|(?<=[Bb]ir kişi)ye) (?='|konusuz |\d+ e-posta)")
+EPOSTA_ADEDI = re.compile(r"\b(\d+) e-posta\b")
+TAMAMLANDI = re.compile(r"\btamamlandı[.!]?\s*$", re.IGNORECASE)
+
+
+def donem_adi(tur: str, baslangic: date) -> str:
+    """'Eylül 2026' (aylık) ya da '2026' (yıllık)."""
+    return f"{TR_AYLAR[baslangic.month - 1]} {baslangic.year}" if tur == "aylik" else str(baslangic.year)
+
+
+def ozet_basligi(tur: str, bicim: str, baslangic: date) -> str:
+    return OZET_BASLIKLARI[(tur, bicim)].format(donem=donem_adi(tur, baslangic))
+
+
+def madde_satiri(satir: str) -> bool:
+    return satir.lstrip().startswith("•")
+
+
+def rapor_kisalt(metin: str, en_cok: int = 12) -> str:
+    """Rapordan ilk en_cok madde; başlık satırı ve maddesi kalan bölüm başlıkları korunur, boşalan bölüm atılır."""
+    satirlar, bekleyen, adet = [], [], 0
+    for satir in (metin or "").splitlines():
+        if madde_satiri(satir):
+            if adet < en_cok:
+                satirlar += bekleyen + [satir]
+                bekleyen, adet = [], adet + 1
+        elif BOLUM_BASLIGI.match(satir.strip()) and satirlar:
+            bekleyen = [satir]
+        elif not satirlar:
+            satirlar.append(satir)  # rapor başlığı
+    return "\n".join(satirlar).strip()
+
+
+def rapor_madde_sayisi(metin: str) -> int:
+    """Rapordaki madde sayısı; 'Yarın' bölümündeki plan maddeleri sayılmaz."""
+    adet, yarin = 0, False
+    for satir in (metin or "").splitlines():
+        satir = satir.strip()
+        if BOLUM_BASLIGI.match(satir):
+            yarin = _kucult(satir.strip("*: ")) == "yarın"
+        elif madde_satiri(satir) and not yarin:
+            adet += 1
+    return adet
+
+
+def kategori_sayilari(metinler: list[str]) -> dict[str, int]:
+    """Kategorili günlük raporlarda '*Ad:*' başlığı altındaki madde sayıları ('Yarın' hariç)."""
+    sayilar: dict[str, int] = {}
+    for metin in metinler:
+        bolum = None
+        for satir in (metin or "").splitlines():
+            satir = satir.strip()
+            if BOLUM_BASLIGI.match(satir):
+                m = KATEGORI_BASLIGI.match(satir)
+                bolum = m.group("ad").strip() if m and _kucult(m.group("ad").strip()) != "yarın" else None
+            elif bolum and madde_satiri(satir):
+                sayilar[bolum] = sayilar.get(bolum, 0) + 1
+    return sayilar
+
+
+def eposta_hedefleri(metin: str) -> list[tuple[str, int]]:
+    """E-posta maddesinin (ham metin) alıcı kurum/kişileri ve e-posta adedi: "MESAM'a 2 e-posta …" → [("MESAM", 2)].
+    'Şirket içi', 'Ekip içi' ve adsız 'bir kişi' sayılmaz; biçim tanınmazsa (elle düzenlenmiş) boş."""
+    m = EPOSTA_HEDEFI.match(metin or "")
+    if not m:
+        return []
+    hedef = m.group("hedef")
+    bas, _, son = hedef.rpartition(" ve ")
+    adlar = (bas.split(", ") if bas else []) + [son]
+    adet = int(a.group(1)) if (a := EPOSTA_ADEDI.search(metin)) else 1
+    return [(ad.strip(), adet) for ad in adlar if ad.strip() and _kucult(ad.strip()) not in (BIR_KISI, "şirket içi", "ekip içi")]
+
+
+def istatistik_metni(ist: dict) -> str:
+    """İstatistik sözlüğü → prompt'taki düz metin; 'Sayılarla' bölümü yalnız bu sayılardan yazılır."""
+    satirlar = [
+        f"- Rapor gönderilen gün: {ist['rapor_gunu']} (elle {ist['elle']}, otomatik {ist['otomatik']})",
+        f"- İş günü: {ist['is_gunu']}" + (f"; kapsama: %{ist['kapsama']}" if ist.get("kapsama") is not None else ""),
+        f"- Rapora giren toplam madde: {ist['toplam_madde']}",
+        "- Kaynağa göre madde: " + ", ".join(f"{k['ad'].lower()} {k['sayi']}" for k in ist["kaynaklar"]),
+    ]
+    if ist["kategoriler"]:
+        satirlar.append("- En çok madde çıkan kategoriler: " + ", ".join(f"{k['ad']} ({k['sayi']})" for k in ist["kategoriler"]))
+    if ist["kurumlar"]:
+        satirlar.append("- En çok yazışılan kurum/kişiler: " + ", ".join(f"{k['ad']} ({k['sayi']})" for k in ist["kurumlar"]))
+    satirlar.append(f"- Tamamlanan devam eden iş: {len(ist['tamamlanan'])}"
+                    + (": " + "; ".join(t["metin"] for t in ist["tamamlanan"]) if ist["tamamlanan"] else ""))
+    satirlar.append(f"- Hâlâ açık devam eden iş: {len(ist['acik'])}"
+                    + (": " + "; ".join(f"{a['metin']} ({a['gun']} gündür)" for a in ist["acik"]) if ist["acik"] else ""))
+    satirlar.append(f"- Önemli işaretlenen madde: {ist['onemli']}")
+    return "\n".join(satirlar)
+
+
+def ozet_sistemi(tur: str, bicim: str, kendi_sirket: list[str] | None = None) -> str:
+    donem, sure = ("ay", "Ay boyunca") if tur == "aylik" else ("yıl", "Yıl boyunca")
+    kaynak = "günlük raporlarından" if tur == "aylik" else "aylık özetlerinden ve özeti olmayan ayların istatistiklerinden"
+    ortak = (
+        "- Raporlarda ve istatistikte olmayan hiçbir bilgiyi ekleme, uydurma; isimler aynen kalır.\n"
+        "- Sayı yazacaksan yalnız verilen istatistikteki sayıları birebir kullan; hesaplama, yuvarlama, tahmin yapma.\n"
+        "- Günlük raporlar *Başlık:* biçiminde kategori başlıklarıyla yazılmışsa bu başlıkları konu gruplaması için "
+        "ipucu say.\n"
+        "- Zaman kipi -di'li geçmiş zamandır (\"gönderildi\", \"tamamlandı\"); \"-mıştır\" kullanma.\n"
+        "- " + TIRNAK_KURALI + "\n"
+        + ("- " + kendi_sirket_kurali(kendi_sirket) + "\n" if kendi_sirket else "")
+    )
+    if bicim == "patron":
+        return (
+            f"Bir müzik edisyon şirketinde çalışan bir danışmanın bir {donem}lık {kaynak}, yöneticisine WhatsApp'tan "
+            f"gönderilecek {'aylık' if tur == 'aylik' else 'yıllık'} özet yazıyorsun.\n"
+            "Biçim (WhatsApp): ilk satır verilen başlık aynen, sonra boş satır, maddeler '• ' ile başlar, "
+            "*yıldızla* kalın yazı yalnız başlıklarda kullanılır, madde içinde kullanılmaz.\n"
+            "Kurallar:\n"
+            "- Maddeleri güne göre değil konuya göre grupla; toplam 8-14 madde.\n"
+            "- Aynı işin tekrarlarını tek maddede birleştir.\n"
+            f"- Her gün tekrarlanan sürekli işlerin HEPSİNİ tek satırda topla (\"{sure} … ve … takip edildi\").\n"
+            f"- Bu {donem} içinde tamamlanan işleri \"*Tamamlanan*\", hâlâ devam edenleri \"*Devam eden*\" başlığı "
+            "altında ayrı ver; bunlar en sonda olur.\n"
+            "- Abartı yok: \"büyük başarı\", \"yoğun çaba\" gibi değerlendirme katma.\n"
+            + ortak
+            + "Yalnız özet metnini döndür, açıklama yazma."
+        )
+    return (
+        f"Bir müzik edisyon şirketinde çalışan bir danışmanın bir {donem}lık {kaynak}, danışmanın kendisi için "
+        "başarı dökümü yazıyorsun (performans görüşmesi ve kendi kaydı için).\n"
+        "Biçim: düz metin; yıldız, #, Markdown kullanma. İlk satır verilen başlık aynen, sonra boş satır. Bölümler "
+        "şu sırayla; her bölüm başlığı tek satırda, altında '• ' ile başlayan maddeler, bölümler arasında boş satır:\n"
+        f"1) {BASARI_BOLUMLERI[0]}: 3-5 madde; somut sonuç ve sayı (sayılar yalnız istatistikten).\n"
+        f"2) {BASARI_BOLUMLERI[1]}: kategori/iş alanı adları alt başlık olur (\"Yazışmalar:\" gibi), altında maddeler.\n"
+        f"3) {BASARI_BOLUMLERI[2]}: dönem içinde tamamlanan işler.\n"
+        f"4) {BASARI_BOLUMLERI[3]}: her gün ya da düzenli yürütülen işler.\n"
+        f"5) {BASARI_BOLUMLERI[4]}: istatistikteki sayılar birebir, her biri bir madde.\n"
+        "Kurallar:\n"
+        "- Edilgen rapor dili (\"… yürütüldü\", \"… tamamlandı\"); birinci tekil şahıs kullanma.\n"
+        "- Raporlarda geçmeyen iş, sonuç ya da etki yazma; abartı ve övgü sıfatı yok.\n"
+        + ortak
+        + "Yalnız döküm metnini döndür, açıklama yazma."
+    )
+
+
+def claude_ozet(
+    tur: str, bicim: str, baslik: str, girdi: str, istatistik: str, api_anahtari: str,
+    kendi_sirket: list[str] | None = None, eslemeler: list[dict] | None = None, istemci: httpx.Client | None = None,
+) -> str:
+    """Aylık/yıllık özet ya da başarı dökümü; tek çağrı. girdi: raporlar (ya da aylık özetler) metni, istatistik:
+    istatistik_metni çıktısı. Ad eşlemeleri girdiye ve son adımda çıktıya uygulanır. Başlık yoksa başa eklenir."""
+    kendi_sirket = [ad_esle(k, eslemeler) for k in kendi_sirket] if kendi_sirket else kendi_sirket
+    icerik = "Günlük raporlar" if tur == "aylik" else "Aylık özetler ve özeti olmayan aylar"
+    istek = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": 3000,
+        "thinking": {"type": "disabled"},
+        "system": ozet_sistemi(tur, bicim, kendi_sirket),
+        "messages": [{
+            "role": "user",
+            "content": f"Başlık: {baslik}\n\nİstatistik (sayılar yalnız buradan):\n{ad_esle(istatistik, eslemeler)}\n\n"
+                       f"{icerik}:\n\n{ad_esle(girdi, eslemeler)}",
+        }],
+    }
+    metin = _claude_cagir(istek, api_anahtari, istemci).strip()
+    if not metin:
+        raise ClaudeHatasi("boş yanıt")
+    if metin.splitlines()[0].strip() != baslik:
+        metin = f"{baslik}\n\n{metin}"
     return ad_esle(metin, eslemeler)
 
 

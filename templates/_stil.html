@@ -172,6 +172,10 @@ button:disabled{opacity:.6; cursor:default}
 .segment{display:flex; background:var(--count); border-radius:12px; padding:3px; flex:none}
 .segment button{font:inherit; font-size:12.5px; font-weight:600; padding:9px 11px; border:0; border-radius:9px; background:transparent; color:var(--ink-2); cursor:pointer}
 .segment button.on{background:var(--paper); color:var(--ink); font-weight:700; box-shadow:0 1px 2px rgba(18,21,26,.06)}
+/* sekme grubu: sayfa içi tam genişlik sekmeler (Geçmiş: Günlük · Haftalık · Aylık · Yıllık) */
+.sekmeGrubu{display:flex; background:var(--count); border-radius:14px; padding:4px; gap:2px}
+.sekmeGrubu button{flex:1; font:inherit; font-size:13.5px; font-weight:600; height:38px; border:0; border-radius:10px; background:transparent; color:var(--ink-2); cursor:pointer}
+.sekmeGrubu button.on{background:var(--paper); color:var(--ink); font-weight:700; box-shadow:0 1px 2px rgba(18,21,26,.06)}
 
 /* sürükleme tutamağı, kaynak pili, ince şerit */
 .tutamak{width:28px; height:28px; flex:none; display:flex; align-items:center; justify-content:center; color:var(--ink-3); cursor:grab; touch-action:none; border-radius:8px}
@@ -213,4 +217,13 @@ body.eylemli .toast{bottom:calc(160px + env(safe-area-inset-bottom))}
 @media (min-width:761px){ .toast, body.eylemli .toast{bottom:28px} }
 .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
 @media (prefers-reduced-motion: reduce){ .toast{transition:none} }
+
+/* yazdırma: kabuk (üst bar, bant, alt alan, bildirim) basılmaz; renkli çubuklar korunur */
+@media print{
+  .ustbar, .bant, .altAlan, .toast{display:none !important}
+  body{background:#fff; font-size:13px}
+  main{padding:0}
+  .card{box-shadow:none; break-inside:avoid}
+  *{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+}
 </style>

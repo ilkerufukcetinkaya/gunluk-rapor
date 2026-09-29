@@ -7,12 +7,13 @@ from datetime import date, datetime, time, timezone
 
 from sqlalchemy import (
     JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint, create_engine, delete,
-    false, inspect, text, true,
+    false, func, inspect, text, true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 TURLER = ("surekli", "devam", "bugun", "bulunan")
-RAPOR_TURLERI = ("gunluk", "haftalik")
+RAPOR_TURLERI = ("gunluk", "haftalik", "aylik", "yillik")
+OZET_BICIMLERI = ("patron", "basari")  # aylık/yıllık özetin biçimi
 
 log = logging.getLogger("gunluk-rapor")
 
@@ -194,8 +195,8 @@ class RaporDuzeni(Temel):
 
 class Rapor(Temel):
     __tablename__ = "reports"
-    # Haftalık raporda tarih = hafta_baslangic; böylece tek anahtar iki türü de kapsar.
-    __table_args__ = (Index("uq_reports_user_tarih_tur", "user_id", "tarih", "tur", unique=True),)
+    # Haftalık raporda tarih = hafta_baslangic, aylıkta ayın, yıllıkta yılın ilk günü; tek anahtar bütün türleri kapsar.
+    # Aylık/yıllık özette biçim de anahtardadır (patron ve başarı aynı dönemde iki satır); günlük/haftalıkta bicim boştur.
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
@@ -205,6 +206,11 @@ class Rapor(Temel):
     tur: Mapped[str] = mapped_column(String(10), default="gunluk")
     hafta_baslangic: Mapped[date | None] = mapped_column(Date, nullable=True)
     gonderim: Mapped[str] = mapped_column(String(10), default="elle", server_default="elle")  # 'elle' | 'otomatik'
+    bicim: Mapped[str | None] = mapped_column(String(10), nullable=True)  # aylık/yıllık: 'patron' | 'basari'
+    istatistik: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # aylık/yıllık: üretim anındaki istatistik
+
+
+Index("uq_reports_user_tarih_tur_bicim", Rapor.user_id, Rapor.tarih, Rapor.tur, func.coalesce(Rapor.bicim, ""), unique=True)
 
 
 class PushAbonelik(Temel):
@@ -291,6 +297,8 @@ EK_KOLONLAR = [
     ("user_settings", "ms_baglanti", "TIMESTAMP WITH TIME ZONE", "DATETIME"),
     ("user_settings", "ms_durum", "VARCHAR(10)", "VARCHAR(10)"),
     ("user_settings", "ms_kapsamlar", "JSON", "JSON"),
+    ("reports", "bicim", "VARCHAR(10)", "VARCHAR(10)"),
+    ("reports", "istatistik", "JSON", "JSON"),
 ]
 # Uzatılan VARCHAR kolonları (tablo, kolon, yeni uzunluk); sqlite uzunluğu zorlamadığı için yalnız Postgres'te.
 EK_GENISLETMELER = [
@@ -299,8 +307,11 @@ EK_GENISLETMELER = [
 # Sonradan eklenen tablolar; başvurduğu tabloların hepsi olan şemada eksikse oluşturulur.
 EK_TABLOLAR = ["push_abonelikleri", "hatirlatma_gonderimleri", "claude_kullanim", "kategoriler", "rapor_duzeni"]
 EK_INDEKSLER = [
-    ("uq_reports_user_tarih_tur", "reports", "CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_user_tarih_tur ON reports (user_id, tarih, tur)"),
+    ("uq_reports_user_tarih_tur_bicim", "reports",
+     "CREATE UNIQUE INDEX IF NOT EXISTS uq_reports_user_tarih_tur_bicim ON reports (user_id, tarih, tur, COALESCE(bicim, ''))"),
 ]
+# Yerini genişi alan indeksler: yenisi oluşturulduktan sonra (varsa) silinir.
+SILINEN_INDEKSLER = [("uq_reports_user_tarih_tur", "reports")]
 
 
 def _kolonlar(b, tablo: str, sqlite: bool) -> set[str]:
@@ -381,14 +392,20 @@ def sema_guncelle(motor_=None) -> list[str]:
         for ad, tablo, ddl in EK_INDEKSLER:
             if tablo not in tablolar:
                 continue
-            if sqlite:
-                var = b.scalar(text("SELECT 1 FROM sqlite_master WHERE type='index' AND name=:a"), {"a": ad})
-            else:
-                var = b.scalar(text("SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = :a"), {"a": ad})
-            if not var:
+            if not _indeks_var(b, ad, sqlite):
                 b.execute(text(ddl))
                 eklenen.append(ad)
+        for ad, tablo in SILINEN_INDEKSLER:
+            if tablo in tablolar and _indeks_var(b, ad, sqlite):
+                b.execute(text(f"DROP INDEX IF EXISTS {ad}"))
+                eklenen.append(f"-{ad}")
     return eklenen
+
+
+def _indeks_var(b, ad: str, sqlite: bool) -> bool:
+    if sqlite:
+        return bool(b.scalar(text("SELECT 1 FROM sqlite_master WHERE type='index' AND name=:a"), {"a": ad}))
+    return bool(b.scalar(text("SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = :a"), {"a": ad}))
 
 
 # Silme sırası: önce yaprak tablolar, en sonda users. gunluk_ifadeler ve rapor_duzeni items'a bağlı olduğu için başta;

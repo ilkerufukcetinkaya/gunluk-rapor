@@ -23,8 +23,6 @@ main{gap:16px}
 .kendiRozetler{display:flex; flex-wrap:wrap; gap:6px}
 .kendiRozetler:empty{display:none}
 .kendiRozet{font-size:12px; font-weight:600; color:var(--ink-2); background:var(--count); border-radius:999px; padding:3px 10px}
-.tikSatiri{display:flex; align-items:center; gap:12px; margin-top:4px}
-.tikSatiri label{flex:1; font-size:14.5px; font-weight:600}
 #sozluk, #ad_eslemeleri{font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:13.5px; min-height:150px}
 #ad_eslemeleri{min-height:96px}
 /* görünen ad: ada tıklanınca düzenlenir */
@@ -212,19 +210,6 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <input type="password" id="gmail_sifre" name="gmail_sifre" autocomplete="new-password">
           <p class="kayitli" id="gmail_sifre_durum"></p>
           {% if google_ayarli %}</div></details>{% endif %}
-          <label class="alan" for="eposta_gruplama">Gönderilen e-postalar</label>
-          <select id="eposta_gruplama" name="eposta_gruplama">
-            <option value="konu">Her konu ayrı madde (önerilen)</option>
-            <option value="alici">Alıcı başına tek madde</option>
-          </select>
-          <label class="alan" for="kendi_alanlar">Kendi şirketimin alan adları</label>
-          <div class="kendiRozetler" id="kendiOtomatik" aria-label="Otomatik eklenenler"></div>
-          <input type="text" id="kendi_alanlar" name="kendi_alanlar" placeholder="ör. ilsvision.com" spellcheck="false" autocapitalize="off">
-          <p class="kayitli">Bu alan adlarındaki (ve alt alan adlarındaki) alıcılar e-posta maddelerine yazılmaz. Gri olanlar otomatik; ekleri virgülle ayırın.</p>
-          <div class="tikSatiri">
-            <label for="ekip_ici_atla">Ekip içi e-postaları rapora alma</label>
-            <input type="checkbox" class="sw" id="ekip_ici_atla">
-          </div>
           <p class="ipucu">Telefondan hızlı not: kendine 'rapor: ...' konulu e-posta at, akşam listede olur.</p>
         </div>
         {% if google_ayarli %}
@@ -267,6 +252,37 @@ input[type=time]{width:124px; font-weight:600; flex:none}
       </section>
     </div>
 
+    <div id="epostaKurallari" hidden>
+      <div class="sec"><h2>E-posta kuralları</h2></div>
+      <section class="card">
+        <div class="row dikey">
+          <label class="alan" for="eposta_gruplama">Gönderilen e-postalar</label>
+          <select id="eposta_gruplama" name="eposta_gruplama">
+            <option value="konu">Her konu ayrı madde (önerilen)</option>
+            <option value="alici">Alıcı başına tek madde</option>
+          </select>
+        </div>
+        <div class="row dikey">
+          <label class="alan" for="kendi_alanlar">Kendi şirketimin alan adları</label>
+          <div class="kendiRozetler" id="kendiOtomatik" aria-label="Otomatik eklenenler"></div>
+          <input type="text" id="kendi_alanlar" name="kendi_alanlar" placeholder="ör. ilsvision.com" spellcheck="false" autocapitalize="off">
+          <p class="kayitli">Bu alan adlarındaki (ve alt alan adlarındaki) alıcılar e-posta maddelerine yazılmaz. Gri olanlar otomatik; ekleri virgülle ayırın.</p>
+        </div>
+        <div class="row orta">
+          <div class="kim"><label class="lbl" for="ekip_ici_atla">Ekip içi e-postaları rapora alma</label><div class="meta">Tüm alıcıları kendi şirketinden olan e-posta madde olmaz</div></div>
+          <input type="checkbox" class="sw" id="ekip_ici_atla">
+        </div>
+        <div class="row orta">
+          <div class="kim"><div class="lbl">Alan adı sözlüğü</div><div class="meta">E-posta alıcıları bu kurum adlarıyla yazılır</div></div>
+          <button type="button" class="link" data-ac="sozlukAyrinti" aria-expanded="false">Değiştir</button>
+        </div>
+        <div class="row dikey ayrinti" id="sozlukAyrinti" hidden>
+          <label class="alan" for="sozluk">Her satıra bir "alan=Kurum"</label>
+          <textarea id="sozluk" name="alan_sozlugu" spellcheck="false"></textarea>
+        </div>
+      </section>
+    </div>
+
     <div>
       <div class="sec"><h2>Rapor</h2></div>
       <section class="card">
@@ -278,14 +294,6 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <label class="alan" for="patron_telefon">Patronun WhatsApp numarası</label>
           <input type="tel" id="patron_telefon" name="patron_telefon" inputmode="numeric" placeholder="905xxxxxxxxx">
           <div class="meta">Ülke koduyla. "WhatsApp'ta aç" doğrudan bu sohbeti açar; boşsa WhatsApp kişi seçtirir.</div>
-        </div>
-        <div class="row orta">
-          <div class="kim"><div class="lbl">Alan adı sözlüğü</div><div class="meta">E-posta alıcıları bu kurum adlarıyla yazılır</div></div>
-          <button type="button" class="link" data-ac="sozlukAyrinti" aria-expanded="false">Değiştir</button>
-        </div>
-        <div class="row dikey ayrinti" id="sozlukAyrinti" hidden>
-          <label class="alan" for="sozluk">Her satıra bir "alan=Kurum"</label>
-          <textarea id="sozluk" name="alan_sozlugu" spellcheck="false"></textarea>
         </div>
         <div class="row orta">
           <div class="kim"><div class="lbl">Ad eşlemeleri</div><div class="meta" id="eslemeOzeti">Soldaki ad raporda hiçbir yerde geçmez, sağdakiyle değiştirilir.</div></div>
@@ -535,6 +543,8 @@ function doldur(a){
   $('kendiOtomatik').replaceChildren(...(a.kendi_alanlar_otomatik || []).map(x => el('span', 'kendiRozet', x)));
   $('kendi_alanlar').value = (a.kendi_alanlar || []).join(', ');
   $('ekip_ici_atla').checked = a.ekip_ici_atla !== false;
+  // E-posta kuralları yalnız bir e-posta sağlayıcısı (uygulama şifresi, Google Gmail izni, Outlook izni) bağlıyken görünür.
+  $('epostaKurallari').hidden = !a.eposta_kurallari;
   $('sozluk').value = Object.entries(a.alan_sozlugu || {}).map(([k, v]) => `${k}=${v}`).join('\n');
   const eslemeler = a.ad_eslemeleri || [];
   $('ad_eslemeleri').value = eslemeler.map(e => `${e.kaynak} = ${e.hedef}`.trimEnd()).join('\n');
