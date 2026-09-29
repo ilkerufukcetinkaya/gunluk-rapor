@@ -424,7 +424,7 @@ def test_sema_guncelle_eski_semada_iki_kez(tmp_path):
     assert eklenen == [
         "items.metin_ai", "items.ai_tarih", "items.kullanici_duzenledi", "items.ai_kullan", "items.kaynak_zaman",
         "reports.tur", "reports.hafta_baslangic", "items.kategori_id", "items.onemli", "reports.gonderim",
-        "reports.bicim", "reports.istatistik", "uq_reports_user_tarih_tur_bicim",
+        "reports.bicim", "reports.istatistik", "reports.yapi", "uq_reports_user_tarih_tur_bicim",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.connect() as b:

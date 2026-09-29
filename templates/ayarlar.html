@@ -29,6 +29,9 @@ main{gap:16px}
 .adDugme{font:inherit; font-size:14.5px; font-weight:600; color:var(--ink); background:none; border:0; padding:0; cursor:pointer; display:inline-flex; align-items:center; gap:6px; text-align:left; max-width:100%; overflow-wrap:anywhere}
 .adDugme svg{color:var(--ink-3); flex:none}
 .adDugme:hover svg{color:var(--ink)}
+.unvanDugme{display:block; font-size:13px; font-weight:500; color:var(--ink-2); margin-top:2px}
+.unvanDugme svg{display:inline; vertical-align:-2px; margin-left:6px}
+.unvanDugme.bos{color:var(--accent)}
 .adForm{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 4px}
 .adForm input{flex:1 1 160px; min-width:0}
 .adForm .secondary{height:40px; font-size:13.5px; border-radius:12px; padding:0 14px}
@@ -135,6 +138,13 @@ input[type=time]{width:124px; font-weight:600; flex:none}
           <input type="text" id="adGirdi" maxlength="60" autocomplete="name" value="{{ kullanici.ad }}">
           <button class="secondary" type="submit">Kaydet</button>
           <button class="link soluk" type="button" id="adVazgec">Vazgeç</button>
+        </form>
+        <button type="button" class="adDugme unvanDugme{% if not kullanici.unvan %} bos{% endif %}" id="unvanDugme" title="Unvanını düzenle" aria-label="Unvanını düzenle"><span id="unvanMetin">{{ kullanici.unvan or 'Unvan ekle' }}</span>{{ i.ikon('kalem', 13) }}</button>
+        <form class="adForm" id="unvanForm" hidden>
+          <label class="gizli-etiket" for="unvanGirdi">Unvan</label>
+          <input type="text" id="unvanGirdi" maxlength="80" autocomplete="organization-title" placeholder="Ör. Edisyon ve Meslek Birlikleri Danışmanı" value="{{ kullanici.unvan or '' }}">
+          <button class="secondary" type="submit">Kaydet</button>
+          <button class="link soluk" type="button" id="unvanVazgec">Vazgeç</button>
         </form>
         <div class="meta">{{ kullanici.eposta }} · {% if kullanici.rol == 'admin' %}yönetici{% else %}üye{% endif %}</div>
       </div>
@@ -682,6 +692,27 @@ $('adForm').onsubmit = async e => {
   try {
     const r = await istek('/api/profil', { method:'PATCH', body: JSON.stringify({ ad: $('adGirdi').value }) });
     adGoster(r.ad, r.ad_yer_tutucu); adDuzenle(false); hataGoster(''); toast('Ad kaydedildi');
+  } catch (err) { hataGoster(err.message); }
+  finally { dugme.disabled = false; }
+};
+
+// --- unvan: başarı dökümü PDF'inin kapağında "Ad · Unvan"; boş bırakılırsa kaldırılır ---
+let unvan = {{ (kullanici.unvan or '')|tojson }};
+function unvanDuzenle(acik){
+  $('unvanForm').hidden = !acik; $('unvanDugme').hidden = acik;
+  if (acik) { $('unvanGirdi').value = unvan; $('unvanGirdi').focus(); }
+  else $('unvanDugme').focus();
+}
+$('unvanDugme').onclick = () => unvanDuzenle(true);
+$('unvanVazgec').onclick = () => unvanDuzenle(false);
+$('unvanGirdi').onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); unvanDuzenle(false); } };
+$('unvanForm').onsubmit = async e => {
+  e.preventDefault();
+  const dugme = $('unvanForm').querySelector('button[type=submit]'); dugme.disabled = true;
+  try {
+    const r = await istek('/api/profil', { method:'PATCH', body: JSON.stringify({ unvan: $('unvanGirdi').value }) });
+    unvan = r.unvan; $('unvanMetin').textContent = unvan || 'Unvan ekle'; $('unvanDugme').classList.toggle('bos', !unvan);
+    unvanDuzenle(false); hataGoster(''); toast(unvan ? 'Unvan kaydedildi' : 'Unvan kaldırıldı');
   } catch (err) { hataGoster(err.message); }
   finally { dugme.disabled = false; }
 };

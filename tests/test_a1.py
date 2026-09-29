@@ -1,5 +1,6 @@
-"""A1: aylık/yıllık döküm (patron özeti + başarı dökümü, istatistik), e-posta kuralları ayrı bölüm, alan adı eki.
+"""A1 (A1v2 sözleşmesine uyarlandı): aylık/yıllık döküm (patron özeti + başarı dökümü, istatistik), e-posta kuralları ayrı bölüm, alan adı eki.
 sqlite; Claude sahte (conftest.sahte_claude); "bugün" 16 Eylül 2026."""
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -120,7 +121,8 @@ def test_aylik_istatistik_her_alan():
     assert ist["toplam_madde"] == 8  # 3 + 3 + 1 + 1; Yarın planı sayılmaz
     assert {k["anahtar"]: k["sayi"] for k in ist["kaynaklar"]} == {
         "elle": 2, "ses": 1, "not": 1, "eposta": 9, "toplanti": 1, "dosya": 2, "commit": 1}
-    assert [k["ad"] for k in ist["kaynaklar"]] == ["Elle", "Sesle", "Not", "E-posta", "Toplantı", "Dosya", "Commit"]
+    assert [k["ad"] for k in ist["kaynaklar"]] == ["E-posta", "Uygulama çalışmaları", "Elle eklenen", "Sesle eklenen",
+                                                   "Notlar", "Dosyalar", "Toplantılar"]
     assert ist["kategoriler"] == [{"ad": "Yazışmalar", "sayi": 3}, {"ad": "Genel İşler", "sayi": 2},
                                   {"ad": "Medusa Çalışmaları", "sayi": 2}]
     assert ist["kurumlar"] == [{"ad": "MESAM", "sayi": 3}, {"ad": "MSG", "sayi": 2}, {"ad": "Coverz", "sayi": 1},
@@ -174,30 +176,55 @@ def test_donem_dogrulama(tur, donem):
     assert istemci().get(f"/api/ozet?tur={tur}&donem={donem}").status_code == 422
 
 
-# ---------------------------------------------------------------- D) Claude girdisi
+def uzun_rapor(n: int) -> str:
+    return "*Günlük Rapor*\n\n*Yazışmalar:*\n" + "\n".join(f"• madde-{i:02d} " + "x" * 40 for i in range(n))
 
-def test_aylik_prompta_yalniz_o_ayin_gunluk_raporlari(sahte_claude):
+
+# ---------------------------------------------------------------- D) Claude girdisi (A1v2: yapılandırılmış)
+
+def patron_json(*maddeler, bolum="Genel"):
+    return json.dumps({"bolumler": [{"ad": bolum, "maddeler": list(maddeler or ["özet"])}], "tamamlanan": [],
+                       "devam_eden": []}, ensure_ascii=False)
+
+
+def basari_json(idler=(), baslik="Sonuç alındı"):
+    return json.dumps({"one_cikanlar": [{"baslik": baslik, "aciklama": "Ayrıntı."}],
+                       "alanlar": [{"ad": "Alan", "temalar": [{"ad": "Tema", "ozet": "Özet.", "etiketler": [],
+                                                                "madde_idleri": list(idler)}]}],
+                       "tamamlanan": [], "devam_eden": [], "surekli": ""}, ensure_ascii=False)
+
+
+def girdi_json(istek) -> dict:
+    return json.loads(istek["messages"][0]["content"].split("Girdi:\n", 1)[1])
+
+
+def test_aylik_girdi_yalniz_o_ayin_raporlu_gun_maddeleri(sahte_claude):
     uid = kullanici_olustur()
     agustos_verisi(uid)
     rapor(uid, g(10), "HAFTALIK-METIN", tur="haftalik")
     diger = kullanici_olustur("b@ornek.com", "B")
     rapor(diger, g(3), "• BASKASININ-RAPORU")
-    sahte_claude.yanitlar = ["*Aylık Özet – Ağustos 2026*\n\n• özet"]
+    madde(diger, g(3), "BASKASININ-MADDESI")
+    sahte_claude.yanitlar = [patron_json()]
     r = istemci().post("/api/ozet", json={"tur": "aylik", "donem": "2026-08", "bicim": "patron"})
     assert r.status_code == 200 and r.json()["girdi"] == "gunluk"
     icerik = sahte_claude.istekler[0]["messages"][0]["content"]
-    for gun in ("2026-08-03", "2026-08-04", "2026-08-05", "2026-08-08"):
-        assert f"### {gun}\n" in icerik
-    for yok in ("TEMMUZ-MADDESI", "EYLUL-MADDESI", "HAFTALIK-METIN", "BASKASININ-RAPORU", "kısaltılmış"):
+    girdi = girdi_json(sahte_claude.istekler[0])
+    metinler = [m["metin"] for m in girdi["maddeler"]]
+    assert "Sözleşme taslağı gönderildi" in metinler and "Arama hızlandırıldı" in metinler
+    for yok in ("Rapor gönderilmeyen günün işi", "Temmuz işi tamamlandı", "GIZLI'ye 'G' konulu e-posta gönderildi",
+                "TIKSIZ'e 'H' konulu e-posta gönderildi"):
+        assert yok not in metinler
+    for yok in ("TEMMUZ-MADDESI", "EYLUL-MADDESI", "HAFTALIK-METIN", "BASKASININ"):
         assert yok not in icerik
+    assert {m["kaynak"] for m in girdi["maddeler"]} == {"elle", "not", "eposta", "toplanti", "dosya", "uygulama"}
+    assert all(set(m) == {"id", "tarih", "kategori", "kaynak", "metin"} for m in girdi["maddeler"])
+    assert girdi["gunluk_raporlar"][0]["tarih"] == "2026-08-05"  # maddesi olmayan raporlu gün bağlam olarak
+    assert girdi["devam_eden"] == [{"is": "Katalog teslimi", "asama": "yanıt bekleniyor", "gun": 21}]
     assert "- Rapor gönderilen gün: 4 (elle 3, otomatik 1)" in icerik and "kapsama: %14" in icerik
     assert "En çok yazışılan kurum/kişiler: MESAM (3), MSG (2)" in icerik
     istek = sahte_claude.istekler[0]
-    assert (istek["model"], istek["max_tokens"], istek["thinking"]) == ("claude-sonnet-5", 3000, {"type": "disabled"})
-
-
-def uzun_rapor(n: int) -> str:
-    return "*Günlük Rapor*\n\n*Yazışmalar:*\n" + "\n".join(f"• madde-{i:02d} " + "x" * 40 for i in range(n))
+    assert (istek["model"], istek["max_tokens"], istek["thinking"]) == ("claude-sonnet-5", 4000, {"type": "disabled"})
 
 
 def test_uzun_aylik_girdi_kisaltilir(sahte_claude, monkeypatch):
@@ -205,28 +232,29 @@ def test_uzun_aylik_girdi_kisaltilir(sahte_claude, monkeypatch):
     uid = kullanici_olustur()
     rapor(uid, g(3), uzun_rapor(20))
     rapor(uid, g(4), uzun_rapor(15))
-    sahte_claude.yanitlar = ["özet"]
+    for gun, n in ((3, 20), (4, 15)):
+        for i in range(n):
+            madde(uid, g(gun), f"madde-{gun}-{i:02d}")
+    sahte_claude.yanitlar = [patron_json()]
     r = istemci().post("/api/ozet", json={"tur": "aylik", "donem": "2026-08"})
     assert r.json()["girdi"] == "kisaltilmis"
-    icerik = sahte_claude.istekler[0]["messages"][0]["content"]
-    assert "### 2026-08-03 (kısaltılmış)" in icerik and "### 2026-08-04 (kısaltılmış)" in icerik
-    assert icerik.count("madde-11") == 2 and "madde-12" not in icerik  # her rapordan ilk 12 madde
+    metinler = [m["metin"] for m in girdi_json(sahte_claude.istekler[0])["maddeler"]]
+    assert len(metinler) == 24 and "madde-3-11" in metinler and "madde-3-12" not in metinler  # gün başına ilk 12
 
 
 def test_uzun_aylik_girdide_haftalik_ozetler_kullanilir(sahte_claude, monkeypatch):
     monkeypatch.setattr(api, "OZET_METIN_SINIRI", 500)
     uid = kullanici_olustur()
     rapor(uid, g(3), uzun_rapor(20))
-    rapor(uid, g(12), uzun_rapor(14))
+    for i in range(20):
+        madde(uid, g(3), f"madde-{i:02d} " + "x" * 40)
     rapor(uid, date(2026, 7, 27), "HAFTA-27-TEMMUZ", tur="haftalik")  # 27 Temmuz – 2 Ağustos: aya taşan hafta
     rapor(uid, g(3), "HAFTA-3-AGUSTOS", tur="haftalik")
     rapor(uid, date(2026, 9, 7), "EYLUL-HAFTASI", tur="haftalik")
-    sahte_claude.yanitlar = ["özet"]
+    sahte_claude.yanitlar = [patron_json()]
     assert istemci().post("/api/ozet", json={"tur": "aylik", "donem": "2026-08"}).json()["girdi"] == "haftalik"
     icerik = sahte_claude.istekler[0]["messages"][0]["content"]
     assert "HAFTA-27-TEMMUZ" in icerik and "HAFTA-3-AGUSTOS" in icerik and "EYLUL-HAFTASI" not in icerik
-    assert "### 2026-08-03 (kısaltılmış)" not in icerik  # haftalıkla kapsanan gün
-    assert "### 2026-08-12 (kısaltılmış)" in icerik and "madde-12" not in icerik
 
 
 def test_aylik_rapor_yoksa_400_ve_kota_dusmez(sahte_claude):
@@ -238,30 +266,41 @@ def test_aylik_rapor_yoksa_400_ve_kota_dusmez(sahte_claude):
         assert db.scalar(select(func.count()).select_from(ClaudeKullanim)) == 0
 
 
-def test_yillik_prompta_aylik_ozetler_ve_ozetsiz_aylar(sahte_claude):
+def test_yillik_girdi_aylik_yapilardan_ve_ozetsiz_aylar(sahte_claude):
     uid = kullanici_olustur()
+    yapi = {"bicim": "basari", "one_cikanlar": [{"baslik": "AGUSTOS-ONE", "aciklama": ""}],
+            "alanlar": [{"ad": "Alan", "temalar": [{"ad": "AGUSTOS-TEMA", "ozet": "", "etiketler": [], "madde_idleri": [101, 102]}]}],
+            "tamamlanan": [], "devam_eden": [], "surekli": ""}
+    with OturumYapici() as db:
+        db.add(Rapor(user_id=uid, tarih=g(1), metin="AGUSTOS-BASARI", tur="aylik", bicim="basari", yapi=yapi))
+        db.commit()
     rapor(uid, g(1), "AGUSTOS-PATRON", tur="aylik", bicim="patron")
-    rapor(uid, g(1), "AGUSTOS-BASARI", tur="aylik", bicim="basari")
     rapor(uid, date(2026, 7, 1), "TEMMUZ-PATRON", tur="aylik", bicim="patron")
     rapor(uid, date(2026, 7, 14), "• temmuz günlüğü")
-    rapor(uid, date(2026, 3, 10), "*Günlük Rapor*\n\n*Yazışmalar:*\n• mart-1\n• mart-2\n• mart-1")
-    rapor(uid, date(2026, 3, 11), "• mart-3")
+    madde(uid, date(2026, 7, 14), "temmuz maddesi")
+    rapor(uid, date(2026, 3, 10), "*Günlük Rapor*\n\n*Yazışmalar:*\n• mart-1")
+    madde(uid, date(2026, 3, 10), "mart-1")
+    madde(uid, date(2026, 3, 10), "mart-1")  # tekrar örneğe girmez
     rapor(uid, date(2025, 12, 1), "ESKI-YIL", tur="aylik", bicim="basari")
     c = istemci()
     assert c.get("/api/ozet?tur=yillik&donem=2026").json()["ozetsiz_aylar"] == ["Mart 2026"]
-    sahte_claude.yanitlar = ["*Yıllık Özet – 2026*\n\n• yıl"]
-    r = c.post("/api/ozet", json={"tur": "yillik", "donem": "2026", "bicim": "patron"}).json()
+    sahte_claude.yanitlar = [basari_json(["8-1", 999])]
+    r = c.post("/api/ozet", json={"tur": "yillik", "donem": "2026", "bicim": "basari"}).json()
     assert r["ozetsiz_aylar"] == ["Mart 2026"] and r["girdi"] == "aylik"
     assert len(sahte_claude.istekler) == 1  # eksik aylar için aylık özet üretilmez
-    icerik = sahte_claude.istekler[0]["messages"][0]["content"]
-    assert "### Ağustos 2026 (aylık özet, başarı dökümü)\nAGUSTOS-BASARI" in icerik and "AGUSTOS-PATRON" not in icerik
-    assert "### Temmuz 2026 (aylık özet)\nTEMMUZ-PATRON" in icerik and "temmuz günlüğü" not in icerik
-    assert "### Mart 2026 (özet yok: istatistik ve günlük raporlardan kısaltılmış örnek)" in icerik
-    mart = icerik.split("### Mart 2026")[1].split("###")[0]
-    assert "- Rapor gönderilen gün: 2 (elle 2, otomatik 0)" in mart
-    assert "Örnek maddeler:\n• mart-1\n• mart-2\n• mart-3" in mart  # tekrarsız
-    assert "ESKI-YIL" not in icerik
-    assert sahte_claude.istekler[0]["messages"][0]["content"].startswith("Başlık: *Yıllık Özet – 2026*")
+    aylar = {a["ay"]: a for a in girdi_json(sahte_claude.istekler[0])["aylar"]}
+    assert list(aylar) == ["Mart 2026", "Temmuz 2026", "Ağustos 2026"]
+    assert aylar["Ağustos 2026"]["alanlar"][0]["temalar"][0] == {
+        "id": "8-1", "ad": "AGUSTOS-TEMA", "ozet": "", "etiketler": [], "madde_sayisi": 2}
+    assert aylar["Temmuz 2026"]["ozet_metni"] == "TEMMUZ-PATRON" and [m["metin"] for m in aylar["Temmuz 2026"]["maddeler"]] == ["temmuz maddesi"]
+    assert "- Rapor gönderilen gün: 1 (elle 1, otomatik 0)" in aylar["Mart 2026"]["istatistik"]
+    assert [m["metin"] for m in aylar["Mart 2026"]["maddeler"]] == ["mart-1"]
+    assert "ESKI-YIL" not in sahte_claude.istekler[0]["messages"][0]["content"]
+    assert sahte_claude.istekler[0]["messages"][0]["content"].startswith("Başlık: Başarı Dökümü – 2026")
+    tema = r["ozet"]["yapi"]["alanlar"][0]["temalar"][0]
+    assert (tema["madde_idleri"], tema["madde_sayisi"]) == ([101, 102], 2)  # tema anahtarı maddelerine açılır; 999 atılır
+    diger = r["ozet"]["yapi"]["alanlar"][-1]
+    assert diger["ad"] == "Diğer" and diger["madde_sayisi"] == 2  # temmuz ve mart örnekleri hiçbir temaya atanmadı
 
 
 def test_yillik_hic_veri_yoksa_400():
@@ -280,28 +319,28 @@ def test_basliklar():
 
 def test_patron_ve_basari_promptlari():
     patron = servisler.ozet_sistemi("aylik", "patron")
-    assert "WhatsApp" in patron and "8-14 madde" in patron and "tek satırda" in patron
-    assert "\"*Tamamlanan*\"" in patron and "\"*Devam eden*\"" in patron and "Abartı yok" in patron
+    assert "WhatsApp" in patron and "8-12 madde" in patron and "tek maddede" in patron
+    assert '"bolumler"' in patron and '"devam_eden"' in patron and "Abartı" in patron and "YALNIZ" in patron
     basari = servisler.ozet_sistemi("yillik", "basari")
-    for bolum in ("Öne çıkanlar", "Sorumluluk alanlarına göre", "Tamamlanan işler", "Sürekli üstlenilen işler", "Sayılarla"):
-        assert bolum in basari
-    assert "düz metin" in basari and "Edilgen" in basari and "WhatsApp" not in basari
+    for alan in ('"one_cikanlar"', '"alanlar"', '"temalar"', '"etiketler"', '"madde_idleri"', '"surekli"', "3-5", "2-6"):
+        assert alan in basari, alan
+    assert "WhatsApp" not in basari and "tema id'si" in basari
     for sistem in (patron, basari):
-        assert servisler.TIRNAK_KURALI in sistem and "ipucu" in sistem and "istatistikteki sayıları birebir" in sistem
-        assert "uydurma" in sistem
+        assert servisler.TIRNAK_KURALI in sistem and "istatistikteki sayıları birebir" in sistem and "uydurma" in sistem
 
 
-def test_iki_bicim_uctan_uca_ve_eksik_baslik_eklenir(sahte_claude):
+def test_iki_bicim_uctan_uca(sahte_claude):
     uid = kullanici_olustur()
     rapor(uid, g(3), "• iş")
+    madde(uid, g(3), "İş yapıldı")
     c = istemci()
-    sahte_claude.yanitlar = ["• başlıksız yanıt", "Başarı Dökümü – Ağustos 2026\n\nÖne çıkanlar\n• x"]
+    sahte_claude.yanitlar = [patron_json("Bir iş yapıldı."), basari_json([], "Sonuç alındı")]
     p = c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08", "bicim": "patron"}).json()
     b = c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08", "bicim": "basari"}).json()
-    assert p["metin"] == "*Aylık Özet – Ağustos 2026*\n\n• başlıksız yanıt"
-    assert b["metin"] == "Başarı Dökümü – Ağustos 2026\n\nÖne çıkanlar\n• x"
+    assert p["metin"] == "*Aylık Özet – Ağustos 2026*\n\n*Genel:*\n• Bir iş yapıldı."
+    assert b["metin"].startswith("Başarı Dökümü – Ağustos 2026\n\nÖne çıkanlar\n• Sonuç alındı. Ayrıntı.")
     s1, s2 = (i["system"] for i in sahte_claude.istekler)
-    assert "WhatsApp" in s1 and "Sayılarla" in s2
+    assert "WhatsApp" in s1 and '"one_cikanlar"' in s2
     assert sahte_claude.istekler[1]["messages"][0]["content"].startswith("Başlık: Başarı Dökümü – Ağustos 2026")
 
 
@@ -317,31 +356,30 @@ def test_upsert_ayni_donem_bicim_tek_satir_farkli_bicim_iki_satir(sahte_claude):
     uid = kullanici_olustur()
     rapor(uid, g(3), "• iş")
     c = istemci()
-    sahte_claude.yanitlar = ["*Aylık Özet – Ağustos 2026*\n\nilk", "*Aylık Özet – Ağustos 2026*\n\nikinci",
-                             "Başarı Dökümü – Ağustos 2026\n\nb", "*Yıllık Özet – 2026*\n\ny"]
+    sahte_claude.yanitlar = [patron_json("ilk"), patron_json("ikinci"), basari_json(), patron_json("y")]
     for bicim in ("patron", "patron", "basari"):
         assert c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08", "bicim": bicim}).status_code == 200
     c.post("/api/ozet", json={"tur": "yillik", "donem": "2026", "bicim": "patron"})
-    assert ozet_satirlari(uid) == [
-        ("aylik", g(1), "patron", "*Aylık Özet – Ağustos 2026*\n\nikinci", True),
-        ("aylik", g(1), "basari", "Başarı Dökümü – Ağustos 2026\n\nb", True),
-        ("yillik", date(2026, 1, 1), "patron", "*Yıllık Özet – 2026*\n\ny", True),
-    ]
+    satirlar = ozet_satirlari(uid)
+    assert [(s[0], s[1], s[2], s[4]) for s in satirlar] == [
+        ("aylik", g(1), "patron", True), ("aylik", g(1), "basari", True), ("yillik", date(2026, 1, 1), "patron", True)]
+    assert satirlar[0][3] == "*Aylık Özet – Ağustos 2026*\n\n*Genel:*\n• ikinci"
     ozetler = c.get("/api/ozet?tur=aylik&donem=2026-08").json()["ozetler"]
     assert ozetler["patron"]["metin"].endswith("ikinci") and ozetler["basari"]["bicim"] == "basari"
     assert ozetler["patron"]["istatistik"]["rapor_gunu"] == 1
+    assert ozetler["patron"]["yapi"]["bolumler"] == [{"ad": "Genel", "maddeler": ["ikinci"]}]
     assert c.get("/api/raporlar?tur=aylik").json()["toplam"] == 2
     assert c.get("/api/raporlar?tur=gunluk").json()["toplam"] == 1
 
 
-def test_duzenlenen_metin_kaydedilir_claude_cagrilmaz(sahte_claude):
+def test_duz_metin_duzenlemesi_kaydedilir_claude_cagrilmaz(sahte_claude):
     uid = kullanici_olustur()
     rapor(uid, g(3), "• iş")
     c = istemci()
-    sahte_claude.yanitlar = ["*Aylık Özet – Ağustos 2026*\n\nilk"]
+    sahte_claude.yanitlar = [patron_json("ilk")]
     c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08"})
     r = c.put("/api/ozet", json={"tur": "aylik", "donem": "2026-08", "bicim": "patron", "metin": "  elle düzeltildi  "})
-    assert r.status_code == 200 and r.json()["metin"] == "elle düzeltildi"
+    assert r.status_code == 200 and r.json()["metin"] == "elle düzeltildi" and r.json()["yapi"] is None
     assert ozet_satirlari(uid) == [("aylik", g(1), "patron", "elle düzeltildi", True)]
     assert len(sahte_claude.istekler) == 1
     assert c.put("/api/ozet", json={"tur": "aylik", "donem": "2026-08", "bicim": "patron", "metin": " "}).status_code == 422
@@ -351,7 +389,7 @@ def test_kota_dolu_429_ve_basarili_cagri_bir_hak(sahte_claude):
     uid = kullanici_olustur()
     rapor(uid, g(3), "• iş")
     c = istemci()
-    sahte_claude.yanitlar = ["özet"]
+    sahte_claude.yanitlar = [patron_json()]
     assert c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08"}).status_code == 200
     with OturumYapici() as db:
         satir = db.scalar(select(ClaudeKullanim).where(ClaudeKullanim.user_id == uid))
@@ -361,14 +399,14 @@ def test_kota_dolu_429_ve_basarili_cagri_bir_hak(sahte_claude):
     r = c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08", "bicim": "basari"})
     assert r.status_code == 429 and "Claude hakkın doldu" in r.json()["detail"]
     assert len(sahte_claude.istekler) == 1
-    assert ozet_satirlari(uid)[0][3] == "*Aylık Özet – Ağustos 2026*\n\nözet"
+    assert ozet_satirlari(uid)[0][3] == "*Aylık Özet – Ağustos 2026*\n\n*Genel:*\n• özet"
 
 
 def test_claude_hatasinda_kayitli_ozet_bozulmaz(sahte_claude, monkeypatch):
     uid = kullanici_olustur()
     rapor(uid, g(3), "• iş")
     c = istemci()
-    sahte_claude.yanitlar = ["*Aylık Özet – Ağustos 2026*\n\nsağlam", servisler.ClaudeHatasi("API hatası (529)")]
+    sahte_claude.yanitlar = [patron_json("sağlam"), servisler.ClaudeHatasi("API hatası (529)")]
     c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08"})
     r = c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08"})
     assert r.status_code == 502 and "kayıtlı özet değişmedi" in r.json()["detail"]
@@ -383,16 +421,19 @@ def test_ad_eslemesi_ve_kendi_sirket_ozette_uygulanir(sahte_claude):
     uid = kullanici_olustur(ad_eslemeleri=[{"kaynak": "Medusa", "hedef": "Edisyon uygulaması"}],
                             kendi_alanlar=["medusarights.com"])
     rapor(uid, g(3), "*Günlük Rapor*\n\n*Medusa Çalışmaları:*\n• Medusa'da arama hızlandı\n• 'Medusa raporu' gönderildi")
+    madde(uid, g(3), "Medusa'da arama hızlandı", "medusa")
+    madde(uid, g(3), "'Medusa raporu' gönderildi")
     madde(uid, g(3), "Medusa'ya 'A' konulu e-posta gönderildi", "eposta")
-    sahte_claude.yanitlar = ["*Aylık Özet – Ağustos 2026*\n\n• Medusa'da arama hızlandırıldı"]
+    sahte_claude.yanitlar = [patron_json("Medusa'da arama hızlandırıldı")]
     c = istemci()
     r = c.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08"}).json()
     istek = sahte_claude.istekler[0]
     esle = lambda m: servisler.ad_esle(m, [{"kaynak": "Medusa", "hedef": "Edisyon uygulaması"}])  # noqa: E731
     assert "Medusa" not in istek["messages"][0]["content"]
-    assert esle("• Medusa'da arama hızlandı") in istek["messages"][0]["content"]
-    assert "'Edisyon uygulaması raporu'" in istek["messages"][0]["content"]  # tırnak içine de uygulanır (O1-ek istisnası)
-    assert r["metin"] == esle("*Aylık Özet – Ağustos 2026*\n\n• Medusa'da arama hızlandırıldı") and "Medusa" not in r["metin"]
+    metinler = [m["metin"] for m in girdi_json(istek)["maddeler"]]
+    assert esle("Medusa'da arama hızlandı") in metinler
+    assert "'Edisyon uygulaması raporu' gönderildi" in metinler  # tırnak içine de uygulanır (O1-ek istisnası)
+    assert r["metin"] == esle("*Aylık Özet – Ağustos 2026*\n\n*Genel:*\n• Medusa'da arama hızlandırıldı") and "Medusa" not in r["metin"]
     assert "ASLA" in istek["system"] and "ilsvision.com" in istek["system"] and "medusarights.com" in istek["system"]
     ist = r["istatistik"]
     assert ist["kategoriler"] == [{"ad": "Edisyon uygulaması Çalışmaları", "sayi": 2}]
@@ -407,7 +448,7 @@ def test_kullanici_ayrimi(sahte_claude):
     agustos_verisi(a)
     rapor(b, g(10), "• b'nin işi")
     ca, cb = istemci(), istemci("b@ornek.com")
-    sahte_claude.yanitlar = ["*Aylık Özet – Ağustos 2026*\n\nA'NIN"]
+    sahte_claude.yanitlar = [patron_json("A'NIN")]
     ca.post("/api/ozet", json={"tur": "aylik", "donem": "2026-08"})
     bi = cb.get("/api/ozet?tur=aylik&donem=2026-08").json()
     assert bi["ozetler"] == {"patron": None, "basari": None}
@@ -429,7 +470,7 @@ def test_sema_eski_indeks_genisletilir_ve_bicim_anahtarda(tmp_path):
         b.execute(text("CREATE UNIQUE INDEX uq_reports_user_tarih_tur ON reports (user_id, tarih, tur)"))
         b.execute(text("INSERT INTO reports (user_id, tarih, metin) VALUES (1, '2026-09-15', 'eski')"))
     assert veritabani.sema_guncelle(eski) == [
-        "reports.bicim", "reports.istatistik", "uq_reports_user_tarih_tur_bicim", "-uq_reports_user_tarih_tur"]
+        "reports.bicim", "reports.istatistik", "reports.yapi", "uq_reports_user_tarih_tur_bicim", "-uq_reports_user_tarih_tur"]
     assert veritabani.sema_guncelle(eski) == []
     ekle = "INSERT INTO reports (user_id, tarih, metin, tur, bicim) VALUES (1, '2026-08-01', 'x', 'aylik', :b)"
     with eski.begin() as b:
@@ -523,7 +564,7 @@ def test_gecmis_sekmeleri_ve_bugun_ozet_seridi():
     gecmis = c.get("/gecmis").text
     for parca in ('data-sekme="gunluk"', 'data-sekme="haftalik"', 'data-sekme="aylik"', 'data-sekme="yillik"',
                   'id="donem"', 'data-bicim="patron"', 'data-bicim="basari"', "Patrona özet", "Başarı dökümü",
-                  'id="istKart"', 'id="ozetUret"', 'id="yenidenUret"', 'id="ozetYazdir"', "Yazdır / PDF", "@media print"):
+                  'id="istKart"', "ozetUret", 'id="yenidenUret"', 'id="pdfIndir"', "PDF indir", "/api/ozet/pdf"):
         assert parca in gecmis, parca
     assert 'data-tur=""' not in gecmis  # eski "Tümü" süzgeci kalktı
     bugun = c.get("/").text

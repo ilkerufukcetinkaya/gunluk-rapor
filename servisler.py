@@ -2033,7 +2033,8 @@ def kategori_sayilari(metinler: list[str]) -> dict[str, int]:
 
 def eposta_hedefleri(metin: str) -> list[tuple[str, int]]:
     """E-posta maddesinin (ham metin) alıcı kurum/kişileri ve e-posta adedi: "MESAM'a 2 e-posta …" → [("MESAM", 2)].
-    'Şirket içi', 'Ekip içi' ve adsız 'bir kişi' sayılmaz; biçim tanınmazsa (elle düzenlenmiş) boş."""
+    'Şirket içi', 'Ekip içi', adsız 'bir kişi' ve genel sağlayıcı alan adları (gmail.com …) sayılmaz; görünen adla
+    yazılan kişi (A2) kendi adıyla sayılır. Biçim tanınmazsa (elle düzenlenmiş) boş."""
     m = EPOSTA_HEDEFI.match(metin or "")
     if not m:
         return []
@@ -2041,7 +2042,8 @@ def eposta_hedefleri(metin: str) -> list[tuple[str, int]]:
     bas, _, son = hedef.rpartition(" ve ")
     adlar = (bas.split(", ") if bas else []) + [son]
     adet = int(a.group(1)) if (a := EPOSTA_ADEDI.search(metin)) else 1
-    return [(ad.strip(), adet) for ad in adlar if ad.strip() and _kucult(ad.strip()) not in (BIR_KISI, "şirket içi", "ekip içi")]
+    return [(ad.strip(), adet) for ad in adlar if ad.strip() and _kucult(ad.strip()) not in (BIR_KISI, SIRKET_ICI, EKIP_ICI)
+            and _kucult(ad.strip()) not in GENEL_SAGLAYICILAR]
 
 
 def istatistik_metni(ist: dict) -> str:
@@ -2050,6 +2052,7 @@ def istatistik_metni(ist: dict) -> str:
         f"- Rapor gönderilen gün: {ist['rapor_gunu']} (elle {ist['elle']}, otomatik {ist['otomatik']})",
         f"- İş günü: {ist['is_gunu']}" + (f"; kapsama: %{ist['kapsama']}" if ist.get("kapsama") is not None else ""),
         f"- Rapora giren toplam madde: {ist['toplam_madde']}",
+        *([f"- Kapsam: {ist['kullanim']['metin']}"] if (ist.get("kullanim") or {}).get("metin") else []),
         "- Kaynağa göre madde: " + ", ".join(f"{k['ad'].lower()} {k['sayi']}" for k in ist["kaynaklar"]),
     ]
     if ist["kategoriler"]:
@@ -2064,77 +2067,316 @@ def istatistik_metni(ist: dict) -> str:
     return "\n".join(satirlar)
 
 
+# A1v2: sentez Claude'dan yapılandırılmış JSON olarak gelir; sunucu doğrular, sayıları kendisi hesaplar ve düz metni
+# (kopyalama / WhatsApp) yapıdan üretir.
+OZET_KAYNAK_ETIKETI = {"elle": "elle", "ses": "elle", "not": "not", "eposta": "eposta", "outlook": "eposta",
+                       "takvim": "toplanti", "drive": "dosya", "onedrive": "dosya", "medusa": "uygulama"}
+ONE_CIKAN_EN_COK = 5
+ETIKET_EN_COK = 5
+DIGER = "Diğer"
+PATRON_TAMAMLANAN = "Tamamlananlar"
+PATRON_DEVAM = "Devam Eden İşler"
+
+
 def ozet_sistemi(tur: str, bicim: str, kendi_sirket: list[str] | None = None) -> str:
-    donem, sure = ("ay", "Ay boyunca") if tur == "aylik" else ("yıl", "Yıl boyunca")
-    kaynak = "günlük raporlarından" if tur == "aylik" else "aylık özetlerinden ve özeti olmayan ayların istatistiklerinden"
+    donem = "ay" if tur == "aylik" else "yıl"
+    if tur == "aylik":
+        girdi = ("Girdi JSON: \"maddeler\" dönemde rapora giren iş maddeleri {id, tarih, kategori, kaynak, metin}; "
+                 "kategori maddenin günlük raporda girdiği bölümdür, gruplamada ipucu say. kaynak: eposta (gönderilen "
+                 "e-posta), uygulama (yazılımda yapılan değişiklik), toplanti, dosya, elle, not. \"surekli\" her gün "
+                 "tekrarlanan işler, \"devam_eden\" hâlâ açık işler, \"tamamlanan\" dönemde tamamlanan işler; varsa "
+                 "\"haftalik_ozetler\" ve \"gunluk_raporlar\" yalnız bağlam içindir.\n")
+    else:
+        girdi = ("Girdi JSON: \"aylar\" her ayın dökümü; temalar {id, ad, ozet, etiketler, madde_sayisi} biçimindedir, "
+                 "tema id'si \"ay-sıra\" dizesidir. Özeti olmayan aylar istatistik ve örnek maddelerle ({id, metin}) "
+                 "gelir. madde_idleri alanına tema id'lerini ve örnek madde id'lerini yaz; sayıları sunucu hesaplar.\n")
     ortak = (
-        "- Raporlarda ve istatistikte olmayan hiçbir bilgiyi ekleme, uydurma; isimler aynen kalır.\n"
+        "- Girdide olmayan hiçbir bilgiyi ekleme, uydurma; kişi, kurum, ürün ve eser adları aynen kalır.\n"
         "- Sayı yazacaksan yalnız verilen istatistikteki sayıları birebir kullan; hesaplama, yuvarlama, tahmin yapma.\n"
-        "- Günlük raporlar *Başlık:* biçiminde kategori başlıklarıyla yazılmışsa bu başlıkları konu gruplaması için "
-        "ipucu say.\n"
-        "- Zaman kipi -di'li geçmiş zamandır (\"gönderildi\", \"tamamlandı\"); \"-mıştır\" kullanma.\n"
+        "- Zaman kipi -di'li geçmiş zamandır (\"gönderildi\", \"tamamlandı\"); \"-mıştır\" ve birinci tekil şahıs kullanma.\n"
+        "- Abartı ve övgü sıfatı yok (\"büyük başarı\", \"yoğun çaba\" gibi).\n"
         "- " + TIRNAK_KURALI + "\n"
         + ("- " + kendi_sirket_kurali(kendi_sirket) + "\n" if kendi_sirket else "")
+        + "- Metinlerde yıldız (*), # ya da Markdown kullanma.\n"
     )
     if bicim == "patron":
         return (
-            f"Bir müzik edisyon şirketinde çalışan bir danışmanın bir {donem}lık {kaynak}, yöneticisine WhatsApp'tan "
-            f"gönderilecek {'aylık' if tur == 'aylik' else 'yıllık'} özet yazıyorsun.\n"
-            "Biçim (WhatsApp): ilk satır verilen başlık aynen, sonra boş satır, maddeler '• ' ile başlar, "
-            "*yıldızla* kalın yazı yalnız başlıklarda kullanılır, madde içinde kullanılmaz.\n"
+            f"Bir müzik edisyon şirketinde çalışan bir danışmanın bir {donem}lık iş kayıtlarından, yöneticisine "
+            f"WhatsApp'tan gönderilecek {'aylık' if tur == 'aylik' else 'yıllık'} özetin içeriğini çıkarıyorsun.\n"
+            + girdi +
+            "YALNIZ şu JSON nesnesini döndür, başka hiçbir şey yazma:\n"
+            '{"bolumler":[{"ad":"…","maddeler":["…"]}],"tamamlanan":["…"],"devam_eden":["…"]}\n'
             "Kurallar:\n"
-            "- Maddeleri güne göre değil konuya göre grupla; toplam 8-14 madde.\n"
-            "- Aynı işin tekrarlarını tek maddede birleştir.\n"
-            f"- Her gün tekrarlanan sürekli işlerin HEPSİNİ tek satırda topla (\"{sure} … ve … takip edildi\").\n"
-            f"- Bu {donem} içinde tamamlanan işleri \"*Tamamlanan*\", hâlâ devam edenleri \"*Devam eden*\" başlığı "
-            "altında ayrı ver; bunlar en sonda olur.\n"
-            "- Abartı yok: \"büyük başarı\", \"yoğun çaba\" gibi değerlendirme katma.\n"
+            "- bolumler konuya göre gruplanır (güne göre değil); bütün bölümlerde toplam 8-12 madde; benzer ve tekrar "
+            "eden işler tek maddede birleşir; her madde tek cümle.\n"
+            "- Her gün tekrarlanan sürekli işlerin hepsi tek maddede toplanır.\n"
+            "- tamamlanan: dönemde tamamlanan işlerin kısa adları. devam_eden: hâlâ açık işler, aşaması varsa "
+            "\" — \" ile (\"MSG Ağustos itirazı — yanıt bekleniyor\").\n"
             + ortak
-            + "Yalnız özet metnini döndür, açıklama yazma."
         )
     return (
-        f"Bir müzik edisyon şirketinde çalışan bir danışmanın bir {donem}lık {kaynak}, danışmanın kendisi için "
-        "başarı dökümü yazıyorsun (performans görüşmesi ve kendi kaydı için).\n"
-        "Biçim: düz metin; yıldız, #, Markdown kullanma. İlk satır verilen başlık aynen, sonra boş satır. Bölümler "
-        "şu sırayla; her bölüm başlığı tek satırda, altında '• ' ile başlayan maddeler, bölümler arasında boş satır:\n"
-        f"1) {BASARI_BOLUMLERI[0]}: 3-5 madde; somut sonuç ve sayı (sayılar yalnız istatistikten).\n"
-        f"2) {BASARI_BOLUMLERI[1]}: kategori/iş alanı adları alt başlık olur (\"Yazışmalar:\" gibi), altında maddeler.\n"
-        f"3) {BASARI_BOLUMLERI[2]}: dönem içinde tamamlanan işler.\n"
-        f"4) {BASARI_BOLUMLERI[3]}: her gün ya da düzenli yürütülen işler.\n"
-        f"5) {BASARI_BOLUMLERI[4]}: istatistikteki sayılar birebir, her biri bir madde.\n"
+        f"Bir müzik edisyon şirketinde çalışan bir danışmanın bir {donem}lık iş kayıtlarından, danışmanın kendisi "
+        "için yapılandırılmış bir başarı dökümü çıkarıyorsun (performans görüşmesi ve kendi kaydı için).\n"
+        + girdi +
+        "YALNIZ şu JSON nesnesini döndür, başka hiçbir şey yazma:\n"
+        '{"one_cikanlar":[{"baslik":"…","aciklama":"…"}],'
+        '"alanlar":[{"ad":"…","temalar":[{"ad":"…","ozet":"…","etiketler":["…"],"madde_idleri":[1,2]}]}],'
+        '"tamamlanan":["…"],"devam_eden":["…"],"surekli":"…"}\n'
         "Kurallar:\n"
-        "- Edilgen rapor dili (\"… yürütüldü\", \"… tamamlandı\"); birinci tekil şahıs kullanma.\n"
-        "- Raporlarda geçmeyen iş, sonuç ya da etki yazma; abartı ve övgü sıfatı yok.\n"
+        f"- one_cikanlar: 3-5 öğe; baslik kısa bir sonuç cümlesi (\"Lisanslama modülü devreye alındı.\"), aciklama "
+        "tek cümle.\n"
+        "- alanlar: sorumluluk alanları (ör. \"Edisyon uygulaması\", \"Meslek birlikleri ve eser talepleri\"); her "
+        "alanda 2-6 tema. Tema adı kısa iş başlığı; ozet 1-2 cümle; teknik ayrıntıyı iş sonucuna çevir, maddeleri "
+        "tek tek sayma.\n"
+        f"- etiketler: en çok {ETIKET_EN_COK}, kısa (1-4 kelime) somut konu, ürün ya da eser adı.\n"
+        "- madde_idleri: temaya giren maddelerin id'leri; her madde yalnız bir temaya girer. Madde sayısı yazma.\n"
+        "- tamamlanan: dönemde tamamlanan işlerin kısa adları; devam_eden: hâlâ açık işler, aşaması varsa \" · \" ile "
+        "(\"Konser raporu işleme · canlı veri\").\n"
+        "- surekli: her gün ya da düzenli yürütülen işlerin tek satırlık özeti, parçalar \" · \" ile ayrılır.\n"
         + ortak
-        + "Yalnız döküm metnini döndür, açıklama yazma."
     )
 
 
+def _json_nesne_ayikla(metin: str) -> dict:
+    bas, son = metin.find("{"), metin.rfind("}")
+    if bas == -1 or son <= bas:
+        raise ValueError("yanıtta JSON nesne yok")
+    veri = json.loads(metin[bas: son + 1])
+    if not isinstance(veri, dict):
+        raise ValueError("yanıt JSON nesne değil")
+    return veri
+
+
+def ozet_json_gecerli(bicim: str, veri: dict) -> bool:
+    """Sözleşmenin iskeleti: başarıda öne çıkanlar ve alanlar, patronda bölümler dizi olmalı."""
+    if bicim == "patron":
+        return isinstance(veri.get("bolumler"), list)
+    return isinstance(veri.get("alanlar"), list) and isinstance(veri.get("one_cikanlar"), list)
+
+
 def claude_ozet(
-    tur: str, bicim: str, baslik: str, girdi: str, istatistik: str, api_anahtari: str,
+    tur: str, bicim: str, baslik: str, girdi: dict, istatistik: str, api_anahtari: str,
     kendi_sirket: list[str] | None = None, eslemeler: list[dict] | None = None, istemci: httpx.Client | None = None,
-) -> str:
-    """Aylık/yıllık özet ya da başarı dökümü; tek çağrı. girdi: raporlar (ya da aylık özetler) metni, istatistik:
-    istatistik_metni çıktısı. Ad eşlemeleri girdiye ve son adımda çıktıya uygulanır. Başlık yoksa başa eklenir."""
+) -> dict:
+    """Aylık/yıllık özet ya da başarı dökümünün yapılandırılmış hâli (doğrulanmamış ham JSON nesnesi). girdi: API'nin
+    hazırladığı, ad eşlemesi uygulanmış JSON. Yanıt JSON değilse ya da iskeleti bozuksa bir kez yeniden sorulur; yine
+    bozuksa ClaudeHatasi. İki çağrının kullanımı toplanır."""
     kendi_sirket = [ad_esle(k, eslemeler) for k in kendi_sirket] if kendi_sirket else kendi_sirket
-    icerik = "Günlük raporlar" if tur == "aylik" else "Aylık özetler ve özeti olmayan aylar"
     istek = {
         "model": CLAUDE_MODEL,
-        "max_tokens": 3000,
+        "max_tokens": 4000,
         "thinking": {"type": "disabled"},
         "system": ozet_sistemi(tur, bicim, kendi_sirket),
         "messages": [{
             "role": "user",
             "content": f"Başlık: {baslik}\n\nİstatistik (sayılar yalnız buradan):\n{ad_esle(istatistik, eslemeler)}\n\n"
-                       f"{icerik}:\n\n{ad_esle(girdi, eslemeler)}",
+                       f"Girdi:\n{json.dumps(girdi, ensure_ascii=False)}",
         }],
     }
-    metin = _claude_cagir(istek, api_anahtari, istemci).strip()
-    if not metin:
-        raise ClaudeHatasi("boş yanıt")
-    if metin.splitlines()[0].strip() != baslik:
-        metin = f"{baslik}\n\n{metin}"
-    return ad_esle(metin, eslemeler)
+    toplam = {"girdi": 0, "cikti": 0}
+    neden = ""
+    for _ in range(2):
+        metin = _claude_cagir(istek, api_anahtari, istemci)
+        toplam = {k: toplam[k] + son_kullanim()[k] for k in toplam}
+        _yerel.kullanim = toplam
+        try:
+            veri = _json_nesne_ayikla(metin)
+        except (ValueError, TypeError) as e:
+            neden = str(e)
+            continue
+        if ozet_json_gecerli(bicim, veri):
+            return veri
+        neden = "beklenen alanlar yok"
+    raise ClaudeHatasi(f"yanıt JSON sözleşmesine uymuyor ({neden})")
+
+
+def _yazi(deger, sinir: int = 600) -> str:
+    """Serbest metin alanı: dize (ya da sayı) → tek satır, baştaki madde imi ve yıldızlar atılır."""
+    if isinstance(deger, bool) or not isinstance(deger, (str, int, float)):
+        return ""
+    metin = re.sub(r"\s+", " ", str(deger)).replace("*", "").strip()
+    return re.sub(r"^[•\-–]\s*", "", metin)[:sinir].strip()
+
+
+def _yazilar(deger, sinir: int = 60) -> list[str]:
+    liste = deger if isinstance(deger, list) else ([deger] if isinstance(deger, str) else [])
+    return [y for y in (_yazi(x) for x in liste[:sinir]) if y]
+
+
+def _anahtar(x):
+    """madde_idleri öğesi: sayı (madde id'si) ya da yıllıkta "ay-sıra" tema anahtarı."""
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float) and x.is_integer():
+        return int(x)
+    if isinstance(x, str):
+        x = x.strip()
+        return int(x) if x.isdigit() else x or None
+    return None
+
+
+def _esle_ve_temizle(metin: str, eslemeler) -> str:
+    return re.sub(r"\s{2,}", " ", ad_esle(metin, eslemeler)).strip()
+
+
+def yapi_esle(yapi, eslemeler):
+    """Yapıdaki bütün metin alanlarına ad eşlemesi (madde id'leri ve sayılar dokunulmaz)."""
+    if isinstance(yapi, str):
+        return ad_esle(yapi, eslemeler)
+    if isinstance(yapi, list):
+        return [yapi_esle(x, eslemeler) for x in yapi]
+    if isinstance(yapi, dict):
+        return {k: v if k in ("madde_idleri", "sayilar", "bicim", "surum") else yapi_esle(v, eslemeler) for k, v in yapi.items()}
+    return yapi
+
+
+def ozet_yapisini_dogrula(
+    bicim: str, ham: dict, bilinen: dict | None = None, eslemeler: list[dict] | None = None,
+    kendi_sirket: list[str] | None = None, duzenleme: bool = False,
+) -> dict:
+    """Claude'un (ya da düzenlemenin) JSON'unu sözleşmeye indirger.
+    bilinen: {anahtar: (madde id'leri, metin)}; aylıkta anahtar madde id'sidir, yıllıkta ayrıca "ay-sıra" tema anahtarı
+    (o temanın madde id'lerine açılır). Bilinmeyen id atılır; bir madde yalnız ilk temasında sayılır; tema sayısı geçerli
+    madde id'lerinin sayısıdır. Hiçbir temaya girmeyen madde "Diğer" temasına eklenir (düzenlemede eklenmez; boş temalar
+    düzenlemede kalır). Ad eşlemeleri ve E2 (kendi şirketi, 'şirket içi' ve 'ekip içi' etiket olmaz) son adımda uygulanır."""
+    bilinen = bilinen or {}
+    kendi = {_kucult(ad_esle(k, eslemeler)) for k in kendi_sirket or []} | {SIRKET_ICI, EKIP_ICI}
+    esle = lambda s: _esle_ve_temizle(s, eslemeler)  # noqa: E731
+    if bicim == "patron":
+        bolumler = []
+        for b in ham.get("bolumler") or []:
+            if not isinstance(b, dict):
+                continue
+            ad, maddeler = esle(_yazi(b.get("ad"), 120)).rstrip(":").strip(), [esle(m) for m in _yazilar(b.get("maddeler"))]
+            if ad and (maddeler or duzenleme):
+                bolumler.append({"ad": ad, "maddeler": [m for m in maddeler if m]})
+        return {"bicim": "patron", "bolumler": bolumler,
+                "tamamlanan": [esle(x) for x in _yazilar(ham.get("tamamlanan"))],
+                "devam_eden": [esle(x) for x in _yazilar(ham.get("devam_eden"))]}
+
+    kullanilan: set[int] = set()
+
+    def ac(x) -> list[int]:
+        k = _anahtar(x)
+        return list(bilinen[k][0]) if k in bilinen else []
+
+    alanlar = []
+    for a in ham.get("alanlar") or []:
+        if not isinstance(a, dict):
+            continue
+        temalar = []
+        for t in a.get("temalar") or []:
+            if not isinstance(t, dict):
+                continue
+            idler = []
+            for x in t.get("madde_idleri") or []:
+                for i in ac(x):
+                    if i not in kullanilan:
+                        kullanilan.add(i)
+                        idler.append(i)
+            tema = {
+                "ad": esle(_yazi(t.get("ad"), 120)), "ozet": esle(_yazi(t.get("ozet"), 800)),
+                "etiketler": [e for e in (esle(_yazi(e, 60)) for e in _yazilar(t.get("etiketler")))
+                              if e and _kucult(e) not in kendi][:ETIKET_EN_COK],
+                "madde_idleri": idler, "madde_sayisi": len(idler),
+            }
+            if (tema["ad"] or tema["ozet"]) and (idler or duzenleme):
+                temalar.append(tema)
+        ad = esle(_yazi(a.get("ad"), 120))
+        if ad and (temalar or duzenleme):
+            alanlar.append({"ad": ad, "temalar": temalar})
+    if not duzenleme:
+        atanmamis = [(k, ids, metin) for k, (ids, metin) in bilinen.items() if ids and not kullanilan & set(ids)]
+        if atanmamis:
+            idler = [i for _, ids, _ in atanmamis for i in ids if i not in kullanilan]
+            ornek = list(dict.fromkeys(o for o in (esle(_yazi(m, 160)).rstrip(".") for _, _, m in atanmamis) if o))
+            tema = {"ad": DIGER, "ozet": "; ".join(ornek[:3]) + ("; …" if len(ornek) > 3 else "."),
+                    "etiketler": [], "madde_idleri": idler, "madde_sayisi": len(idler)}
+            hedef = next((a for a in alanlar if _kucult(a["ad"]) == _kucult(DIGER)), None)
+            if hedef is None:
+                alanlar.append({"ad": DIGER, "temalar": [tema]})
+            else:
+                hedef["temalar"].append(tema)
+    for a in alanlar:
+        a["madde_sayisi"] = sum(t["madde_sayisi"] for t in a["temalar"])
+    one = []
+    for o in ham.get("one_cikanlar") or []:
+        if isinstance(o, dict):
+            baslik, aciklama = esle(_yazi(o.get("baslik"), 200)), esle(_yazi(o.get("aciklama"), 600))
+        else:
+            baslik, aciklama = esle(_yazi(o, 200)), ""
+        if baslik or aciklama:
+            one.append({"baslik": baslik, "aciklama": aciklama})
+    surekli = ham.get("surekli")
+    surekli = " · ".join(_yazilar(surekli)) if isinstance(surekli, list) else _yazi(surekli, 600)
+    return {
+        "bicim": "basari", "one_cikanlar": one if duzenleme else one[:ONE_CIKAN_EN_COK], "alanlar": alanlar,
+        "tamamlanan": [esle(x) for x in _yazilar(ham.get("tamamlanan"))],
+        "devam_eden": [esle(x) for x in _yazilar(ham.get("devam_eden"))],
+        "surekli": esle(surekli),
+    }
+
+
+def cumle_sonu(metin: str) -> str:
+    metin = metin.strip()
+    return metin if not metin or metin[-1] in ".!?…:" else metin + "."
+
+
+def one_cikan_metni(o: dict) -> str:
+    return " ".join(x for x in (cumle_sonu(o.get("baslik") or ""), o.get("aciklama") or "") if x).strip()
+
+
+def sayilar_satiri(s: dict) -> str:
+    """'21/22 iş günü rapor · 287 madde · 64 kurumsal e-posta · 13 toplantı · 21 dosya · 9 tamamlanan iş'; sıfırlar yazılmaz."""
+    parcalar = [f"{s.get('rapor_gunu', 0)}/{s.get('is_gunu', 0)} iş günü rapor"] if s.get("is_gunu") else []
+    for anahtar, ad in (("toplam_madde", "madde"), ("eposta", "kurumsal e-posta"), ("uygulama", "uygulama çalışması"),
+                        ("toplanti", "toplantı"), ("dosya", "dosya"), ("tamamlanan", "tamamlanan iş")):
+        if s.get(anahtar):
+            parcalar.append(f"{s[anahtar]} {ad}")
+    return " · ".join(parcalar)
+
+
+def patron_metni(baslik: str, yapi: dict) -> str:
+    """Patron JSON'undan WhatsApp metni: başlık, '*Bölüm:*' + maddeler, sonda Tamamlananlar ve Devam Eden İşler."""
+    satirlar = [baslik, ""]
+    for b in yapi.get("bolumler") or []:
+        if b.get("maddeler"):
+            satirlar += [f"*{b['ad']}:*"] + [f"• {m}" for m in b["maddeler"]] + [""]
+    if yapi.get("tamamlanan"):
+        satirlar += [f"*{PATRON_TAMAMLANAN}:*", "• " + " · ".join(yapi["tamamlanan"]), ""]
+    if yapi.get("devam_eden"):
+        satirlar += [f"*{PATRON_DEVAM}:*"] + [f"• {d}" for d in yapi["devam_eden"]] + [""]
+    return "\n".join(satirlar).strip()
+
+
+def basari_metni(baslik: str, yapi: dict) -> str:
+    """Başarı dökümünün düz metin karşılığı (kopyalama için); bölüm sırası PDF'le aynı."""
+    satirlar = [baslik, ""]
+
+    def bolum(ad: str, maddeler: list[str]):
+        if maddeler:
+            satirlar.extend([ad] + [f"• {m}" for m in maddeler] + [""])
+
+    bolum(BASARI_BOLUMLERI[0], [one_cikan_metni(o) for o in yapi.get("one_cikanlar") or []])
+    if yapi.get("alanlar"):
+        satirlar.append(BASARI_BOLUMLERI[1])
+        for a in yapi["alanlar"]:
+            satirlar.append(f"{a['ad']} · {a.get('madde_sayisi', 0)} madde")
+            for t in a.get("temalar") or []:
+                ek = f" [{', '.join(t['etiketler'])}]" if t.get("etiketler") else ""
+                satirlar.append(f"• {t['ad']} ({t.get('madde_sayisi', 0)} madde): {t.get('ozet') or ''}{ek}".rstrip(": "))
+        satirlar.append("")
+    bolum(BASARI_BOLUMLERI[2], yapi.get("tamamlanan") or [])
+    bolum("Devam eden işler", yapi.get("devam_eden") or [])
+    bolum(BASARI_BOLUMLERI[3], [yapi["surekli"]] if yapi.get("surekli") else [])
+    bolum(BASARI_BOLUMLERI[4], [sayilar_satiri(yapi.get("sayilar") or {})] if sayilar_satiri(yapi.get("sayilar") or {}) else [])
+    return "\n".join(satirlar).strip()
+
+
+def ozet_metni(baslik: str, yapi: dict) -> str:
+    return patron_metni(baslik, yapi) if yapi.get("bicim") == "patron" else basari_metni(baslik, yapi)
 
 
 def surekli_varyant(metin: str, tarih: date) -> str:

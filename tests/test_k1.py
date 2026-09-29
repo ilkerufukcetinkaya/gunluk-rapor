@@ -124,7 +124,7 @@ def test_sema_guncelle_eski_semada_kolon_tablo_ve_geri_doldurma(tmp_path):
         "user_settings.otomatik_gonder", "user_settings.otomatik_saat", "user_settings.patron_eposta",
         "user_settings.patron_adi", "user_settings.otomatik_kopya_bana", "user_settings.ad_eslemeleri",
         "user_settings.ms_refresh_enc", "user_settings.ms_eposta", "user_settings.ms_baglanti",
-        "user_settings.ms_durum", "user_settings.ms_kapsamlar",
+        "user_settings.ms_durum", "user_settings.ms_kapsamlar", "users.unvan",
     ]
     assert veritabani.sema_guncelle(eski) == []
     with eski.begin() as b:

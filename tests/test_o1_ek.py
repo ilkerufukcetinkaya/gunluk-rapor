@@ -126,7 +126,7 @@ def test_profil_adi_patch_dogrulama_ve_kullanici_ayrimi():
     kullanici_olustur("b@ornek.com", "Burak")
     c = istemci()
     r = c.patch("/api/profil", json={"ad": "  Ayşe   Demir \n"})
-    assert r.status_code == 200 and r.json() == {"ad": "Ayşe Demir", "ad_yer_tutucu": False}
+    assert r.status_code == 200 and r.json() == {"ad": "Ayşe Demir", "ad_yer_tutucu": False, "unvan": ""}
     for kotu in ("", "   ", "A", "x" * 61, None):
         assert c.patch("/api/profil", json={"ad": kotu}).status_code == 422, kotu
     assert c.patch("/api/profil", json={}).status_code == 422

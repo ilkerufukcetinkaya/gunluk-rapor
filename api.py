@@ -3,16 +3,19 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import random
 import re
 import threading
 import time as saat_
+import unicodedata
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -1420,13 +1423,15 @@ def rapor_json(r: Rapor, eslemeler: list[dict] | None = None) -> dict:
         "gonderim": r.gonderim or "elle",
         "bicim": r.bicim,
         "istatistik": r.istatistik,
+        "yapi": servisler.yapi_esle(r.yapi, eslemeler) if r.yapi else None,
     }
 
 
 def rapor_yaz(db: Session, user_id: int, tarih: date, tur: str, metin: str, hafta: date | None = None,
-              gonderim: str | None = None, bicim: str | None = None, istatistik: dict | None = None) -> Rapor:
-    """(kullanıcı, gün, tür, biçim) başına tek satır; son yazan kazanır. gonderim ve istatistik verilmezse eski değer
-    korunur. bicim yalnız aylık/yıllık özette dolu."""
+              gonderim: str | None = None, bicim: str | None = None, istatistik: dict | None = None,
+              yapi: dict | None = None) -> Rapor:
+    """(kullanıcı, gün, tür, biçim) başına tek satır; son yazan kazanır. gonderim, istatistik ve yapi verilmezse eski
+    değer korunur. bicim, istatistik ve yapi yalnız aylık/yıllık özette dolu."""
     kosul = (Rapor.user_id == user_id, Rapor.tarih == tarih, Rapor.tur == tur,
              Rapor.bicim == bicim if bicim else Rapor.bicim.is_(None))
     with _kullanici_kilidi(user_id, "rapor"):
@@ -1441,6 +1446,8 @@ def rapor_yaz(db: Session, user_id: int, tarih: date, tur: str, metin: str, haft
                 rapor.gonderim = gonderim
             if istatistik is not None:
                 rapor.istatistik = istatistik
+            if yapi is not None:
+                rapor.yapi = yapi
             try:
                 db.commit()
                 return rapor
@@ -1520,19 +1527,21 @@ def haftalik_ozet(govde: HaftalikIstek, kullanici: Kullanici = Depends(aktif_kul
     return {"metin": metin, "hafta_baslangic": pazartesi.isoformat(), "rapor_sayisi": len(raporlar)}
 
 
-# ---------------------------------------------------------------- aylık / yıllık özet (A1)
+# ---------------------------------------------------------------- aylık / yıllık özet (A1, A1v2)
 
 OZET_TURLERI = ("aylik", "yillik")
-OZET_METIN_SINIRI = 40_000  # karakter; aylık girdi bunu aşarsa haftalık özetler / kısaltılmış günlükler
-OZET_KISA_MADDE = 12  # kısaltılmış günlük raporda ilk N madde
-OZET_ORNEK_MADDE = 30  # yıllıkta özeti olmayan ayın örnek madde sayısı
-# İstatistikteki kaynak grupları: (anahtar, etiket, maddenin kaynak alanları). E-posta ve dosyada iki sağlayıcı birleşir.
+OZET_METIN_SINIRI = 40_000  # karakter; aylık girdi bunu aşarsa günlük madde sayısı kısaltılır, haftalık özetler eklenir
+OZET_KISA_MADDE = 12  # kısaltılmış girdide gün başına ilk N madde
+OZET_ORNEK_MADDE = 30  # yıllıkta dökümü olmayan ayın örnek madde sayısı
+# İstatistikteki kaynak grupları (ekrandaki sırayla): (anahtar, etiket, maddenin kaynak alanları). E-posta ve dosyada iki
+# sağlayıcı birleşir. Uygulama grubunun etiketi, kullanıcının GitHub/Medusa kaynaklı kategorisi varsa onun adıdır.
 KAYNAK_GRUPLARI = (
-    ("elle", "Elle", ("elle",)), ("ses", "Sesle", ("ses",)), ("not", "Not", ("not",)),
-    ("eposta", "E-posta", ("eposta", "outlook")), ("toplanti", "Toplantı", ("takvim",)),
-    ("dosya", "Dosya", ("drive", "onedrive")), ("commit", "Commit", ("medusa",)),
+    ("eposta", "E-posta", ("eposta", "outlook")), ("commit", "Uygulama çalışmaları", ("medusa",)),
+    ("elle", "Elle eklenen", ("elle",)), ("ses", "Sesle eklenen", ("ses",)), ("not", "Notlar", ("not",)),
+    ("dosya", "Dosyalar", ("drive", "onedrive")), ("toplanti", "Toplantılar", ("takvim",)),
 )
 OZET_ILK = 5  # istatistikte ilk 5 kategori ve kurum/kişi
+TR_AYLAR = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
 
 
 class OzetIstek(BaseModel):
@@ -1542,7 +1551,8 @@ class OzetIstek(BaseModel):
 
 
 class OzetKaydet(OzetIstek):
-    metin: str
+    metin: str | None = None  # eski (A1) düz metin düzenlemesi
+    yapi: dict | None = None  # A1v2: alan bazlı düzenleme
 
 
 def ozet_donemi(tur: str, donem: str) -> tuple[date, date]:
@@ -1575,16 +1585,64 @@ def _ilk_n(sayilar: dict[str, int], eslemeler: list[dict]) -> list[dict]:
     return [{"ad": ad, "sayi": n} for ad, n in sorted(birlesik.items(), key=lambda x: (-x[1], x[0]))[:OZET_ILK]]
 
 
-def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -> dict:
-    """Claude'suz dönem istatistiği. Madde sayımları günlük raporu kaydedilmiş günlerin tikli, gizlenmemiş maddelerinden;
-    toplam madde ve kategoriler kayıtlı rapor metinlerinden. İş günü hatırlatma günlerine göre, dönemin başı (ya da hesabın
-    açıldığı / ilk raporun günü) ile bugün arasında sayılır."""
-    a = ayar_satiri(db, kullanici)
-    eslemeler = ad_eslemeleri(a)
-    son = min(bit, bugun())
+def tarih_araligi(bas: date, bit: date) -> str:
+    """'17–29 Eylül', '28 Eylül – 2 Ekim', '17 Eylül'; yıl yazılmaz (dönem adında var)."""
+    if bas == bit:
+        return f"{bas.day} {TR_AYLAR[bas.month - 1]}"
+    if (bas.year, bas.month) == (bit.year, bit.month):
+        return f"{bas.day}–{bit.day} {TR_AYLAR[bit.month - 1]}"
+    return f"{bas.day} {TR_AYLAR[bas.month - 1]} – {bit.day} {TR_AYLAR[bit.month - 1]}"
+
+
+def kullanim_araligi(bas: date, son: date, rapor_gunleri: set[date]) -> dict | None:
+    """Kapsamanın gerçek aralığı: ilk rapor günü dönem başından sonraysa ilk–son rapor günü ve "(aracın kullanıldığı
+    dönem)"; değilse dönem başı – bugün/dönem sonu. Rapor yoksa None."""
+    if not rapor_gunleri:
+        return None
+    ilk, sonuncu = min(rapor_gunleri), max(rapor_gunleri)
+    arac = ilk > bas
+    a, b = (ilk, sonuncu) if arac else (bas, max(son, sonuncu))
+    return {"baslangic": a.isoformat(), "bitis": b.isoformat(), "arac": arac,
+            "metin": tarih_araligi(a, b) + (" (aracın kullanıldığı dönem)" if arac else "")}
+
+
+def donem_girenleri(db: Session, kullanici: Kullanici, bas: date, bit: date) -> tuple[list[Rapor], list[Madde], list[Madde]]:
+    """(dönemin günlük raporları, dönemin bugün/bulunan maddeleri, rapora girenler). Rapora giren: günlük raporu
+    kaydedilmiş günün tikli, gizlenmemiş elle/not/ses ya da bulunan maddesi."""
     raporlar = db.scalars(select(Rapor).where(
         Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih >= bas, Rapor.tarih <= bit,
     ).order_by(Rapor.tarih)).all()
+    rapor_gunleri = {r.tarih for r in raporlar}
+    donem_maddeleri = db.scalars(select(Madde).where(
+        Madde.user_id == kullanici.id, Madde.tarih >= bas, Madde.tarih <= bit, Madde.tur.in_(("bugun", "bulunan")),
+    ).order_by(Madde.tarih, Madde.id)).all()
+    girenler = [m for m in donem_maddeleri if m.tarih in rapor_gunleri and m.tikli and not m.gizli
+                and (m.tur == "bulunan" or m.kaynak in ELLE_KAYNAKLARI)]
+    return list(raporlar), list(donem_maddeleri), girenler
+
+
+def kategori_baglami(db: Session, kullanici: Kullanici) -> tuple[KategoriBaglami, list[Kategori]]:
+    """Kullanıcının kategorileri (yoksa açılmaz)."""
+    kategoriler = list(db.scalars(select(Kategori).where(Kategori.user_id == kullanici.id).order_by(Kategori.sira, Kategori.id)))
+    return KategoriBaglami(kategoriler), kategoriler
+
+
+def devam_rapor_metni(m: Madde) -> str:
+    """Devam eden işin rapordaki adı: Claude düzeltmesi (iş + aşama tek cümle) varsa o, yoksa kullanıcının yazdığı."""
+    if not m.kullanici_duzenledi and m.ai_kullan is not False and m.metin_ai:
+        return m.metin_ai
+    return m.metin
+
+
+def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -> dict:
+    """Claude'suz dönem istatistiği. Madde sayımları günlük raporu kaydedilmiş günlerin tikli, gizlenmemiş maddelerinden;
+    toplam madde ve kategoriler kayıtlı rapor metinlerinden. İş günü hatırlatma günlerine göre, dönemin başı (ya da hesabın
+    açıldığı / ilk raporun günü) ile bugün arasında sayılır. Kaynaklarda sıfır olan satır yoktur; tamamlanan ve açık
+    işlerin metni rapor metnidir (düzeltilmiş, ad eşlemeli)."""
+    a = ayar_satiri(db, kullanici)
+    eslemeler = ad_eslemeleri(a)
+    son = min(bit, bugun())
+    raporlar, donem_maddeleri, girenler = donem_girenleri(db, kullanici, bas, bit)
     rapor_gunleri = {r.tarih for r in raporlar}
 
     ilk = utc(kullanici.olusturma).astimezone(servisler.ISTANBUL).date() if kullanici.olusturma else bas
@@ -1592,12 +1650,14 @@ def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -
     ilk = max(bas, min(ilk, ilk_rapor) if ilk_rapor else ilk)
     is_gunleri = {g for g in _gunler(ilk, son) if g.isoweekday() in hatirlatma_ayari(a)["gunler"]} if ilk <= son else set()
 
-    donem_maddeleri = db.scalars(select(Madde).where(
-        Madde.user_id == kullanici.id, Madde.tarih >= bas, Madde.tarih <= bit, Madde.tur.in_(("bugun", "bulunan")),
-    ).order_by(Madde.tarih, Madde.id)).all()
-    girenler = [m for m in donem_maddeleri if m.tarih in rapor_gunleri and m.tikli and not m.gizli
-                and (m.tur == "bulunan" or m.kaynak in ELLE_KAYNAKLARI)]
-    kaynaklar = [{"anahtar": k, "ad": ad, "sayi": sum(1 for m in girenler if m.kaynak in grup)} for k, ad, grup in KAYNAK_GRUPLARI]
+    baglam, _ = kategori_baglami(db, kullanici)
+    uygulama = next((k for k in baglam.kategoriler if not k.sistem and {"github", "medusa"} & set(k.kaynaklar or [])), None)
+    kaynaklar = []
+    for k, ad, grup in KAYNAK_GRUPLARI:
+        sayi = sum(1 for m in girenler if m.kaynak in grup)
+        if sayi:
+            kaynaklar.append({"anahtar": k, "ad": servisler.ad_esle(uygulama.ad, eslemeler) if k == "commit" and uygulama else ad,
+                              "sayi": sayi})
 
     kurumlar: dict[str, int] = {}
     for m in girenler:
@@ -1605,23 +1665,27 @@ def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -
             for ad, adet in servisler.eposta_hedefleri(m.metin):
                 kurumlar[ad] = kurumlar.get(ad, 0) + adet
 
-    tamamlanan = [{"metin": servisler.ad_esle(m.metin, eslemeler), "tarih": m.tarih.isoformat()} for m in donem_maddeleri
-                  if m.tur == "bugun" and m.kaynak == "elle" and not m.gizli and servisler.TAMAMLANDI.search(m.metin or "")]
+    tamamlanan = [{"metin": servisler.ad_esle(madde_rapor_metni(m, None, m.tarih), eslemeler), "tarih": m.tarih.isoformat()}
+                  for m in donem_maddeleri if m.tur == "bugun" and m.kaynak == "elle" and not m.gizli
+                  and (servisler.TAMAMLANDI.search(m.metin or "") or servisler.TAMAMLANDI.search(madde_rapor_metni(m, None, m.tarih)))]
     bitis_ani = datetime.combine(bit + timedelta(days=1), time.min, servisler.ISTANBUL)
     devamlar = [m for m in db.scalars(select(Madde).where(
         Madde.user_id == kullanici.id, Madde.tur == "devam").order_by(Madde.olusturma, Madde.id))
         if m.olusturma is None or utc(m.olusturma) < bitis_ani]
-    acik = [{"metin": servisler.ad_esle(m.metin, eslemeler), "asama": servisler.ad_esle(m.asama or "", eslemeler),
+    acik = [{"metin": servisler.ad_esle(devam_rapor_metni(m), eslemeler),
+             "asama": "" if devam_rapor_metni(m) != m.metin else servisler.ad_esle(m.asama or "", eslemeler),
              "gun": bekleme_gunu(m.olusturma, son)} for m in devamlar]
     onemli = sum(1 for m in girenler if m.onemli) + sum(
         1 for m in devamlar if m.onemli and m.olusturma and utc(m.olusturma) >= datetime.combine(bas, time.min, servisler.ISTANBUL))
 
     return {
         "baslangic": bas.isoformat(), "bitis": son.isoformat(),
+        "kullanim": kullanim_araligi(bas, son, rapor_gunleri),
         "rapor_gunu": len(raporlar),
         "elle": sum(1 for r in raporlar if (r.gonderim or "elle") != "otomatik"),
         "otomatik": sum(1 for r in raporlar if r.gonderim == "otomatik"),
         "is_gunu": len(is_gunleri),
+        "raporlu_is_gunu": len(rapor_gunleri & is_gunleri),
         "kapsama": round(100 * len(rapor_gunleri & is_gunleri) / len(is_gunleri)) if is_gunleri else None,
         "toplam_madde": sum(servisler.rapor_madde_sayisi(r.metin) for r in raporlar),
         "kaynaklar": kaynaklar,
@@ -1633,31 +1697,59 @@ def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -
     }
 
 
-def _gunluk_blogu(r: Rapor, kisa: bool = False) -> str:
-    metin = servisler.rapor_kisalt(r.metin, OZET_KISA_MADDE) if kisa else r.metin
-    return f"### {r.tarih.isoformat()}{' (kısaltılmış)' if kisa else ''}\n{metin}"
+def _surekli_girdisi(db: Session, kullanici: Kullanici, eslemeler: list[dict]) -> list[str]:
+    return [servisler.ad_esle(x.split("|")[0].strip(), eslemeler) for x in surekli_metinleri(db, kullanici) if x.strip()]
 
 
-def aylik_girdi(db: Session, kullanici: Kullanici, bas: date, bit: date) -> tuple[str, str]:
-    """(girdi metni, kaynak). Yalnız o ayın günlük raporları; OZET_METIN_SINIRI aşılırsa o aya düşen haftalık özetler
-    (kapsamadıkları günler kısaltılmış günlükle) ya da haftalık yoksa kısaltılmış günlükler. kaynak: gunluk | haftalik | kisaltilmis."""
-    gunlukler = db.scalars(select(Rapor).where(
-        Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih >= bas, Rapor.tarih <= bit,
-    ).order_by(Rapor.tarih)).all()
-    if not gunlukler:
+def aylik_girdi(db: Session, kullanici: Kullanici, bas: date, bit: date, ist: dict,
+                eslemeler: list[dict]) -> tuple[dict, str, dict]:
+    """(Claude girdisi, kaynak, bilinen maddeler). Girdi: raporlu günlerin tikli, gizlenmemiş maddeleri id + etkin kategori
+    + kaynak + rapor metniyle; sürekli, devam eden ve tamamlanan işler. Maddesi olmayan raporlu günlerin rapor metni bağlam
+    olarak eklenir. OZET_METIN_SINIRI aşılırsa gün başına ilk OZET_KISA_MADDE madde gider ve o aya düşen haftalık özetler
+    bağlam olur. kaynak: gunluk | kisaltilmis | haftalik. bilinen: {madde id: ([id], metin)} — yalnız gönderilenler."""
+    raporlar, _, girenler = donem_girenleri(db, kullanici, bas, bit)
+    if not raporlar:
         raise HTTPException(status_code=400, detail="Bu ay için kayıtlı günlük rapor yok")
-    tam = "\n\n".join(_gunluk_blogu(r) for r in gunlukler)
-    if len(tam) <= OZET_METIN_SINIRI:
-        return tam, "gunluk"
-    haftaliklar = db.scalars(select(Rapor).where(
-        Rapor.user_id == kullanici.id, Rapor.tur == "haftalik", Rapor.tarih >= bas - timedelta(days=6), Rapor.tarih <= bit,
-    ).order_by(Rapor.tarih)).all()
-    if not haftaliklar:
-        return "\n\n".join(_gunluk_blogu(r, kisa=True) for r in gunlukler), "kisaltilmis"
-    kapsanan = {h.tarih + timedelta(days=n) for h in haftaliklar for n in range(7)}
-    bloklar = [(h.tarih, f"### {h.tarih.isoformat()} haftası (haftalık özet)\n{h.metin}") for h in haftaliklar]
-    bloklar += [(r.tarih, _gunluk_blogu(r, kisa=True)) for r in gunlukler if r.tarih not in kapsanan]
-    return "\n\n".join(b for _, b in sorted(bloklar, key=lambda x: x[0])), "haftalik"
+    baglam, kategoriler = kategori_baglami(db, kullanici)
+    adlar = {k.id: servisler.ad_esle(k.ad, eslemeler) for k in kategoriler}
+    duzen = {(r.tarih, r.item_id): r for r in db.scalars(select(RaporDuzeni).where(
+        RaporDuzeni.user_id == kullanici.id, RaporDuzeni.tarih >= bas, RaporDuzeni.tarih <= bit))}
+    maddeler = [{
+        "id": m.id, "tarih": m.tarih.isoformat(), "kategori": adlar.get(baglam.etkin(m, duzen.get((m.tarih, m.id))), ""),
+        "kaynak": servisler.OZET_KAYNAK_ETIKETI.get(m.kaynak, m.kaynak or ""),
+        "metin": servisler.ad_esle(madde_rapor_metni(m, None, m.tarih), eslemeler),
+    } for m in girenler]
+    maddeli = {m.tarih for m in girenler}
+    bos_gunler = [r for r in raporlar if r.tarih not in maddeli]
+    girdi = {
+        "maddeler": maddeler,
+        "surekli": _surekli_girdisi(db, kullanici, eslemeler),
+        "devam_eden": [{"is": x["metin"], "asama": x["asama"], "gun": x["gun"]} for x in ist["acik"]],
+        "tamamlanan": [x["metin"] for x in ist["tamamlanan"]],
+    }
+    if bos_gunler:
+        girdi["gunluk_raporlar"] = [{"tarih": r.tarih.isoformat(), "metin": servisler.ad_esle(r.metin, eslemeler)} for r in bos_gunler]
+    kaynak = "gunluk"
+    if len(json.dumps(girdi, ensure_ascii=False)) > OZET_METIN_SINIRI:
+        gun_sayaci: dict[str, int] = {}
+        kisa = []
+        for m in maddeler:
+            gun_sayaci[m["tarih"]] = gun_sayaci.get(m["tarih"], 0) + 1
+            if gun_sayaci[m["tarih"]] <= OZET_KISA_MADDE:
+                kisa.append(m)
+        girdi["maddeler"] = kisa
+        if bos_gunler:
+            girdi["gunluk_raporlar"] = [{"tarih": r.tarih.isoformat(), "metin": servisler.ad_esle(
+                servisler.rapor_kisalt(r.metin, OZET_KISA_MADDE), eslemeler)} for r in bos_gunler]
+        haftaliklar = db.scalars(select(Rapor).where(
+            Rapor.user_id == kullanici.id, Rapor.tur == "haftalik", Rapor.tarih >= bas - timedelta(days=6), Rapor.tarih <= bit,
+        ).order_by(Rapor.tarih)).all()
+        kaynak = "kisaltilmis"
+        if haftaliklar:
+            girdi["haftalik_ozetler"] = [{"hafta": h.tarih.isoformat(), "metin": servisler.ad_esle(h.metin, eslemeler)}
+                                         for h in haftaliklar]
+            kaynak = "haftalik"
+    return girdi, kaynak, {m["id"]: ([m["id"]], m["metin"]) for m in girdi["maddeler"]}
 
 
 def yillik_aylari(db: Session, kullanici: Kullanici, bas: date) -> tuple[dict[int, Rapor], list[int]]:
@@ -1678,31 +1770,80 @@ def ay_sonu(bas: date) -> date:
     return (bas.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
 
 
-def yillik_girdi(db: Session, kullanici: Kullanici, bas: date) -> tuple[str, list[int]]:
-    """Aylık özetler; özeti olmayan aylar için o ayın istatistiği + günlük raporlardan kısaltılmış örnek (tekrarsız ilk
-    OZET_ORNEK_MADDE madde). Eksik aylar için aylık özet üretilmez. Dönen: (girdi metni, özetsiz aylar)."""
+def yillik_girdi(db: Session, kullanici: Kullanici, bas: date, eslemeler: list[dict]) -> tuple[dict, list[int], dict]:
+    """Yıllık girdi aylık yapılardan: başarı dökümü yapısı olan ayın temaları "ay-sıra" anahtarıyla (o temanın madde
+    id'lerine açılır); yapısı olmayan ayda (patron özeti, eski düz metin ya da hiç özet yok) ayın istatistiği + rapora
+    giren maddelerden tekrarsız ilk OZET_ORNEK_MADDE örnek (id'siyle) ve varsa özet metni. Eksik aylar için aylık özet
+    üretilmez. Dönen: (girdi, özetsiz aylar, bilinen)."""
     ozetler, ozetsiz = yillik_aylari(db, kullanici, bas)
     if not ozetler and not ozetsiz:
         raise HTTPException(status_code=400, detail="Bu yıl için kayıtlı rapor yok")
-    bloklar = []
+    aylar, bilinen = [], {}
     for ay in sorted(set(ozetler) | set(ozetsiz)):
         ay_bas = date(bas.year, ay, 1)
         ad = servisler.donem_adi("aylik", ay_bas)
-        if ay in ozetler:
-            r = ozetler[ay]
-            bloklar.append(f"### {ad} (aylık özet{', başarı dökümü' if r.bicim == 'basari' else ''})\n{r.metin}")
+        r = ozetler.get(ay)
+        yapi = r.yapi if r is not None and r.bicim == "basari" and isinstance(r.yapi, dict) else None
+        if yapi:
+            yapi = servisler.yapi_esle(yapi, eslemeler)
+            alanlar, n = [], 0
+            for a in yapi.get("alanlar") or []:
+                temalar = []
+                for t in a.get("temalar") or []:
+                    n += 1
+                    anahtar = f"{ay}-{n}"
+                    idler = [i for i in t.get("madde_idleri") or [] if isinstance(i, int) and not isinstance(i, bool)]
+                    bilinen[anahtar] = (idler, t.get("ad") or "")
+                    temalar.append({"id": anahtar, "ad": t.get("ad") or "", "ozet": t.get("ozet") or "",
+                                    "etiketler": t.get("etiketler") or [], "madde_sayisi": len(idler)})
+                alanlar.append({"ad": a.get("ad") or "", "temalar": temalar})
+            aylar.append({"ay": ad, "one_cikanlar": yapi.get("one_cikanlar") or [], "alanlar": alanlar,
+                          "tamamlanan": yapi.get("tamamlanan") or [], "devam_eden": yapi.get("devam_eden") or [],
+                          "surekli": yapi.get("surekli") or ""})
             continue
         ist = donem_istatistigi(db, kullanici, ay_bas, ay_sonu(ay_bas))
-        ornek: list[str] = []
-        for m in db.scalars(select(Rapor.metin).where(
-            Rapor.user_id == kullanici.id, Rapor.tur == "gunluk", Rapor.tarih >= ay_bas, Rapor.tarih <= ay_sonu(ay_bas),
-        ).order_by(Rapor.tarih)):
-            for x in m.splitlines():
-                if servisler.madde_satiri(x) and x.strip() not in ornek and len(ornek) < OZET_ORNEK_MADDE:
-                    ornek.append(x.strip())
-        bloklar.append(f"### {ad} (özet yok: istatistik ve günlük raporlardan kısaltılmış örnek)\n"
-                       f"{servisler.istatistik_metni(ist)}\nÖrnek maddeler:\n" + "\n".join(ornek))
-    return "\n\n".join(bloklar), ozetsiz
+        ornek, gorulen = [], set()
+        for m in donem_girenleri(db, kullanici, ay_bas, ay_sonu(ay_bas))[2]:
+            metin = servisler.ad_esle(madde_rapor_metni(m, None, m.tarih), eslemeler)
+            if metin.strip() and servisler._kucult(metin.strip()) not in gorulen and len(ornek) < OZET_ORNEK_MADDE:
+                gorulen.add(servisler._kucult(metin.strip()))
+                ornek.append({"id": m.id, "metin": metin})
+                bilinen[m.id] = ([m.id], metin)
+        blok = {"ay": ad, "istatistik": servisler.istatistik_metni(ist), "maddeler": ornek}
+        if r is not None:
+            blok["ozet_metni"] = servisler.ad_esle(r.metin, eslemeler)
+        aylar.append(blok)
+    return {"aylar": aylar}, ozetsiz, bilinen
+
+
+def ozet_sayilari(ist: dict, yapi: dict) -> dict:
+    """Belgedeki sayılar sunucudan: istatistik + yapıdaki listelerin uzunlukları (Claude'un sayılarına güvenilmez)."""
+    k = {x["anahtar"]: x["sayi"] for x in ist.get("kaynaklar") or []}
+    tamamlanan = yapi.get("tamamlanan") if yapi.get("bicim") == "basari" else None
+    return {
+        "rapor_gunu": ist.get("rapor_gunu", 0), "raporlu_is_gunu": ist.get("raporlu_is_gunu", ist.get("rapor_gunu", 0)),
+        "is_gunu": ist.get("is_gunu", 0), "kapsama": ist.get("kapsama"), "toplam_madde": ist.get("toplam_madde", 0),
+        "eposta": k.get("eposta", 0), "uygulama": k.get("commit", 0), "toplanti": k.get("toplanti", 0),
+        "dosya": k.get("dosya", 0), "elle": k.get("elle", 0) + k.get("ses", 0) + k.get("not", 0),
+        "tamamlanan": len(tamamlanan) if tamamlanan else len(ist.get("tamamlanan") or []),
+        "acik": len(ist.get("acik") or []),
+        "kurum": (ist.get("kurumlar") or [None])[0],
+        "kapsam": (ist.get("kullanim") or {}).get("metin"),
+        "madde_sayisi": sum(a.get("madde_sayisi", 0) for a in yapi.get("alanlar") or []),
+    }
+
+
+def ozet_yapisi(tur: str, bicim: str, bas: date, yapi: dict, ist: dict) -> tuple[dict, str]:
+    """Doğrulanmış yapıya başlık ve hesaplanan sayılar eklenir; (yapı, düz metin)."""
+    baslik = servisler.ozet_basligi(tur, bicim, bas)
+    yapi = {"surum": 2, **yapi, "baslik": baslik}
+    yapi["sayilar"] = ozet_sayilari(ist, yapi)
+    return yapi, servisler.ozet_metni(baslik, yapi)
+
+
+def ozet_kaydi(db: Session, kullanici: Kullanici, tur: str, bas: date, bicim: str) -> Rapor | None:
+    return db.scalar(select(Rapor).where(Rapor.user_id == kullanici.id, Rapor.tur == tur, Rapor.tarih == bas,
+                                         Rapor.bicim == bicim))
 
 
 def ozet_kayitlari(db: Session, kullanici: Kullanici, tur: str, bas: date, eslemeler: list[dict]) -> dict:
@@ -1734,50 +1875,118 @@ def ozet_getir(tur: str = "aylik", donem: str = "", kullanici: Kullanici = Depen
 
 @router.post("/ozet")
 def ozet_uret(govde: OzetIstek, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    """Aylık/yıllık patron özeti ya da başarı dökümü; 1 Claude çağrısı (günlük sayaçtan). Sonuç (tür, dönem, biçim)
-    satırına yazılır; aynı dönem ve biçim yeniden üretilirse üzerine yazılır."""
+    """Aylık/yıllık patron özeti ya da başarı dökümü; 1 Claude çağrısı (günlük sayaçtan; JSON bozuksa aynı hakla bir
+    yeniden deneme). Claude'un JSON'u doğrulanır, sayılar sunucuda hesaplanır; (tür, dönem, biçim) satırına yapi + düz
+    metin yazılır. Claude hatasında ya da iki kez bozuk JSON'da 502 ve kayıtlı özet değişmez."""
     bas, bit = ozet_donemi(govde.tur, govde.donem)
     a = ayar_satiri(db, kullanici)
     eslemeler = ad_eslemeleri(a)
     ist = donem_istatistigi(db, kullanici, bas, bit)
     ozetsiz: list[int] = []
     if govde.tur == "aylik":
-        girdi, kaynak = aylik_girdi(db, kullanici, bas, bit)
+        girdi, kaynak, bilinen = aylik_girdi(db, kullanici, bas, bit, ist, eslemeler)
     else:
-        (girdi, ozetsiz), kaynak = yillik_girdi(db, kullanici, bas), "aylik"
+        (girdi, ozetsiz, bilinen), kaynak = yillik_girdi(db, kullanici, bas, eslemeler), "aylik"
     anahtar = ai_anahtari()
     if not anahtar:
         raise HTTPException(status_code=400, detail="Claude anahtarı tanımlı değil (ANTHROPIC_API_KEY); özet üretilemez")
     hak = claude_hakki_al(db, kullanici.id, bugun())
     if hak is None:
         raise HTTPException(status_code=429, detail=f"Bugünkü Claude hakkın doldu (günde {GUNLUK_CLAUDE_SINIRI}); yarın yeniden dene")
+    kendi = servisler.kendi_sirket_adlari(kendi_alanlar(a, kullanici), alan_sozlugu(a))
     servisler.kullanimi_sifirla()
     try:
-        metin = servisler.claude_ozet(
+        ham = servisler.claude_ozet(
             govde.tur, govde.bicim, servisler.ozet_basligi(govde.tur, govde.bicim, bas), girdi,
-            servisler.istatistik_metni(ist), anahtar,
-            kendi_sirket=servisler.kendi_sirket_adlari(kendi_alanlar(a, kullanici), alan_sozlugu(a)), eslemeler=eslemeler)
+            servisler.istatistik_metni(ist), anahtar, kendi_sirket=kendi, eslemeler=eslemeler)
     except servisler.ClaudeHatasi as e:
         raise HTTPException(status_code=502, detail=f"Claude: {e}; kayıtlı özet değişmedi") from e
     finally:
         claude_kullanimini_yaz(db, hak)
-    rapor = rapor_yaz(db, kullanici.id, bas, govde.tur, metin, bicim=govde.bicim, istatistik=ist)
+    yapi = servisler.ozet_yapisini_dogrula(govde.bicim, ham, bilinen, eslemeler, kendi)
+    yapi, metin = ozet_yapisi(govde.tur, govde.bicim, bas, yapi, ist)
+    rapor = rapor_yaz(db, kullanici.id, bas, govde.tur, metin, bicim=govde.bicim, istatistik=ist, yapi=yapi)
     return {"metin": rapor_json(rapor, eslemeler)["metin"], "ozet": rapor_json(rapor, eslemeler), "istatistik": ist,
             "girdi": kaynak, "ozetsiz_aylar": ay_adlari(bas, ozetsiz)}
 
 
+def yapi_idleri(yapi: dict | None) -> set[int]:
+    return {i for a in (yapi or {}).get("alanlar") or [] for t in a.get("temalar") or []
+            for i in t.get("madde_idleri") or [] if isinstance(i, int) and not isinstance(i, bool)}
+
+
 @router.put("/ozet")
 def ozet_kaydet(govde: OzetKaydet, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    """Arayüzde düzenlenen özet metni; Claude çağrılmaz. Satır yoksa güncel istatistikle açılır."""
+    """Arayüzde düzenlenen özet; Claude çağrılmaz. yapi verilirse alan bazlı düzenlemedir: yapı yeniden doğrulanır
+    (madde id'leri yalnız kayıtlı yapıdakilerden, sayılar sunucudan) ve düz metin yapıdan üretilir. Yalnız metin
+    verilirse eski (düz metin) düzenlemedir; kayıttaki yapı silinir. Satır yoksa güncel istatistikle açılır."""
     bas, bit = ozet_donemi(govde.tur, govde.donem)
-    metin = govde.metin.strip()
+    a = ayar_satiri(db, kullanici)
+    eslemeler = ad_eslemeleri(a)
+    eski = ozet_kaydi(db, kullanici, govde.tur, bas, govde.bicim)
+    ist = eski.istatistik if eski is not None and eski.istatistik else donem_istatistigi(db, kullanici, bas, bit)
+    if govde.yapi is not None:
+        bilinen = {i: ([i], "") for i in yapi_idleri(eski.yapi if eski is not None else None)}
+        kendi = servisler.kendi_sirket_adlari(kendi_alanlar(a, kullanici), alan_sozlugu(a))
+        yapi = servisler.ozet_yapisini_dogrula(govde.bicim, govde.yapi, bilinen, eslemeler, kendi, duzenleme=True)
+        yapi, metin = ozet_yapisi(govde.tur, govde.bicim, bas, yapi, ist)
+        rapor = rapor_yaz(db, kullanici.id, bas, govde.tur, metin, bicim=govde.bicim, istatistik=ist, yapi=yapi)
+        return rapor_json(rapor, eslemeler)
+    metin = (govde.metin or "").strip()
     if not metin:
         raise HTTPException(status_code=422, detail="Özet metni boş olamaz")
-    var = db.scalar(select(Rapor.id).where(Rapor.user_id == kullanici.id, Rapor.tur == govde.tur, Rapor.tarih == bas,
-                                           Rapor.bicim == govde.bicim))
-    ist = None if var else donem_istatistigi(db, kullanici, bas, bit)
-    rapor = rapor_yaz(db, kullanici.id, bas, govde.tur, metin, bicim=govde.bicim, istatistik=ist)
-    return rapor_json(rapor, ad_eslemeleri(ayar_satiri(db, kullanici)))
+    rapor = rapor_yaz(db, kullanici.id, bas, govde.tur, metin, bicim=govde.bicim,
+                      istatistik=None if eski is not None else ist)
+    if rapor.yapi is not None:
+        rapor.yapi = None
+        db.commit()
+    return rapor_json(rapor, eslemeler)
+
+
+TR_ASCII = str.maketrans("çğıöşüÇĞİÖŞÜâîûÂÎÛ", "cgiosuCGIOSUaiuAIU")
+
+
+def dosya_parcasi(metin: str) -> str:
+    """'Ufuk Çetinkaya' → 'Ufuk-Cetinkaya' (ASCII, tireli)."""
+    metin = unicodedata.normalize("NFKD", (metin or "").translate(TR_ASCII)).encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9]+", "-", metin).strip("-")
+
+
+def ozet_dosya_adi(tur: str, bicim: str, bas: date, ad: str) -> str:
+    """'Basari-Dokumu-Eylul-2026-Ufuk-Cetinkaya.pdf', 'Aylik-Ozet-Eylul-2026-…', 'Yillik-Ozet-2026-…'."""
+    tip = "Basari Dokumu" if bicim == "basari" else ("Aylik Ozet" if tur == "aylik" else "Yillik Ozet")
+    parcalar = [tip, servisler.donem_adi(tur, bas), ad]
+    return "-".join(p for p in (dosya_parcasi(x) for x in parcalar) if p) + ".pdf"
+
+
+@router.get("/ozet/pdf")
+def ozet_pdf(tur: str = "aylik", donem: str = "", bicim: str = "basari", kullanici: Kullanici = Depends(aktif_kullanici),
+             db: Session = Depends(oturum)) -> Response:
+    """Kayıtlı özetin sunucuda üretilen PDF'i (ReportLab, IBM Plex Sans). Başarı dökümü: kapak + ayrıntı sayfaları;
+    patron özeti: tek sayfa. Özet yoksa 404."""
+    import pdf_uret  # ReportLab yalnız PDF istenince yüklenir
+
+    if bicim not in OZET_BICIMLERI:
+        raise HTTPException(status_code=422, detail="bicim patron ya da basari olmalı")
+    bas, bit = ozet_donemi(tur, donem)
+    kayit = ozet_kaydi(db, kullanici, tur, bas, bicim)
+    if kayit is None:
+        raise HTTPException(status_code=404, detail="Bu dönem için kayıtlı özet yok; önce özeti üret")
+    eslemeler = ad_eslemeleri(ayar_satiri(db, kullanici))
+    ist = kayit.istatistik or donem_istatistigi(db, kullanici, bas, bit)
+    yapi = servisler.yapi_esle(kayit.yapi, eslemeler) if isinstance(kayit.yapi, dict) else None
+    if yapi is not None and "sayilar" not in yapi:
+        yapi["sayilar"] = ozet_sayilari(ist, yapi)
+    icerik = pdf_uret.ozet_pdf(
+        tur=tur, bicim=bicim, donem_adi=servisler.donem_adi(tur, bas), yapi=yapi,
+        metin=servisler.ad_esle(kayit.metin, eslemeler), istatistik=ist,
+        ad=servisler.ad_esle(kullanici.ad, eslemeler), unvan=servisler.ad_esle(kullanici.unvan or "", eslemeler),
+        hazirlanma=utc(kayit.olusturma).astimezone(servisler.ISTANBUL).date() if kayit.olusturma else bugun(),
+    )
+    ad = ozet_dosya_adi(tur, bicim, bas, kullanici.ad)
+    utf8 = quote(ad)
+    return Response(icerik, media_type="application/pdf", headers={
+        "Content-Disposition": f"attachment; filename=\"{ad}\"; filename*=UTF-8''{utf8}", "Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- günün rapor düzeni (sıra + kategori)
@@ -2187,6 +2396,17 @@ class KurulumProfil(BaseModel):
 
 class ProfilGuncelle(BaseModel):
     ad: str | None = None
+    unvan: str | None = None  # A1v2: PDF kapağında "Ad · Unvan"; boş → kaldırılır
+
+
+UNVAN_EN_UZUN = 80
+
+
+def unvan_temizle(unvan: str | None) -> str | None:
+    unvan = re.sub(r"\s+", " ", "".join(h if h.isprintable() else " " for h in (unvan or ""))).strip()
+    if len(unvan) > UNVAN_EN_UZUN:
+        raise HTTPException(status_code=422, detail=f"Unvan en çok {UNVAN_EN_UZUN} karakter olabilir")
+    return unvan or None
 
 
 def gorunen_ad(ad: str | None) -> str:
@@ -2202,9 +2422,16 @@ def gorunen_ad(ad: str | None) -> str:
 
 @router.patch("/profil")
 def profil_guncelle(govde: ProfilGuncelle, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    kullanici.ad = gorunen_ad(govde.ad)
+    """Görünen ad ve/veya unvan; gövdede verilmeyen alan değişmez."""
+    alanlar = govde.model_fields_set
+    if not alanlar & {"ad", "unvan"}:
+        raise HTTPException(status_code=422, detail="Ad ya da unvan verilmeli")
+    if "ad" in alanlar:
+        kullanici.ad = gorunen_ad(govde.ad)
+    if "unvan" in alanlar:
+        kullanici.unvan = unvan_temizle(govde.unvan)
     db.commit()
-    return {"ad": kullanici.ad, "ad_yer_tutucu": ad_yer_tutucu(kullanici.ad)}
+    return {"ad": kullanici.ad, "ad_yer_tutucu": ad_yer_tutucu(kullanici.ad), "unvan": kullanici.unvan or ""}
 
 
 class KurulumSurekli(BaseModel):

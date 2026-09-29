@@ -57,6 +57,7 @@ class Kullanici(Temel):
     sifre_degistirmeli: Mapped[bool] = mapped_column(Boolean, default=True)
     son_giris: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     davet_eposta_tarihi: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    unvan: Mapped[str | None] = mapped_column(String(80), nullable=True)  # A1v2: PDF kapağında "Ad · Unvan"
     olusturma: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=simdi)
 
 
@@ -208,6 +209,9 @@ class Rapor(Temel):
     gonderim: Mapped[str] = mapped_column(String(10), default="elle", server_default="elle")  # 'elle' | 'otomatik'
     bicim: Mapped[str | None] = mapped_column(String(10), nullable=True)  # aylık/yıllık: 'patron' | 'basari'
     istatistik: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # aylık/yıllık: üretim anındaki istatistik
+    # A1v2: aylık/yıllık özetin yapılandırılmış hâli (Claude'un JSON'u, doğrulanmış + sunucunun hesapladığı sayılar);
+    # metin bunun düz metin karşılığıdır (kopyalama için).
+    yapi: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 Index("uq_reports_user_tarih_tur_bicim", Rapor.user_id, Rapor.tarih, Rapor.tur, func.coalesce(Rapor.bicim, ""), unique=True)
@@ -299,6 +303,8 @@ EK_KOLONLAR = [
     ("user_settings", "ms_kapsamlar", "JSON", "JSON"),
     ("reports", "bicim", "VARCHAR(10)", "VARCHAR(10)"),
     ("reports", "istatistik", "JSON", "JSON"),
+    ("reports", "yapi", "JSON", "JSON"),
+    ("users", "unvan", "VARCHAR(80)", "VARCHAR(80)"),
 ]
 # Uzatılan VARCHAR kolonları (tablo, kolon, yeni uzunluk); sqlite uzunluğu zorlamadığı için yalnız Postgres'te.
 EK_GENISLETMELER = [
