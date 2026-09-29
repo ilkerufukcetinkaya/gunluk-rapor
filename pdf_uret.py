@@ -2,9 +2,9 @@
 
 Ölçüler tasarim/a1/A1-PDF-Kapak ve A1-PDF-Ayrinti artboard'larının CSS'inden gelir: artboard 794×1123 px (A4 @96 dpi),
 bütün yerleşim px cinsinden yapılır, çizimde 0,75 ile pt'ye çevrilir. Yazı tipi IBM Plex Sans (static/fonts, OFL).
-Başarı dökümü: sayfa 1 kapak (bant, göstergeler, öne çıkanlar, işin dağılımı, durum), sayfa 2+ ayrıntılar (alanlar >
-temalar, sürekli işler, sayılarla). İçerik taşarsa bloklar sonraki sayfaya akar; bir tema bölünmez. Patron özeti tek
-sayfa: bant + bölümler + tamamlanan / devam eden."""
+Performans Özeti ('basari'): sayfa 1 kapak (bant, göstergeler, öne çıkanlar, işin dağılımı, durum), sayfa 2+ ayrıntılar
+(alanlar > temalar, sürekli işler, sayılarla). İçerik taşarsa bloklar sonraki sayfaya akar; bir tema bölünmez. Yönetici
+Özeti ('patron', A1v3-PatronPDF): bant + göstergeler + ikonlu bölümler + tamamlanan / devam eden kutuları, tek sayfa."""
 from __future__ import annotations
 
 import io
@@ -25,7 +25,8 @@ ALT_SINIR = 1052  # içerik bu çizgiyi geçmez (alt bilgi çizgisi 1072 civarı
 
 KOYU, MAVI, YESIL, TURUNCU, CIZGI = "#12151a", "#2d6cdf", "#1f8a4c", "#b7791f", "#eceef1"
 GRI, GRI_2, GRI_3, METIN, METIN_2 = "#8a919c", "#6b7280", "#9aa3b0", "#262b33", "#353b44"
-CUBUK_RENKLERI = ("#2d6cdf", "#d9433d", "#12151a", "#c98a12", "#22b866", "#6b8fd6", "#8a919c")
+# A1v3: "İşin dağılımı" çubukları ekrandaki "İş nereden geldi" donut'ıyla aynı renkte (alanın baskın kaynak grubu)
+GRUP_RENKLERI = {"uygulama": "#2d6cdf", "eposta": "#d9433d", "elle": "#12151a", "dosya": "#c98a12", "yesil": "#22b866"}
 TR_AYLAR = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
 
 YAZI_KLASORU = Path(__file__).resolve().parent / "static" / "fonts"
@@ -291,7 +292,7 @@ def belgeyi_ciz(sayfalar: list[list[tuple[float, Blok]]], alt_yazi: str, baslik:
     return tampon.getvalue()
 
 
-# ---------------------------------------------------------------- başarı dökümü
+# ---------------------------------------------------------------- Performans Özeti
 
 def gosterge_kutulari(kutular: list[tuple[str, str]]) -> tuple[float, callable]:
     """4 gösterge: kenarlık #eceef1, köşe 12, iç boşluk 14/14/12; değer 28px (satır 1), açıklama 10.5px satır 1.35."""
@@ -334,14 +335,15 @@ def one_cikan(n: int, baslik: str, aciklama: str, ilk: bool) -> tuple[float, cal
 
 
 def dagilim(alanlar: list[dict]) -> tuple[float, callable]:
-    """.area: etiket 170px, çubuk 10px (köşe 5, en çok 250px), not gri; 11px, satır arası 8."""
+    """.area: etiket 170px, çubuk 10px (köşe 5, en çok 250px), not gri; 11px, satır arası 8. Renk alanın "grup"undan
+    (baskın kaynak; bilinmiyorsa gri)."""
     en_cok = max([a.get("madde_sayisi", 0) for a in alanlar] + [1])
     satirlar = []
-    for i, a in enumerate(alanlar):
+    for a in alanlar:
         n, k = a.get("madde_sayisi", 0), len(a.get("temalar") or [])
         not_ = f"{n} madde" + (f" · {k} iş başlığı" if k > 1 else "")
         etiket = sar([Parca(a["ad"], "R", METIN)], 11, 170)
-        satirlar.append((etiket, max(3.0, 250 * n / en_cok) if n else 0, CUBUK_RENKLERI[i % len(CUBUK_RENKLERI)], not_))
+        satirlar.append((etiket, max(3.0, 250 * n / en_cok) if n else 0, GRUP_RENKLERI.get(a.get("grup"), GRI), not_))
     sy = 11 * 1.3
     yukseklik = sum(8 + max(len(e) * sy, 10) for e, *_ in satirlar)
 
@@ -446,7 +448,7 @@ def _blok(parca: tuple[float, callable], ust_bosluk: float = 0.0, yeni_sayfa: bo
 def basari_bloklari(tur: str, donem_adi: str, yapi: dict, ad_unvan: str, hazirlanma: date) -> list[Blok]:
     s = yapi.get("sayilar") or {}
     donem = "AYIN" if tur == "aylik" else "YILIN"
-    bloklar = [bant(ad_unvan, "AYLIK BAŞARI DÖKÜMÜ" if tur == "aylik" else "YILLIK BAŞARI DÖKÜMÜ", donem_adi,
+    bloklar = [bant(ad_unvan, "AYLIK PERFORMANS ÖZETİ" if tur == "aylik" else "YILLIK PERFORMANS ÖZETİ", donem_adi,
                     s.get("kapsam") or "", hazirlanma)]
     kurum = s.get("kurum")
     kutular = [
@@ -498,10 +500,157 @@ def basari_bloklari(tur: str, donem_adi: str, yapi: dict, ad_unvan: str, hazirla
     return bloklar
 
 
-# ---------------------------------------------------------------- patron özeti
+# ---------------------------------------------------------------- Yönetici Özeti (A1v3, tasarim/a1v3/A1v3-PatronPDF)
+
+KIRMIZI, YESIL_2 = "#d9433d", "#22b866"
+# bölüm ikonu: (zemin, iç kare); 'tur' api.renk_gruplarini_isle'den
+BOLUM_RENKLERI = {"uygulama": ("#e9eefb", MAVI), "yazisma": ("#fdecec", KIRMIZI), "toplanti": ("#e6f6ec", YESIL_2),
+                  "diger": ("#f1f3f6", GRI)}
+BANT_SONRASI = 32  # px = 24 pt: koyu banttan sonra ilk gösterge kutusuna kadar boşluk
+
+
+def yonetici_bandi(ad_unvan: str, etiket: str, donem_adi: str, hazirlanma: date) -> Blok:
+    """.pg bandı (padding 36 56 30): etiket 11px + sağda tarih 10px; dönem 30px (üst 14); ad · unvan 13px (üst 6)."""
+    ust_satir = 11 * 1.3
+    ad_satirlari = sar([Parca(ad_unvan, "R", "#c9ced6")], 13, ICERIK_G) if ad_unvan else []
+    yukseklik = 36 + ust_satir + 14 + 30 * 1.3 + (6 + len(ad_satirlari) * 13 * 1.3 if ad_satirlari else 0) + 30
+
+    def ciz(t: Tuval, x, y):
+        t.dikdortgen(0, y, SAYFA_G, yukseklik, KOYU)
+        yy = y + 36
+        t.yaz(KENAR, taban(yy, ust_satir, 11), etiket, "B", 11, GRI_3, aralik=0.1)
+        t.yaz(SAYFA_G - KENAR, taban(yy, ust_satir, 10), tarih_yazisi(hazirlanma), "R", 10, GRI_3, sag=True)
+        yy += ust_satir + 14
+        t.yaz(KENAR, taban(yy, 30 * 1.3, 30), donem_adi, "B", 30, "#ffffff", aralik=-0.03)
+        yy += 30 * 1.3
+        if ad_satirlari:
+            yy += 6
+            for s_ in ad_satirlari:
+                t.satir_yaz(KENAR, taban(yy, 13 * 1.3, 13), s_, 13)
+                yy += 13 * 1.3
+    return Blok(yukseklik, ciz)
+
+
+def yonetici_gostergeleri(kutular: list[tuple[str, str, str, str]]) -> tuple[float, callable]:
+    """4 kutu (etiket, değer, değer rengi, açıklama): kenarlık #eceef1, köşe 12, iç boşluk 12/14; etiket 9px, değer
+    24px (üst 6), açıklama 10px (üst 3)."""
+    ara = 10
+    en = (ICERIK_G - ara * (len(kutular) - 1)) / len(kutular)
+    aciklamalar = [sar([Parca(a, "R", GRI_2)], 10, en - 28) for *_, a in kutular]
+    yukseklik = 1 + 12 + 9 * 1.3 + 6 + 24 * 1.3 + 3 + max(len(a) for a in aciklamalar) * 10 * 1.3 + 12 + 1
+
+    def ciz(t: Tuval, x, y):
+        for i, ((etiket, deger, renk, _), satirlar) in enumerate(zip(kutular, aciklamalar)):
+            kx = KENAR + i * (en + ara)
+            t.dikdortgen(kx + 0.5, y + 0.5, en - 1, yukseklik - 1, None, 12, cizgi=CIZGI)
+            yy = y + 13
+            t.yaz(kx + 15, taban(yy, 9 * 1.3, 9), buyuk(etiket), "B", 9, GRI, aralik=0.1)
+            yy += 9 * 1.3 + 6
+            t.yaz(kx + 15, taban(yy, 24 * 1.3, 24), deger, "B", 24, renk, aralik=-0.03)
+            yy += 24 * 1.3 + 3
+            for j, s_ in enumerate(satirlar):
+                t.satir_yaz(kx + 15, taban(yy + j * 13, 13, 10), s_, 10)
+    return yukseklik, ciz
+
+
+def _madde_parcalari(m) -> list[Parca]:
+    """{vurgu, metin} → kalın vurgu + metin; düz dize (eski kayıt) yalnız metin."""
+    if isinstance(m, dict):
+        vurgu, metin = (m.get("vurgu") or "").strip(), (m.get("metin") or "").strip()
+        bitisik = metin[:1] in (":", ",", ";", ".")  # "Veri güvenliği: …"
+        return ([Parca(vurgu + ("" if bitisik else " "), "B", KOYU)] if vurgu else []) + ([Parca(metin, "R", METIN)] if metin else [])
+    return [Parca(str(m or ""), "R", METIN)]
+
+
+def yonetici_basligi(ad: str, sayi: str, tur: str) -> tuple[float, callable]:
+    """.sech: 26×26 köşe 8 renkli kare (içte 10×10 köşe 3), 10px ara, ad 15px kalın; sağda 'N madde' 10.5px gri."""
+    zemin, ic = BOLUM_RENKLERI.get(tur, BOLUM_RENKLERI["diger"])
+    sag_en = genislik(sayi, "R", 10.5) + 12 if sayi else 0
+    satirlar = sar([Parca(ad, "B", KOYU)], 15, ICERIK_G - 36 - sag_en)
+    sy = 15 * 1.3
+    yukseklik = max(26, len(satirlar) * sy)
+
+    def ciz(t: Tuval, x, y):
+        t.dikdortgen(KENAR, y + (yukseklik - 26) / 2, 26, 26, zemin, 8)
+        t.dikdortgen(KENAR + 8, y + (yukseklik - 26) / 2 + 8, 10, 10, ic, 3)
+        ust = y + (yukseklik - len(satirlar) * sy) / 2
+        for j, s_ in enumerate(satirlar):
+            t.satir_yaz(KENAR + 36, taban(ust + j * sy, sy, 15), s_, 15)
+        if sayi:
+            t.yaz(SAYFA_G - KENAR, taban(y + (yukseklik - 13.65) / 2, 13.65, 10.5), sayi, "R", 10.5, GRI, sag=True)
+    return yukseklik, ciz
+
+
+def yonetici_satiri(m) -> tuple[float, callable]:
+    """.it: iç boşluk 8 üst/alt, sol 36; 5px gri nokta (#b7bec8), 10px ara; 12px satır 1.5; alt çizgi #f3f4f6."""
+    girinti = 36 + 5 + 10
+    h, metin_ciz = paragraf(_madde_parcalari(m), 12, ICERIK_G - girinti, 1.5)
+    yukseklik = 8 + h + 8 + 1
+
+    def ciz(t: Tuval, x, y):
+        t.dikdortgen(KENAR + 36, y + 8 + 7, 5, 5, "#b7bec8", 2.5)
+        metin_ciz(t, KENAR + girinti, y + 8)
+        t.cizgi(KENAR, y + yukseklik - 1, SAYFA_G - KENAR, "#f3f4f6", 1)
+    return yukseklik, ciz
+
+
+def durum_kutulari(tamamlanan: list[str], devam: list[str]) -> tuple[float, callable]:
+    """Yan yana yeşil TAMAMLANAN (#eef8f2) ve turuncu DEVAM EDEN (#fff7ea) kutuları: köşe 14, iç boşluk 14/16, etiket
+    11px, metin 12px satır 1.55 (üst 8); boş kutu gri tek cümle."""
+    en = (ICERIK_G - 14) / 2
+    sy = 12 * 1.55
+
+    def satirlar(liste, bos):
+        if not liste:
+            return [s_ for s_ in sar([Parca(bos, "R", GRI_2)], 12, en - 32)]
+        return [s_ for m in liste for s_ in sar([Parca(m, "R", METIN)], 12, en - 32)]
+    kutular = [("TAMAMLANAN", "#eef8f2", YESIL, satirlar(tamamlanan, "Bu dönemde tamamlanan iş yok.")),
+               ("DEVAM EDEN", "#fff7ea", TURUNCU, satirlar(devam, "Açık iş bulunmuyor."))]
+    yukseklik = 14 + 11 * 1.3 + 8 + max(len(k[3]) for k in kutular) * sy + 14
+
+    def ciz(t: Tuval, x, y):
+        for i, (etiket, zemin, renk, sat) in enumerate(kutular):
+            kx = KENAR + i * (en + 14)
+            t.dikdortgen(kx, y, en, yukseklik, zemin, 14)
+            t.yaz(kx + 16, taban(y + 14, 11 * 1.3, 11), etiket, "B", 11, renk, aralik=0.1)
+            for j, s_ in enumerate(sat):
+                t.satir_yaz(kx + 16, taban(y + 14 + 11 * 1.3 + 8 + j * sy, sy, 12), s_, 12)
+    return yukseklik, ciz
+
+
+def patron_bloklari(tur: str, donem_adi: str, yapi: dict, ad_unvan: str, hazirlanma: date,
+                    istatistik: dict | None = None) -> list[Blok]:
+    """Bant → 24 pt boşluk → 4 gösterge → bölümler (ikon + ad + 'N madde', ince ayraçlı maddeler; başlık ilk maddeyle
+    bölünmez) → Toplantılar → Tamamlanan / Devam eden kutuları. Taşan içerik sonraki sayfaya akar."""
+    s, ist = yapi.get("sayilar") or {}, istatistik or {}
+    bloklar = [yonetici_bandi(ad_unvan, "AYLIK YÖNETİCİ ÖZETİ" if tur == "aylik" else "YILLIK YÖNETİCİ ÖZETİ",
+                              donem_adi, hazirlanma)]
+    kurumlar = s.get("kurum_adlari") or [k["ad"] for k in (ist.get("kurumlar") or [])[:2]]
+    yazisma = s.get("yazisma", ist.get("yazisma", sum(k["sayi"] for k in ist.get("kurumlar") or []) or s.get("eposta", 0)))
+    kutular = [
+        ("Rapor düzeni", f"{s.get('raporlu_is_gunu', 0)} / {s['is_gunu']}" if s.get("is_gunu") else "—", KOYU, "iş günü raporlandı"),
+        ("Raporlanan iş", str(s.get("toplam_madde", 0)), KOYU, "madde"),
+        ("Yazışma", str(yazisma), KIRMIZI, " ve ".join(kurumlar) if kurumlar else "kurumsal e-posta"),
+        ("Tamamlanan", str(s.get("tamamlanan", 0)), YESIL, f"iş · {s.get('acik', 0)} açık"),
+    ]
+    bloklar.append(_blok(yonetici_gostergeleri(kutular), BANT_SONRASI))
+    bolumler = [b for b in yapi.get("bolumler") or [] if b.get("maddeler")]
+    if yapi.get("toplanti"):
+        bolumler.append({"ad": "Toplantılar", "maddeler": yapi["toplanti"], "tur": "toplanti",
+                         "madde_sayisi": s.get("toplanti") or 0})
+    for b in bolumler:
+        n = b.get("madde_sayisi") or 0
+        baslik = yonetici_basligi(b["ad"], f"{n} madde" if n else "", b.get("tur") or "diger")
+        maddeler = b["maddeler"]
+        bloklar.append(_blok(birlesik(baslik, yonetici_satiri(maddeler[0]), araliklar=(0, 6)), 26))
+        for m in maddeler[1:]:
+            bloklar.append(_blok(yonetici_satiri(m)))
+    bloklar.append(_blok(durum_kutulari(yapi.get("tamamlanan") or [], yapi.get("devam_eden") or []), 28))
+    return bloklar
+
 
 def madde_listesi(maddeler: list[str], boyut: float = 12.0) -> tuple[float, callable]:
-    """'•' ile asılı girintili maddeler; satır 1.5, maddeler arası 3."""
+    """'•' ile asılı girintili maddeler; satır 1.5, maddeler arası 3 (eski düz metin kayıtları)."""
     girinti = 14
     parcalar = [paragraf([Parca(m, "R", METIN)], boyut, ICERIK_G - girinti, 1.5) for m in maddeler]
     yukseklik = sum(h for h, _ in parcalar) + 3 * max(0, len(parcalar) - 1)
@@ -513,24 +662,6 @@ def madde_listesi(maddeler: list[str], boyut: float = 12.0) -> tuple[float, call
             c(t, KENAR + girinti, yy)
             yy += h + 3
     return yukseklik, ciz
-
-
-def patron_bloklari(tur: str, donem_adi: str, yapi: dict, ad_unvan: str, hazirlanma: date) -> list[Blok]:
-    s = yapi.get("sayilar") or {}
-    bloklar = [bant(ad_unvan, "PATRONA AYLIK ÖZET" if tur == "aylik" else "PATRONA YILLIK ÖZET", donem_adi,
-                    s.get("kapsam") or "", hazirlanma)]
-    ilk = True
-    for b in yapi.get("bolumler") or []:
-        if not b.get("maddeler"):
-            continue
-        bloklar.append(_blok(birlesik(bolum_etiketi(b["ad"]), madde_listesi(b["maddeler"]), araliklar=(0, 10)),
-                             26 if ilk else 22))
-        ilk = False
-    if yapi.get("tamamlanan") or yapi.get("devam_eden"):
-        bloklar.append(_blok(birlesik(bolum_etiketi("DURUM"), iki_sutun("Tamamlanan", yapi.get("tamamlanan") or [],
-                                                                        "Devam eden", yapi.get("devam_eden") or []),
-                                      araliklar=(0, 10)), 26 if ilk else 22))
-    return bloklar
 
 
 def duz_metin_bloklari(donem_adi: str, etiket: str, metin: str, istatistik: dict, ad_unvan: str,
@@ -558,11 +689,12 @@ def ozet_pdf(tur: str, bicim: str, donem_adi: str, yapi: dict | None, metin: str
     yazilari_kaydet()
     hazirlanma = hazirlanma or date.today()
     ad_unvan = " · ".join(x for x in (ad, unvan) if x)
-    tip = "Başarı Dökümü" if bicim == "basari" else ("Aylık Özet" if tur == "aylik" else "Yıllık Özet")
+    tip = ("Aylık " if tur == "aylik" else "Yıllık ") + ("Performans Özeti" if bicim == "basari" else "Yönetici Özeti")
     if yapi:
-        bloklar = (basari_bloklari if bicim == "basari" else patron_bloklari)(tur, donem_adi, yapi, ad_unvan, hazirlanma)
+        bloklar = (basari_bloklari(tur, donem_adi, yapi, ad_unvan, hazirlanma) if bicim == "basari"
+                   else patron_bloklari(tur, donem_adi, yapi, ad_unvan, hazirlanma, istatistik))
     else:
-        etiket = ("AYLIK " if tur == "aylik" else "YILLIK ") + ("BAŞARI DÖKÜMÜ" if bicim == "basari" else "ÖZET")
+        etiket = buyuk(tip)
         bloklar = duz_metin_bloklari(donem_adi, etiket, metin, istatistik, ad_unvan, hazirlanma)
     sayfalar = dizil(bloklar, 0)
     return belgeyi_ciz(sayfalar, f"{ad} · {donem_adi} {tip}", f"{donem_adi} {tip}", ad)

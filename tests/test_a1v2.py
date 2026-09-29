@@ -123,10 +123,11 @@ def test_patron_json_whatsapp_metnine_cevrilir(sahte_claude):
         "devam_eden": ["MSG Ağustos itirazı — yanıt bekleniyor"]}, ensure_ascii=False)]
     r = uret(istemci(), "patron").json()
     assert r["metin"] == (
-        "*Aylık Özet – Eylül 2026*\n\n*Edisyon Çalışmaları:*\n• MESAM ile yazışıldı.\n• Katalog düzeltildi.\n\n"
+        "*Aylık Yönetici Özeti – Eylül 2026*\n\n*Edisyon Çalışmaları:*\n• MESAM ile yazışıldı.\n• Katalog düzeltildi.\n\n"
         "*Tamamlananlar:*\n• Köprü Film lisans talebi · Lisanslama modülü ilk sürüm\n\n"
         "*Devam Eden İşler:*\n• MSG Ağustos itirazı — yanıt bekleniyor")
-    assert r["ozet"]["yapi"]["bolumler"] == [{"ad": "Edisyon Çalışmaları", "maddeler": ["MESAM ile yazışıldı.", "Katalog düzeltildi."]}]
+    assert r["ozet"]["yapi"]["bolumler"] == [{"ad": "Edisyon Çalışmaları", "maddeler": [
+        {"vurgu": "", "metin": "MESAM ile yazışıldı."}, {"vurgu": "", "metin": "Katalog düzeltildi."}], "madde_idleri": [], "madde_sayisi": 0}]
 
 
 def test_bozuk_json_bir_kez_yeniden_denenir(sahte_claude):
@@ -193,7 +194,7 @@ def test_basari_duz_metni_ve_hesaplanan_sayilar(sahte_claude):
     s = r["ozet"]["yapi"]["sayilar"]
     assert (s["rapor_gunu"], s["is_gunu"], s["toplam_madde"], s["eposta"], s["uygulama"], s["dosya"], s["tamamlanan"]) == (3, 9, 3, 1, 1, 1, 1)
     assert s["kapsam"] == "17–21 Eylül (aracın kullanıldığı dönem)"
-    assert r["metin"].startswith("Başarı Dökümü – Eylül 2026\n\nÖne çıkanlar\n• Başlık. Açıklama.\n\n"
+    assert r["metin"].startswith("Aylık Performans Özeti – Eylül 2026\n\nÖne çıkanlar\n• Başlık. Açıklama.\n\n"
                                  "Sorumluluk alanlarına göre\nAlan · 2 madde\n• Tema (2 madde): Özet. [e1]")
     for parca in ("Tamamlanan işler\n• İş A", "Devam eden işler\n• İş B", "Sürekli üstlenilen işler\n• Takip",
                   "Sayılarla\n• 3/9 iş günü rapor · 3 madde · 1 kurumsal e-posta · 1 uygulama çalışması · 1 dosya · 1 tamamlanan iş"):
@@ -313,7 +314,7 @@ def test_basari_pdf_uctan_uca(sahte_claude):
     assert uret(c).status_code == 200
     r = c.get("/api/ozet/pdf?tur=aylik&donem=2026-09&bicim=basari")
     assert r.status_code == 200 and r.headers["content-type"] == "application/pdf" and r.content[:4] == b"%PDF"
-    assert 'filename="Basari-Dokumu-Eylul-2026-Ufuk-Cetinkaya.pdf"' in r.headers["content-disposition"]
+    assert 'filename="Performans-Ozeti-Eylul-2026-Ufuk-Cetinkaya.pdf"' in r.headers["content-disposition"]
     sayfa, metin = pdf_metni(r.content)
     assert sayfa >= 2
     assert "Çetinkaya" in metin and "öne çıkanlar" in tr_kucuk(metin) and "Ufuk Çetinkaya · Edisyon Danışmanı" in metin
@@ -330,9 +331,11 @@ def test_patron_pdf_tek_sayfa(sahte_claude):
     uret(c, "patron")
     r = c.get("/api/ozet/pdf?tur=aylik&donem=2026-09&bicim=patron")
     assert r.status_code == 200 and r.content[:4] == b"%PDF"
-    assert 'filename="Aylik-Ozet-Eylul-2026-Ufuk-Cetinkaya.pdf"' in r.headers["content-disposition"]
+    assert 'filename="Yonetici-Ozeti-Eylul-2026-Ufuk-Cetinkaya.pdf"' in r.headers["content-disposition"]
     sayfa, metin = pdf_metni(r.content)
-    assert sayfa == 1 and "Madde 9 yürütüldü." in metin and "Tamamlanan" in metin and "Devam eden" in metin
+    # A1v3: bölüm başına en çok 5 madde (yeniden istem boş döndü, fazlası kırpıldı)
+    assert sayfa == 1 and "Madde 4 yürütüldü." in metin and "Madde 5" not in metin
+    assert "TAMAMLANAN" in metin and "DEVAM EDEN" in metin and len(sahte_claude.istekler) == 2
 
 
 def test_pdf_ozet_yoksa_404_ve_kullanici_ayrimi(sahte_claude):
@@ -353,7 +356,7 @@ def test_eski_duz_metin_kaydinin_pdfi():
     uid = kullanici_olustur()
     with OturumYapici() as db:
         db.add(Rapor(user_id=uid, tarih=e(1), tur="aylik", bicim="patron",
-                     metin="*Aylık Özet – Eylül 2026*\n\n*Yazışmalar:*\n• ESKİ MADDE"))
+                     metin="*Aylık Yönetici Özeti – Eylül 2026*\n\n*Yazışmalar:*\n• ESKİ MADDE"))
         db.commit()
     sayfa, metin = pdf_metni(istemci().get("/api/ozet/pdf?tur=aylik&donem=2026-09&bicim=patron").content)
     assert sayfa == 1 and "ESKİ MADDE" in metin
@@ -417,8 +420,9 @@ def test_duzenleme_kullanici_ayrimi(sahte_claude):
 def test_gecmis_sayfasi_yeni_duzen():
     kullanici_olustur()
     html = istemci().get("/gecmis").text
-    for parca in ('class="gUst"', 'id="kpiTel"', 'id="belgeKart"', "yalnız sen görürsün", 'id="duzenleBtn"',
-                  'id="duzenKaydet"', "Maddeler nereden geldi", "En çok yazışılan", "Açık kalan işler",
-                  "PDF indir", "WhatsApp'ta aç", "grid-template-columns:430px"):
+    # A1v3: eski 430px istatistik kartı (kpiTel, "Maddeler nereden geldi" …) yerini "Ayın özeti" bölümüne bıraktı
+    for parca in ('class="gUst"', 'id="ayOzet"', 'id="belgeKart"', "yalnız sen görürsün", 'id="duzenleBtn"',
+                  'id="duzenKaydet"', "İŞ NEREDEN GELDİ", "EN ÇOK YAZIŞILAN", "İŞ DURUMU",
+                  "PDF indir", "WhatsApp'ta aç"):
         assert parca in html, parca
     assert "window.print" not in html

@@ -687,7 +687,7 @@ function renderGun(){
   }
   ozetSeridi();
 }
-// Ayın 1'inde bir kez: geçen ayın aylık özeti hazırlanabilir (kapatınca ya da açınca o ay için bir daha görünmez).
+// Ayın 1'inde bir kez: geçen ayın Yönetici Özeti hazırlanabilir (kapatınca ya da açınca o ay için bir daha görünmez).
 const TR_AYLAR = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
 const OZET_SERIT_ANAHTARI = `gunluk-rapor-ozet-serit-${KULLANICI_ID}`;
 function ozetSeridi(){
@@ -696,7 +696,7 @@ function ozetSeridi(){
   const goster = !!ay && bugunMu() && kapali !== ay;
   $('ozetSerit').hidden = !goster;
   if (!goster) return;
-  $('ozetSeritMetin').textContent = `${TR_AYLAR[Number(ay.slice(5)) - 1]} özetin hazırlanabilir ·`;
+  $('ozetSeritMetin').textContent = `${TR_AYLAR[Number(ay.slice(5)) - 1]} Yönetici Özeti hazırlanabilir ·`;
   $('ozetSeritAc').href = `/gecmis#aylik-${ay}`;
   $('ozetSerit').dataset.ay = ay;
 }

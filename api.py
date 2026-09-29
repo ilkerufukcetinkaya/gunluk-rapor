@@ -1527,7 +1527,7 @@ def haftalik_ozet(govde: HaftalikIstek, kullanici: Kullanici = Depends(aktif_kul
     return {"metin": metin, "hafta_baslangic": pazartesi.isoformat(), "rapor_sayisi": len(raporlar)}
 
 
-# ---------------------------------------------------------------- aylık / yıllık özet (A1, A1v2)
+# ---------------------------------------------------------------- aylık / yıllık özet (A1, A1v2, A1v3)
 
 OZET_TURLERI = ("aylik", "yillik")
 OZET_METIN_SINIRI = 40_000  # karakter; aylık girdi bunu aşarsa günlük madde sayısı kısaltılır, haftalık özetler eklenir
@@ -1638,7 +1638,9 @@ def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -
     """Claude'suz dönem istatistiği. Madde sayımları günlük raporu kaydedilmiş günlerin tikli, gizlenmemiş maddelerinden;
     toplam madde ve kategoriler kayıtlı rapor metinlerinden. İş günü hatırlatma günlerine göre, dönemin başı (ya da hesabın
     açıldığı / ilk raporun günü) ile bugün arasında sayılır. Kaynaklarda sıfır olan satır yoktur; tamamlanan ve açık
-    işlerin metni rapor metnidir (düzeltilmiş, ad eşlemeli)."""
+    işlerin metni rapor metnidir (düzeltilmiş, ad eşlemeli). A1v3: aylıkta gunluk_dagilim (ayın her günü: madde,
+    rapor_var, is_gunu — hatırlatma günlerine göre takvim işareti —, kullanim_oncesi, gelecek), yıllıkta aylik_dagilim
+    (12 ay) ve en_yogun_ay; ortalama, en_yogun_gun, otomatik_gun_sayisi, son_tamamlanan, yazisma."""
     a = ayar_satiri(db, kullanici)
     eslemeler = ad_eslemeleri(a)
     son = min(bit, bugun())
@@ -1647,8 +1649,10 @@ def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -
 
     ilk = utc(kullanici.olusturma).astimezone(servisler.ISTANBUL).date() if kullanici.olusturma else bas
     ilk_rapor = db.scalar(select(func.min(Rapor.tarih)).where(Rapor.user_id == kullanici.id, Rapor.tur == "gunluk"))
-    ilk = max(bas, min(ilk, ilk_rapor) if ilk_rapor else ilk)
-    is_gunleri = {g for g in _gunler(ilk, son) if g.isoweekday() in hatirlatma_ayari(a)["gunler"]} if ilk <= son else set()
+    ilk_kullanim = min(ilk, ilk_rapor) if ilk_rapor else ilk
+    ilk = max(bas, ilk_kullanim)
+    calisma_gunleri = hatirlatma_ayari(a)["gunler"]
+    is_gunleri = {g for g in _gunler(ilk, son) if g.isoweekday() in calisma_gunleri} if ilk <= son else set()
 
     baglam, _ = kategori_baglami(db, kullanici)
     uygulama = next((k for k in baglam.kategoriler if not k.sistem and {"github", "medusa"} & set(k.kaynaklar or [])), None)
@@ -1665,6 +1669,14 @@ def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -
             for ad, adet in servisler.eposta_hedefleri(m.metin):
                 kurumlar[ad] = kurumlar.get(ad, 0) + adet
 
+    # A1v3 "Ayın özeti": gün gün (aylık) ya da ay ay (yıllık) rapora giren madde; sayım rapor metninden (toplam_madde ile aynı)
+    gun_maddesi = {r.tarih: servisler.rapor_madde_sayisi(r.metin) for r in raporlar}
+    bugun_ = bugun()
+    gunluk = [{"tarih": g.isoformat(), "madde": gun_maddesi.get(g, 0), "rapor_var": g in rapor_gunleri,
+               "is_gunu": g.isoweekday() in calisma_gunleri, "kullanim_oncesi": g < ilk_kullanim, "gelecek": g > bugun_}
+              for g in _gunler(bas, bit)]
+    en_yogun = max(gun_maddesi.items(), key=lambda x: (x[1], -x[0].toordinal())) if gun_maddesi else None
+
     tamamlanan = [{"metin": servisler.ad_esle(madde_rapor_metni(m, None, m.tarih), eslemeler), "tarih": m.tarih.isoformat()}
                   for m in donem_maddeleri if m.tur == "bugun" and m.kaynak == "elle" and not m.gizli
                   and (servisler.TAMAMLANDI.search(m.metin or "") or servisler.TAMAMLANDI.search(madde_rapor_metni(m, None, m.tarih)))]
@@ -1678,6 +1690,24 @@ def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -
     onemli = sum(1 for m in girenler if m.onemli) + sum(
         1 for m in devamlar if m.onemli and m.olusturma and utc(m.olusturma) >= datetime.combine(bas, time.min, servisler.ISTANBUL))
 
+    toplam_madde = sum(gun_maddesi.values())
+    dagilim: dict = {}
+    if (bit - bas).days > 31:  # yıllık: 12 aylık sütun
+        aylar = []
+        for ay in range(1, 13):
+            ay_bas = date(bas.year, ay, 1)
+            ay_gunleri = [x for x in gunluk if x["tarih"][5:7] == f"{ay:02d}"]
+            aylar.append({"ay": ay_bas.isoformat()[:7], "madde": sum(x["madde"] for x in ay_gunleri),
+                          "rapor_gunu": sum(1 for x in ay_gunleri if x["rapor_var"]),
+                          "is_gunu": sum(1 for g in is_gunleri if g.month == ay),
+                          "kullanim_oncesi": ay_sonu(ay_bas) < ilk_kullanim, "gelecek": ay_bas > bugun_})
+        dagilim["aylik_dagilim"] = aylar
+        yogun_ay = max((x for x in aylar if x["madde"]), key=lambda x: x["madde"], default=None)
+        dagilim["en_yogun_ay"] = {"ay": yogun_ay["ay"], "madde": yogun_ay["madde"]} if yogun_ay else None
+    else:
+        dagilim["gunluk_dagilim"] = gunluk
+    son_tamamlanan = max(tamamlanan, key=lambda x: x["tarih"]) if tamamlanan else None
+
     return {
         "baslangic": bas.isoformat(), "bitis": son.isoformat(),
         "kullanim": kullanim_araligi(bas, son, rapor_gunleri),
@@ -1687,13 +1717,19 @@ def donem_istatistigi(db: Session, kullanici: Kullanici, bas: date, bit: date) -
         "is_gunu": len(is_gunleri),
         "raporlu_is_gunu": len(rapor_gunleri & is_gunleri),
         "kapsama": round(100 * len(rapor_gunleri & is_gunleri) / len(is_gunleri)) if is_gunleri else None,
-        "toplam_madde": sum(servisler.rapor_madde_sayisi(r.metin) for r in raporlar),
+        "toplam_madde": toplam_madde,
         "kaynaklar": kaynaklar,
         "kategoriler": _ilk_n(servisler.kategori_sayilari([r.metin for r in raporlar]), eslemeler),
         "kurumlar": _ilk_n(kurumlar, eslemeler),
+        "yazisma": sum(kurumlar.values()),  # kurum/kişilere giden bütün e-postalar (ilk 5 ile sınırlı değil)
         "tamamlanan": tamamlanan,
         "acik": acik,
         "onemli": onemli,
+        "ortalama": round(toplam_madde / len(raporlar), 1) if raporlar else None,  # rapor günü başına madde
+        "en_yogun_gun": {"tarih": en_yogun[0].isoformat(), "madde": en_yogun[1]} if en_yogun and en_yogun[1] else None,
+        "otomatik_gun_sayisi": sum(1 for r in raporlar if r.gonderim == "otomatik"),
+        "son_tamamlanan": son_tamamlanan,
+        **dagilim,
     }
 
 
@@ -1828,6 +1864,8 @@ def ozet_sayilari(ist: dict, yapi: dict) -> dict:
         "tamamlanan": len(tamamlanan) if tamamlanan else len(ist.get("tamamlanan") or []),
         "acik": len(ist.get("acik") or []),
         "kurum": (ist.get("kurumlar") or [None])[0],
+        "yazisma": ist.get("yazisma", sum(x["sayi"] for x in ist.get("kurumlar") or [])),
+        "kurum_adlari": [x["ad"] for x in (ist.get("kurumlar") or [])[:2]],
         "kapsam": (ist.get("kullanim") or {}).get("metin"),
         "madde_sayisi": sum(a.get("madde_sayisi", 0) for a in yapi.get("alanlar") or []),
     }
@@ -1875,8 +1913,8 @@ def ozet_getir(tur: str = "aylik", donem: str = "", kullanici: Kullanici = Depen
 
 @router.post("/ozet")
 def ozet_uret(govde: OzetIstek, kullanici: Kullanici = Depends(aktif_kullanici), db: Session = Depends(oturum)) -> dict:
-    """Aylık/yıllık patron özeti ya da başarı dökümü; 1 Claude çağrısı (günlük sayaçtan; JSON bozuksa aynı hakla bir
-    yeniden deneme). Claude'un JSON'u doğrulanır, sayılar sunucuda hesaplanır; (tür, dönem, biçim) satırına yapi + düz
+    """Aylık/yıllık Yönetici Özeti ('patron') ya da Performans Özeti ('basari'); 1 Claude çağrısı (günlük sayaçtan; JSON
+    bozuksa ya da Yönetici Özeti sınırları aşılırsa aynı hakla bir yeniden istem). Claude'un JSON'u doğrulanır, sayılar sunucuda hesaplanır; (tür, dönem, biçim) satırına yapi + düz
     metin yazılır. Claude hatasında ya da iki kez bozuk JSON'da 502 ve kayıtlı özet değişmez."""
     bas, bit = ozet_donemi(govde.tur, govde.donem)
     a = ayar_satiri(db, kullanici)
@@ -1911,8 +1949,10 @@ def ozet_uret(govde: OzetIstek, kullanici: Kullanici = Depends(aktif_kullanici),
 
 
 def yapi_idleri(yapi: dict | None) -> set[int]:
-    return {i for a in (yapi or {}).get("alanlar") or [] for t in a.get("temalar") or []
-            for i in t.get("madde_idleri") or [] if isinstance(i, int) and not isinstance(i, bool)}
+    """Kayıtlı yapıdaki madde id'leri: Performans Özeti'nde temalardan, Yönetici Özeti'nde bölümlerden."""
+    kaplar = [t for a in (yapi or {}).get("alanlar") or [] for t in a.get("temalar") or []] + list((yapi or {}).get("bolumler") or [])
+    return {i for k in kaplar if isinstance(k, dict) for i in k.get("madde_idleri") or []
+            if isinstance(i, int) and not isinstance(i, bool)}
 
 
 @router.put("/ozet")
@@ -1953,17 +1993,33 @@ def dosya_parcasi(metin: str) -> str:
 
 
 def ozet_dosya_adi(tur: str, bicim: str, bas: date, ad: str) -> str:
-    """'Basari-Dokumu-Eylul-2026-Ufuk-Cetinkaya.pdf', 'Aylik-Ozet-Eylul-2026-…', 'Yillik-Ozet-2026-…'."""
-    tip = "Basari Dokumu" if bicim == "basari" else ("Aylik Ozet" if tur == "aylik" else "Yillik Ozet")
+    """'Performans-Ozeti-Eylul-2026-Ufuk-Cetinkaya.pdf', 'Yonetici-Ozeti-Eylul-2026-…', 'Yonetici-Ozeti-2026-…'."""
+    tip = servisler.BICIM_ADLARI[bicim]
     parcalar = [tip, servisler.donem_adi(tur, bas), ad]
     return "-".join(p for p in (dosya_parcasi(x) for x in parcalar) if p) + ".pdf"
+
+
+def renk_gruplarini_isle(db: Session, kullanici: Kullanici, yapi: dict, eslemeler: list[dict]) -> None:
+    """PDF için (kayda yazılmaz): Performans Özeti alanlarına baskın kaynağın renk grubu ("grup"), Yönetici Özeti
+    bölümlerine ikon türü ("tur"). Kaynaklar madde id'lerinden okunur; ekrandaki donut'la aynı eşleme."""
+    idler = yapi_idleri(yapi)
+    kaynak = dict(db.execute(select(Madde.id, Madde.kaynak).where(Madde.user_id == kullanici.id, Madde.id.in_(idler))).all()) if idler else {}
+    for a in yapi.get("alanlar") or []:
+        ids = [i for t in a.get("temalar") or [] for i in t.get("madde_idleri") or []]
+        a["grup"] = servisler.baskin_grup([kaynak.get(i) for i in ids if i in kaynak])
+    uygulama = next((k for k in kategori_baglami(db, kullanici)[1]
+                     if not k.sistem and {"github", "medusa"} & set(k.kaynaklar or [])), None)
+    uygulama_adi = servisler.ad_esle(uygulama.ad, eslemeler) if uygulama else ""
+    for b in yapi.get("bolumler") or []:
+        b["tur"] = servisler.yonetici_bolum_turu(
+            b.get("ad") or "", [kaynak.get(i) for i in b.get("madde_idleri") or [] if i in kaynak], uygulama_adi)
 
 
 @router.get("/ozet/pdf")
 def ozet_pdf(tur: str = "aylik", donem: str = "", bicim: str = "basari", kullanici: Kullanici = Depends(aktif_kullanici),
              db: Session = Depends(oturum)) -> Response:
-    """Kayıtlı özetin sunucuda üretilen PDF'i (ReportLab, IBM Plex Sans). Başarı dökümü: kapak + ayrıntı sayfaları;
-    patron özeti: tek sayfa. Özet yoksa 404."""
+    """Kayıtlı özetin sunucuda üretilen PDF'i (ReportLab, IBM Plex Sans). Performans Özeti: kapak + ayrıntı sayfaları;
+    Yönetici Özeti: tek sayfa (taşarsa ikinci). Özet yoksa 404."""
     import pdf_uret  # ReportLab yalnız PDF istenince yüklenir
 
     if bicim not in OZET_BICIMLERI:
@@ -1977,6 +2033,8 @@ def ozet_pdf(tur: str = "aylik", donem: str = "", bicim: str = "basari", kullani
     yapi = servisler.yapi_esle(kayit.yapi, eslemeler) if isinstance(kayit.yapi, dict) else None
     if yapi is not None and "sayilar" not in yapi:
         yapi["sayilar"] = ozet_sayilari(ist, yapi)
+    if yapi is not None:
+        renk_gruplarini_isle(db, kullanici, yapi, eslemeler)
     icerik = pdf_uret.ozet_pdf(
         tur=tur, bicim=bicim, donem_adi=servisler.donem_adi(tur, bas), yapi=yapi,
         metin=servisler.ad_esle(kayit.metin, eslemeler), istatistik=ist,
