@@ -36,8 +36,10 @@ KURUMLAR = {
     "ilsvision.com": "şirket içi",
 }
 SIRKET_ICI = "şirket içi"
+BIR_KISI = "bir kişi"  # genel sağlayıcıdaki, görünen adı olmayan alıcı
 EKIP_ICI = "ekip içi"  # E2: tüm alıcıları kullanıcının kendi şirketinden olan e-posta
-# Herkese açık posta sağlayıcıları; kullanıcının adresi buradaysa alan adı "kendi şirketi" sayılmaz.
+# Herkese açık posta sağlayıcıları (tek liste): kullanıcının adresi buradaysa alan adı "kendi şirketi" sayılmaz (E2);
+# alıcının adresi buradaysa maddede alan adı yerine görünen adı yazılır, ad yoksa "bir kişi" (A2).
 GENEL_SAGLAYICILAR = frozenset({
     "gmail.com", "googlemail.com", "hotmail.com", "hotmail.com.tr", "outlook.com", "outlook.com.tr", "live.com",
     "msn.com", "yahoo.com", "yahoo.com.tr", "icloud.com", "me.com", "mac.com", "yandex.com", "yandex.com.tr",
@@ -156,8 +158,10 @@ def _son_unlu(okunus: str) -> str:
 
 
 def yonelme_eki(ad: str) -> str:
-    """'MSG' → "MSG'ye", 'MESAM' → "MESAM'a", 'IMRO' → "IMRO'ya", 'Coverz' → "Coverz'e"."""
+    """'MSG' → "MSG'ye", 'MESAM' → "MESAM'a", 'IMRO' → "IMRO'ya", 'Coverz' → "Coverz'e"; 'bir kişi' → "bir kişiye"."""
     ad = ad.strip()
+    if ad == BIR_KISI:  # özel ad değil: kesme işareti yok
+        return ad + "ye"
     okunus = _okunus(ad)
     if okunus in EK_ISTISNALARI:
         return f"{ad}'{EK_ISTISNALARI[okunus]}"
@@ -365,11 +369,19 @@ def _alan_eslesir(alan: str, anahtar: str) -> bool:
 
 
 def kurum_adi(gorunen_ad: str, adres: str, sozluk: dict[str, str] | None = None) -> str:
+    """Sözlükteki kurum; yoksa görünen ad, o da yoksa alan adı. Alan adı genel posta sağlayıcısıysa (gmail.com,
+    hotmail.com …) alan adı yazılmaz: görünen ad, yoksa "bir kişi". Adres biçimindeki görünen ad (Outlook/Graph adı
+    boşken adresi verir) yok sayılır."""
     alan = adres.rpartition("@")[2].lower()
     for anahtar, kurum in (KURUMLAR if sozluk is None else sozluk).items():
         if _alan_eslesir(alan, anahtar):
             return kurum
-    return gorunen_ad.strip().strip('"') or alan or adres
+    ad = gorunen_ad.strip().strip('"').strip()
+    if "@" in ad:
+        ad = ""
+    if alan in GENEL_SAGLAYICILAR:
+        return ad or BIR_KISI
+    return ad or alan or adres
 
 
 def adres_alani(adres: str) -> str:
@@ -443,9 +455,8 @@ def _hedef(kurumlar: tuple[str, ...]) -> str:
     if kurumlar == (EKIP_ICI,):
         return "Ekip içi"
     adlar = list(kurumlar)
-    if len(adlar) == 1:
-        return yonelme_eki(adlar[0])
-    return ", ".join(adlar[:-1]) + " ve " + yonelme_eki(adlar[-1])
+    hedef = yonelme_eki(adlar[0]) if len(adlar) == 1 else ", ".join(adlar[:-1]) + " ve " + yonelme_eki(adlar[-1])
+    return "B" + hedef[1:] if hedef.startswith(BIR_KISI) else hedef  # cümle başı
 
 
 def eposta_metni(kurumlar: tuple[str, ...], konular: list[str]) -> str:
